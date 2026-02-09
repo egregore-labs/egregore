@@ -1,0 +1,9 @@
+# Egregore — Personal Secrets
+# Copy this to .env and fill in your values.
+# .env is gitignored — never commit it.
+
+# Your GitHub token (created automatically during onboarding)
+GITHUB_TOKEN=
+
+# Your org's Egregore API key (provided during setup)
+EGREGORE_API_KEY=
