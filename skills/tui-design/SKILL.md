@@ -20,6 +20,8 @@ Read org name from `jq -r '.org_name' egregore.json`. The `✦` star is reserved
 | `/handoff` | `⇌ HANDOFF` | The bridge — passing context between minds |
 | `/quest` | `⚑ QUEST` | The flag — planting direction in unknown territory |
 | `/todo` | `□ TODO` | The checkbox — actionable items, personal intent |
+| `/archive` | `◇ ARCHIVE` | The diamond — crystallized pattern, refined and preserved |
+| `/eval` | `⊕ EVAL` | The crosshair — measuring, comparing, calibrating |
 
 ### Section Markers
 
@@ -33,6 +35,7 @@ Used within all TUI boxes to prefix items by category:
 - `⇌` Handoffs (in activity action items)
 - `◎` Reflections
 - `□` Todos (in activity dashboard)
+- `★` Priority marker (todo items with priority >= 2)
 - `◉` Artifacts (in handoff summaries)
 
 ## 2. Box Drawing Rules

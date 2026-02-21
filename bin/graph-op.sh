@@ -1,0 +1,88 @@
+#!/bin/bash
+set -euo pipefail
+# Named graph operations — clean interface over raw Cypher.
+# Keeps implementation details out of the TUI.
+#
+# Usage: bash bin/graph-op.sh <operation> [args...]
+#
+# Operations:
+#   mark-read <session-id>      Mark a handoff as read
+#   mark-done <session-id>      Mark a handoff as done/resolved
+#   answer-question <set-id>    Mark a question set as answered
+#   resolve-handoffs <user>     Auto-resolve read handoffs with later sessions
+#   record-focus <session-id> <shown-json> <selected> [dismissed-json]
+#                               Track Focus option selection for adaptive options
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GS="$SCRIPT_DIR/bin/graph.sh"
+
+OP="${1:-}"
+shift || true
+
+case "$OP" in
+
+  mark-read)
+    SID="${1:?missing session-id}"
+    bash "$GS" query "
+      MATCH (s:Session {id: \$sid})
+      SET s.handoffStatus = 'read', s.handoffReadDate = date()
+      RETURN s.id AS id, s.topic AS topic
+    " "{\"sid\":\"$SID\"}"
+    ;;
+
+  mark-done)
+    SID="${1:?missing session-id}"
+    bash "$GS" query "
+      MATCH (s:Session {id: \$sid})
+      SET s.handoffStatus = 'done'
+      RETURN s.id AS id, s.topic AS topic
+    " "{\"sid\":\"$SID\"}"
+    ;;
+
+  answer-question)
+    QID="${1:?missing question-set-id}"
+    bash "$GS" query "
+      MATCH (qs:QuestionSet {id: \$qid})
+      SET qs.status = 'answered'
+      RETURN qs.id AS id, qs.topic AS topic
+    " "{\"qid\":\"$QID\"}"
+    ;;
+
+  resolve-handoffs)
+    USER="${1:?missing username}"
+    bash "$GS" query "
+      MATCH (s:Session)-[:HANDED_TO]->(p:Person {name: \$user})
+      WHERE s.handoffStatus = 'read'
+      WITH s, p, coalesce(s.handoffReadDate, s.date) AS sinceDate
+      MATCH (later:Session)-[:BY]->(p)
+      WHERE later.date > sinceDate
+      WITH s, count(later) AS laterSessions WHERE laterSessions > 0
+      SET s.handoffStatus = 'done'
+      RETURN s.id AS resolved
+    " "{\"user\":\"$USER\"}"
+    ;;
+
+  record-focus)
+    SID="${1:?missing session-id}"
+    SHOWN="${2:?missing shown options}"
+    SELECTED="${3:?missing selected option}"
+    DISMISSED="${4:-[]}"
+    bash "$GS" query "
+      MATCH (s:Session {id: \$sid})
+      SET s.focusShown = \$shown,
+          s.focusSelected = \$selected,
+          s.focusDismissed = \$dismissed
+      RETURN s.id AS id
+    " "{\"sid\":\"$SID\",\"shown\":$SHOWN,\"selected\":\"$SELECTED\",\"dismissed\":$DISMISSED}"
+    ;;
+
+  wal-status)
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" status
+    ;;
+
+  *)
+    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","record-focus","wal-status"]}'
+    exit 1
+    ;;
+
+esac
