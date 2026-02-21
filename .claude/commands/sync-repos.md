@@ -2,9 +2,9 @@ Smart sync of all Egregore repos. Fetches first, only pulls if behind.
 
 ## Repos to sync
 
-- `../curve-labs-memory` — shared knowledge (derived from `memory_repo` in `egregore.json`)
+- `../$MEMORY_DIR` — shared knowledge (derived from `memory_repo` in `egregore.json`)
 - Any repos listed in the `repos` array in `egregore.json` (as sibling directories `../{repo}`)
-- Current repo (curve-labs-core)
+- Current repo (egregore-core)
 
 **Read `egregore.json` first** to get the dynamic list:
 ```bash
@@ -35,11 +35,10 @@ if [ "$LOCAL" != "$REMOTE" ]; then
 fi
 ```
 
-**For curve-labs-core**: sync the `develop` branch instead of main:
+**For the current repo (egregore-core)**: sync the `develop` branch instead of main:
 ```bash
-# Sync develop (not main)
-git fetch origin --quiet
-git checkout develop --quiet && git pull origin develop --quiet && git checkout - --quiet
+# Update local develop ref without switching branches (safe for concurrent sessions)
+git fetch origin develop:develop --quiet
 # If on dev/* branch, rebase onto develop
 BRANCH=$(git branch --show-current)
 if [[ "$BRANCH" == dev/* ]]; then
@@ -54,10 +53,10 @@ Use absolute paths with `git -C` to avoid permission prompts.
 ```
 Syncing Egregore repos...
 
-  curve-labs-memory  ↓ 3 commits → pulled
-  tristero           ✓ up to date
-  lace               ✓ up to date
-  curve-labs-core    ↓ 1 commit → pulled
+  {memory-dir}       ↓ 3 commits → pulled
+  {repo-1}           ✓ up to date
+  {repo-2}           ✓ up to date
+  egregore-core      ↓ 1 commit → pulled
 ```
 
 ## Rules

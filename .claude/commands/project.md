@@ -17,26 +17,26 @@ Projects
 
 | Project | Domain | Quests | Recent Artifacts |
 |---------|--------|--------|------------------|
-| tristero | Polis | 2 active | 4 (last: today) |
-| lace | Psyche | 1 active | 2 (last: 2 days) |
+| backend | Polis | 2 active | 4 (last: today) |
+| frontend | Psyche | 1 active | 2 (last: 2 days) |
 | infrastructure | Meta | 0 | 1 (last: 3 days) |
 
-To see details: /project tristero
+To see details: /project backend
 ```
 
 ## Example (show)
 
 ```
-> /project tristero
+> /project backend
 
-Project: Tristero
+Project: Backend
 ─────────────────
 
 Domain: Polis — Coordination mechanisms, governance, emergent ontologies
 
 Active Quests:
-  → benchmark-eval (4 artifacts, Oz + Ali)
-  → research-agent (1 artifact, Oz)
+  → benchmark-eval (4 artifacts, Alice + Carol)
+  → research-agent (1 artifact, Alice)
 
 Recent Artifacts (via quests):
   → 2026-01-27 [finding] HELM adaptable with modifications
@@ -44,9 +44,9 @@ Recent Artifacts (via quests):
   → 2026-01-26 [thought] Temporal dimension in evaluation
 
 Entry Points:
-  - Code: cd ../tristero && claude
-  - Docs: tristero/README.md
-  - Recent work: /activity tristero
+  - Code: cd ../backend && claude
+  - Docs: backend/README.md
+  - Recent work: /activity backend
 ```
 
 ## Next

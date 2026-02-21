@@ -1,4 +1,4 @@
-Analyze quest drift and suggest restructuring. Runs sensemaking dialogue — always, no cooldown.
+Analyze quest drift and suggest restructuring.
 
 Arguments: $ARGUMENTS
 
@@ -188,6 +188,7 @@ SET sc.lastRun = date()
 ## Rules
 
 - All Neo4j queries via `bash bin/graph.sh query "..."` — never MCP, never direct curl
+- **Suppress raw output.** Never show raw JSON. Capture `bin/graph.sh` output in a variable and only show formatted status lines.
 - Run DM1, DM2, DM3 in parallel (3 separate Bash calls)
 - This command always runs — it does NOT check cooldown (explicit user request)
 - After acting, always update SensemakingCheck.lastRun

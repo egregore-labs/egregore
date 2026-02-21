@@ -1,4 +1,9 @@
-Ask questions — to yourself, the org, or a specific person. Context-aware, graph-backed.
+Ask a question — to a teammate, the org, or just think out loud.
+
+## When to invoke
+
+User says: "ask [name] about", "I need to check with [name]", "can you ask [name]", "question for [name]", "run this by [name]"
+Not this: user is asking the agent a question it can answer from context — just answer directly
 
 Arguments: $ARGUMENTS (Optional: [person] about [topic])
 
@@ -10,16 +15,16 @@ Arguments: $ARGUMENTS (Optional: [person] about [topic])
 ## Step 1: Parse & Route
 
 Parse `$ARGUMENTS`:
-- **target**: first word if it matches a known person name (query `MATCH (p:Person) RETURN p.name`), else none
+- **target**: first word if it matches a known person (query `MATCH (p:Person) RETURN p.name, p.github, p.fullName` — match against any of the three, case-insensitive), else none
 - **topic**: everything after "about", or the full argument if no "about"
 
-Strip `@` from names. Both `oz` and `@oz` work.
+Strip `@` from names. Both `alice` and `@alice` work.
 
 Get current user:
 ```bash
 git config user.name
 ```
-Map to short name: "Oguzhan Yayla" → oz, "Cem Dagdelen" → cem, etc.
+Map to short name: "Alice Smith" → alice, "Bob Jones" → bob, etc.
 
 **If target is a person → Outward (Step 3)**
 **Otherwise → Inward (Step 2)**
@@ -30,8 +35,10 @@ Map to short name: "Oguzhan Yayla" → oz, "Cem Dagdelen" → cem, etc.
 
 Query context (all in parallel):
 
+**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
+
 ```bash
-# My recent sessions
+# My recent sessions — capture output, don't display raw JSON
 bash bin/graph.sh query "MATCH (s:Session)-[:BY]->(p:Person {name: '$me'}) RETURN s.topic AS topic, s.summary AS summary ORDER BY s.date DESC LIMIT 5"
 
 # My active quests

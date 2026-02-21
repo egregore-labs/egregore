@@ -67,7 +67,7 @@ if [[ "$PROFILE" == *"/fish/"* ]]; then
   IS_FISH=true
 fi
 
-ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude start"
+ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude \"start\""
 
 # --- Check if this directory already has an alias ---
 get_existing_alias() {

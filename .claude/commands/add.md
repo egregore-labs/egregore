@@ -1,4 +1,9 @@
-Ingest an artifact with minimal friction. The system suggests relations.
+Add a document, link, or artifact to shared memory.
+
+## When to invoke
+
+User says: "check out this link", "found this article", "add this to the knowledge base", "ingest this", shares a URL or paper reference
+Not this: user's own insight → `/reflect` · private thought → `/note`
 
 Arguments: $ARGUMENTS (Optional: URL to fetch, or leave empty for interactive mode)
 
@@ -14,7 +19,7 @@ Arguments: $ARGUMENTS (Optional: URL to fetch, or leave empty for interactive mo
 3. Suggest relevant quests based on content
 4. Suggest topics
 5. Create artifact file with proper frontmatter
-6. Create Artifact node in Neo4j via `bash bin/graph.sh query "..."` (never MCP)
+6. Create Artifact node in Neo4j via `bash bin/graph.sh query "..."` (never MCP, suppress raw output — capture in variable, only show status)
 7. Confirm relations created
 
 ## Artifact types
@@ -37,7 +42,7 @@ All artifacts go in `memory/artifacts/`
 ---
 title: HELM Framework Review
 type: source | thought | finding | decision
-author: Oz (or "external" for sources)
+author: Alice (or "external" for sources)
 origin: https://... (for external sources)
 date: 2026-01-26
 quests: [benchmark-eval, research-agent]
@@ -71,7 +76,7 @@ RETURN a.id
 ```
 
 Where:
-- `$artifactId` = filename without extension (e.g., `2026-01-26-oz-temporal-thought`)
+- `$artifactId` = filename without extension (e.g., `2026-01-26-alice-temporal-thought`)
 - `$type` = source | thought | finding | decision
 - `$origin` = URL for external sources, null for thoughts
 - `$topics` = array of topic strings from frontmatter (e.g., `["evaluation", "benchmarks", "llm"]`)
@@ -100,7 +105,7 @@ Confirm? (y / edit tags / n)
 
 ✓ memory/artifacts/2026-01-26-benchmarking-llm-reasoning.md
 ✓ Artifact node created in knowledge graph
-✓ Linked: benchmark-eval → tristero
+✓ Linked: benchmark-eval → backend
 
 To see the graph: /quest benchmark-eval
 ```
@@ -116,15 +121,15 @@ What do you have?
 > goodness change as the ontology evolves"
 
 Type: thought
-Author: Oz (from git config)
+Author: Alice (from git config)
 
 Relevant quests:
   → benchmark-eval (this extends the core question)
 
 Topics: [evaluation, temporality, dynamic-ontologies]
 
-✓ memory/artifacts/2026-01-26-oz-temporal-evaluation-thought.md
-✓ Artifact node created, linked to oz
+✓ memory/artifacts/2026-01-26-alice-temporal-evaluation-thought.md
+✓ Artifact node created, linked to alice
 ✓ Linked to quest: benchmark-eval
 ```
 

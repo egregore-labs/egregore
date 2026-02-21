@@ -18,7 +18,7 @@ A shared intelligence layer for organizations using Claude Code. Persistent memo
 
 ### From the website (recommended)
 
-Visit [egregore-core.netlify.app](https://egregore-core.netlify.app), sign in with GitHub, pick your org and repos, then run the one-liner it gives you:
+Visit [egregore.xyz](https://egregore.xyz), sign in with GitHub, pick your org and repos, then run the one-liner it gives you:
 
 ```bash
 npx create-egregore --token st_xxx
@@ -27,7 +27,7 @@ npx create-egregore --token st_xxx
 Or without Node.js:
 
 ```bash
-curl -fsSL https://egregore-core.netlify.app/api/org/install/st_xxx | bash
+curl -fsSL https://egregore.xyz/api/org/install/st_xxx | bash
 ```
 
 ### From an invite
@@ -54,15 +54,15 @@ Each org can have multiple egregore instances with separate graphs and Telegram 
 
 ## After setup
 
-From any terminal:
+During setup, Egregore adds a shell function to your profile (`.zshrc`, `.bash_profile`, or fish `config.fish`). From any terminal:
 
 ```bash
 egregore
 ```
 
-This syncs everything, puts you on a fresh working branch, and shows you where you are.
+This opens Claude Code in your egregore directory, syncs everything, and shows you where you are. If you have multiple egregore instances, additional ones get named `egregore-{org}`.
 
-### Commands
+Some commands to get started:
 
 | Command | What it does |
 |---------|-------------|
@@ -70,8 +70,10 @@ This syncs everything, puts you on a fresh working branch, and shows you where y
 | `/handoff` | Leave notes for others (or future you) |
 | `/invite` | Invite someone to your org |
 | `/quest` | Start or contribute to an exploration |
-| `/ask` | AI-generated questions, routed to self or others |
+| `/ask` | Ask questions, routed to self or others |
 | `/save` | Commit and push your contributions |
+
+See all commands and docs at [egregore.xyz/docs](https://egregore.xyz/docs).
 
 ## Invite others
 
@@ -86,7 +88,7 @@ Sends a GitHub org invitation and generates an invite link. They click, authenti
 Egregore gives your team a shared brain that persists across Claude Code sessions:
 
 - **Memory** — Git-based shared knowledge repo (conversations, decisions, patterns)
-- **Knowledge graph** — Neo4j for querying across sessions, people, and artifacts
+- **Knowledge graph** — Query across sessions, people, and artifacts
 - **Notifications** — Telegram for async handoffs and questions
 - **Commands** — Slash commands for common workflows, no git knowledge needed
 - **Repos** — Managed repos are cloned alongside your instance for shared context

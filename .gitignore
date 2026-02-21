@@ -4,6 +4,7 @@ memory
 # MCP configs (may contain credentials)
 .mcp.json
 mcp.json
+mcp.shared.*.json
 
 # OS files
 .DS_Store
@@ -20,6 +21,15 @@ mcp.json
 
 # User state
 .egregore-state.json
+
+# Runtime files (session-specific, never commit)
+.transcript-retry-queue
+
+# Personal notes — never shared, never committed
+.egregore/notes/
+
+# Eval run outputs (local, per-machine)
+.egregore/eval-runs/
 
 # Database files (user-specific state)
 data/*.db

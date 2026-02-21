@@ -1,42 +1,104 @@
-Create a feature or bugfix branch with consistent naming.
+Create a working branch from what you're working on.
 
 Description: $ARGUMENTS
 
 ## What to do
 
 1. Fetch latest develop
-2. Determine branch type (feature/bugfix) from description
-3. Create branch from develop with date-prefixed name
-4. Switch to the new branch
+2. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
+3. Determine branch type from description:
+   - `dev/{author}/{topic-slug}` — default for session work
+   - `feature/{topic-slug}` — explicit feature work
+   - `bugfix/{topic-slug}` — bug fixes
+4. Create branch from develop
+5. Switch to the new branch
 
-## Naming convention
+## Deriving the topic slug
 
+Extract the essence of what the user said into a short, meaningful slug:
+- "auth flow in frontend" → `auth-flow`
+- "fix the payment endpoint bug" → `fix-payment-endpoint`
+- "refactoring the token store" → `refactor-token-store`
+- "working on oauth implementation" → `oauth-implementation`
+
+If no description is given, use today's date: `YYYY-MM-DD`
+
+## Branch type detection
+
+- Description mentions "fix", "bug", "broken", "crash" → `bugfix/`
+- Description mentions "feature", "add", "implement", "new" → `feature/`
+- Otherwise → `dev/{author}/` (general session work)
+
+## Resuming existing branches
+
+Before creating, check if a matching branch already exists:
+```bash
+git branch --list "dev/$AUTHOR/*$SLUG*" "feature/*$SLUG*" "bugfix/*$SLUG*"
 ```
-feature/YYYY-MM-DD-short-description
-bugfix/YYYY-MM-DD-short-description
-```
+
+If a match is found, offer to resume it instead of creating a new one.
 
 ## Example
 
 ```
-> /branch mcp authentication
+> /branch auth flow
 
 Creating branch...
 
-Convention: feature/YYYY-MM-DD-short-description
-            bugfix/YYYY-MM-DD-short-description
+  git fetch origin develop --quiet
+  git checkout -b dev/alice/auth-flow origin/develop
+  ✓ Created dev/alice/auth-flow (from develop)
 
-This looks like a feature.
+Ready to work. /save when done.
+```
+
+```
+> /branch fix payment endpoint bug
+
+Creating branch...
 
   git fetch origin develop --quiet
-  git checkout -b feature/2026-01-20-mcp-authentication origin/develop
-  ✓ Created and switched to feature/2026-01-20-mcp-authentication (from develop)
+  git checkout -b bugfix/fix-payment-endpoint origin/develop
+  ✓ Created bugfix/fix-payment-endpoint (from develop)
 
-You're now on a feature branch. When ready:
-- /commit to save your work
-- /pr when ready for review
+Ready to work. /save when done.
+```
+
+```
+> /branch
+
+No description given. Using today's date.
+
+  git checkout -b dev/alice/2026-02-12 origin/develop
+  ✓ Created dev/alice/2026-02-12 (from develop)
+
+Ready to work. /save when done.
+```
+
+## Managed repos
+
+If the user's description references a managed repo (listed in `egregore.json` → `repos[]`), create the branch in that repo's sibling directory instead of the hub.
+
+```bash
+REPO_DIR="$(cd .. && pwd)/$REPO"
+git -C "$REPO_DIR" fetch origin develop --quiet
+git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+```
+
+Use `git -C` with absolute paths — never `cd` into the repo.
+
+```
+> /branch auth flow in frontend
+
+Creating branch in frontend...
+
+  git -C ../frontend fetch origin develop --quiet
+  git -C ../frontend checkout -b dev/alice/auth-flow origin/develop
+  ✓ Created dev/alice/auth-flow in frontend (from develop)
+
+Ready to work. /save when done.
 ```
 
 ## Next
 
-Make your changes, then `/commit` when ready.
+Make your changes, then `/commit` or `/save` when ready.

@@ -1,4 +1,11 @@
-Capture insights from your work. The system uses graph context to surface what's worth reflecting on, asks Socratic follow-ups, and auto-classifies what emerges.
+Capture insights from your work — decisions, patterns, and realizations worth keeping.
+
+The system uses graph context to surface what's worth reflecting on, asks Socratic follow-ups, and auto-classifies what emerges.
+
+## When to invoke
+
+User says: "we decided", "I realized", "I keep noticing", "capture this insight", "that's a pattern", "important takeaway", "let me record this"
+Not this: thought is half-baked/private → `/note` · want deep cross-referencing → `/deep-reflect` · insight is about AI steering → `/archive`
 
 Topic: $ARGUMENTS
 
@@ -21,6 +28,7 @@ Topic: $ARGUMENTS
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
+**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines.
 
 - 1 Bash call: `git config user.name`
 - 5-6 Neo4j queries for context gathering (run in parallel)
@@ -37,7 +45,7 @@ Topic: $ARGUMENTS
 git config user.name
 ```
 
-Map to Person node: "Oguzhan Yayla" -> oz, "Cem Dagdelen" -> cem, "Ali" -> ali
+Derive handle: lowercase first word of git user.name (e.g. "Alice Smith" → "alice").
 
 ### Context queries (run ALL in parallel)
 
@@ -46,7 +54,7 @@ Execute each with `bash bin/graph.sh query "..." '{"param": "value"}'`.
 **Q1 — Recent sessions (7 days):**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE s.date >= date() - duration('P7D')
+WHERE date(left(toString(s.date), 10)) >= date() - duration('P7D')
 RETURN s.topic AS topic, s.date AS date, s.summary AS summary
 ORDER BY s.date DESC LIMIT 5
 ```
@@ -73,10 +81,11 @@ ORDER BY a.created DESC LIMIT 10
 **Q4 — Knowledge gaps (sessions without corresponding artifacts):**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE s.date >= date() - duration('P14D')
+WITH s, p, date(left(toString(s.date), 10)) AS sDate
+WHERE sDate >= date() - duration('P14D')
 OPTIONAL MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p)
-WHERE a.created >= datetime({year: s.date.year, month: s.date.month, day: s.date.day})
-  AND a.created < datetime({year: s.date.year, month: s.date.month, day: s.date.day}) + duration('P1D')
+WHERE a.created >= datetime({year: sDate.year, month: sDate.month, day: sDate.day})
+  AND a.created < datetime({year: sDate.year, month: sDate.month, day: sDate.day}) + duration('P1D')
 WITH s, count(a) AS artifactCount
 WHERE artifactCount = 0
 RETURN s.topic AS topic, s.date AS date
@@ -329,7 +338,7 @@ CREATE (a)-[:RELATES_TO]->(b)
 
 Where:
 - `$artifactId` = `{YYYY-MM-DD}-{slug}` (matches filename without extension)
-- `$author` = short name (oz, cem, ali)
+- `$author` = short name (alice, bob, carol)
 - `$category` = decision | finding | pattern
 - `$topics` = array of topic strings
 - `$filePath` = `knowledge/{category}s/{YYYY-MM-DD}-{slug}.md`
@@ -344,7 +353,7 @@ Show progress:
 
 Run the full `/save` flow:
 
-1. Commit changes in memory repo and push (contribution branch + PR + auto-merge)
+1. Commit changes in memory repo and push directly to main (pull-rebase-push with retry)
 2. Commit any egregore changes and push working branch + PR to develop
 
 This is the same flow as `/save`. Follow its logic exactly.
@@ -375,7 +384,7 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ◎ REFLECTION                                        cem · Feb 08   │
+│  ◎ REFLECTION                                        bob · Feb 08   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  2 insights captured:                                                │
@@ -396,7 +405,7 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ◎ REFLECTION                                        cem · Feb 08   │
+│  ◎ REFLECTION                                        bob · Feb 08   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ◉ Finding: Neo4j HTTP API faster than Bolt for small...             │
@@ -499,7 +508,7 @@ Creating reflection...
   [3/3] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ◎ REFLECTION                                        cem · Feb 08   │
+│  ◎ REFLECTION                                        bob · Feb 08   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  2 insights captured:                                                │
@@ -534,7 +543,7 @@ Creating reflection...
   [3/3] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ◎ REFLECTION                                        cem · Feb 08   │
+│  ◎ REFLECTION                                        bob · Feb 08   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ◉ Finding: Neo4j HTTP API faster than Bolt for small...             │
@@ -563,7 +572,7 @@ Creating reflection...
   [3/3] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ◎ REFLECTION                                        cem · Feb 08   │
+│  ◎ REFLECTION                                        bob · Feb 08   │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  ◉ Decision: Use stdio for MCP                                       │

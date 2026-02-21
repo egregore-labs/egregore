@@ -1,13 +1,162 @@
-Report an issue. Captures context automatically, routes to memory/graph/GitHub.
+Report an issue. Captures context and routes to the right place.
+
+## When to invoke
+
+User says: "this is broken", "bug in", "something's wrong with", "file an issue", "report a problem", "[command] isn't working"
+Not this: personal task → `/todo` · team exploration → `/quest`
 
 Topic: $ARGUMENTS
 
-**Auto-saves.** No need to run `/save` after.
+**Auto-saves.** No need to run `/save` after (create mode only).
 
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
 **Notifications via `bash bin/notify.sh`**. No direct curl to Telegram.
+
+## Argument routing
+
+Parse `$ARGUMENTS` to determine mode:
+
+- **Empty** or `list` → List mode (show open issues)
+- `list open` → List mode (open only)
+- `list closed` → List mode (closed only)
+- `list all` → List mode (all statuses)
+- `close [id-or-title]` → Close mode
+- `search [term]` → Search mode
+- **Anything else** → Create mode (existing Steps 0–7 below)
+
+---
+
+## List mode
+
+### Query
+
+```cypher
+MATCH (i:Issue)
+OPTIONAL MATCH (i)-[:REPORTED_BY]->(p:Person)
+RETURN i.id AS id, i.title AS title, i.status AS status,
+       i.recipient AS recipient, i.created AS created,
+       i.topics AS topics, p.name AS reportedBy,
+       i.github_url AS githubUrl
+ORDER BY i.created DESC
+```
+
+If `list open` or `list closed` was specified, add `WHERE i.status = 'open'` or `WHERE i.status = 'closed'` to the query.
+
+### Display
+
+TUI box — same boundary rules as all commands (72 chars, no sub-boxes).
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ✱ ISSUES                                            alice · Feb 10    │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  OPEN                                                                │
+│    memory-symlink-breaks-after-pull                                  │
+│    Memory symlink breaks after pull (bob, Feb 09)                    │
+│                                                                      │
+│    save-fails-silently                                               │
+│    /save fails silently when graph offline (alice, Feb 08) · #42        │
+│                                                                      │
+│  CLOSED                                                              │
+│    im-hungry                                                         │
+│    Im hungry (bob, Feb 09)                                           │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  /issue [description] to create · /issue close [id] to resolve       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Format per issue**: Two lines per issue:
+- Line 1: `{id}` (dimmed/secondary — the slug identifier)
+- Line 2: `{title} ({reportedBy}, {date})` + `· #{number}` if github_url exists
+
+Group by status: OPEN first, then CLOSED. Separate groups with a blank line.
+
+If no issues exist: show `No issues found.` in the box body.
+
+If only listing one status (e.g., `list open`), omit the status headers and show a flat list.
+
+---
+
+## Close mode
+
+### Step 1: Resolve target
+
+If `$ARGUMENTS` contains an ID or title after `close`:
+```cypher
+MATCH (i:Issue {status: 'open'})
+WHERE i.id CONTAINS toLower($term) OR toLower(i.title) CONTAINS toLower($term)
+OPTIONAL MATCH (i)-[:REPORTED_BY]->(p:Person)
+RETURN i.id AS id, i.title AS title, p.name AS reportedBy
+```
+
+- **1 match** → proceed to close
+- **Multiple matches** → present AskUserQuestion picker with matched issues
+- **0 matches** → "No open issue matching '{term}'."
+
+If no term provided after `close`, list all open issues as AskUserQuestion picker.
+
+### Step 2: Close the issue
+
+```cypher
+MATCH (i:Issue {id: $id})
+SET i.status = 'closed', i.closedAt = datetime()
+RETURN i.id, i.title, i.status, i.github_url
+```
+
+### Step 3: Close GitHub issue (if linked)
+
+If `github_url` is set:
+```bash
+gh issue close "{github_url}" 2>/dev/null
+```
+
+Show warning if this fails — don't block the close.
+
+### Step 4: Update memory file
+
+If `memory/knowledge/issues/{id}.md` exists, update the frontmatter `status: closed` field.
+
+### Step 5: Confirmation
+
+```
+✓ Closed: {title}
+```
+
+If GitHub issue was also closed: `✓ Closed: {title} · GitHub #{number} closed`
+
+No auto-save for close operations (lightweight).
+
+---
+
+## Search mode
+
+### Query
+
+```cypher
+MATCH (i:Issue)
+WHERE toLower(i.title) CONTAINS toLower($term)
+   OR toLower(i.id) CONTAINS toLower($term)
+   OR ANY(t IN i.topics WHERE toLower(t) CONTAINS toLower($term))
+OPTIONAL MATCH (i)-[:REPORTED_BY]->(p:Person)
+RETURN i.id AS id, i.title AS title, i.status AS status,
+       p.name AS reportedBy, i.created AS created,
+       i.github_url AS githubUrl
+ORDER BY i.created DESC LIMIT 10
+```
+
+### Display
+
+Same TUI format as list mode, but no grouping by status — results are relevance-ordered. Show status inline: `{title} ({reportedBy}, {date}) [open]` or `[closed]`.
+
+If no results: `No issues matching '{term}'.`
+
+---
+
+## Create mode (existing flow)
 
 ## Step 0: Context Capture (silent, parallel)
 
@@ -21,7 +170,7 @@ git status --short && echo "---" && \
 git log --oneline -5
 ```
 
-Map git username → short name: "Oguzhan Yayla" → oz, "Cem Dagdelen" → cem, "Cem F" → cem, "Ali" → ali
+Map git username → short name: "Alice Smith" → alice, "Bob Jones" → bob, "Bob J" → bob, "Carol" → carol
 
 **Bash call 2 — environment health:**
 ```bash
@@ -33,7 +182,7 @@ jq -r '.org_name,.github_org,.slug,.repos[]' egregore.json 2>/dev/null
 **Neo4j — recent session context:**
 ```cypher
 MATCH (s:Session)-[:BY]->(p:Person {name: $me})
-WHERE s.date >= date() - duration('P3D')
+WHERE date(left(toString(s.date), 10)) >= date() - duration('P3D')
 RETURN s.topic, s.date ORDER BY s.date DESC LIMIT 5
 ```
 
@@ -43,18 +192,53 @@ RETURN s.topic, s.date ORDER BY s.date DESC LIMIT 5
 - If `$ARGUMENTS` starts with `egregore:` → strip prefix, use rest as description, pre-set recipient to `egregore`
 - If empty → prompt: *"What's the issue?"* (plain text, wait for user response)
 
-## Step 2: Recipient
+## Step 2: Smart Routing
 
-One AskUserQuestion. Build options dynamically from `egregore.json`.
+Infer the most likely destination from the description content, then confirm. Only ask an open "Who's this for?" when the destination is genuinely ambiguous.
 
-Read org config values:
+Read org config values (needed for matching):
 ```bash
 jq -r '.org_name,.github_org,.repos[]' egregore.json
 ```
 
-Present:
+**If the user used the `egregore:` prefix in Step 1**, skip this step entirely — recipient is already `egregore`.
+
+### Routing inference
+
+Analyze the description for signals:
+
+| Signal | Inferred destination |
+|---|---|
+| Mentions a slash command (`/save`, `/reflect`, `/activity`, etc.) | `{github_org}/egregore-core` |
+| Mentions `bin/`, `egregore.json`, `.claude/commands/`, onboarding, graph.sh | `{github_org}/egregore-core` |
+| Mentions a managed repo name from `.repos[]` (e.g., "frontend", "backend") | `{github_org}/{repo}` |
+| Mentions "memory", "handoff", "knowledge graph", "Neo4j", "sync" | `{github_org}/egregore-core` |
+| General/vague, no code or system references | Just memory |
+| `egregore:` prefix (already handled above) | `egregore` upstream |
+
+### Confidence-based flow
+
+**High confidence** (description clearly matches one destination):
+
+Present a single confirmation via AskUserQuestion:
 ```
-question: "Who's this for?"
+question: "This looks like an egregore-core issue. File it on {github_org}/egregore-core?"
+header: "Route"
+multiSelect: false
+options:
+  - label: "Yes, file on {github_org}/egregore-core"
+    description: "Creates a GitHub issue on the org's fork"
+  - label: "Just memory"
+    description: "Track locally only — visible on /activity"
+```
+
+The first option is always the inferred destination. "Just memory" is always the second option (lightweight fallback). If the user picks "Other", trigger a second-round AskUserQuestion with the full destination list (all repos + egregore upstream).
+
+**Low confidence** (ambiguous — no clear signals, or signals point to multiple destinations):
+
+Fall back to the full destination picker:
+```
+question: "Where should this be filed?"
 header: "Route"
 multiSelect: false
 options:
@@ -68,8 +252,6 @@ options:
     label: "{github_org}/{repo}"
     description: "Filed on {repo}"
 ```
-
-**If the user used the `egregore:` prefix in Step 1**, skip this step — recipient is already `egregore`.
 
 ## Step 3: Write to Memory
 
@@ -133,7 +315,7 @@ RETURN i.id
 
 Where:
 - `$id` = `YYYY-MM-DD-{slug}` (matches filename without extension)
-- `$author` = short name (oz, cem, ali)
+- `$author` = short name (alice, bob, carol)
 - `$title` = derived title
 - `$recipient` = selected recipient string
 - `$topics` = array of topic strings
@@ -242,7 +424,7 @@ Show progress:
 
 Run the full `/save` flow:
 
-1. Commit changes in memory repo and push (contribution branch + PR + auto-merge)
+1. Commit changes in memory repo and push directly to main (pull-rebase-push with retry)
 2. Commit any egregore changes and push working branch + PR to develop
 
 Show progress:
@@ -334,7 +516,37 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 | Empty description | Ask: "What's the issue?" — don't proceed without content |
 | `bin/issue.sh` missing for egregore route | Show "(coming soon)" message with sanitized body for manual sharing |
 
-## Full example: memory only
+## Full example: smart routing (high confidence → egregore-core)
+
+```
+> /issue /save Neo4j sync drops CONTRIBUTED_BY links
+
+  [1/4] ✓ Issue saved to memory + graph
+        → memory/knowledge/issues/2026-02-10-save-sync-drops-contributed-by.md
+
+This looks like an egregore-core issue. File it on acme-org/egregore-core?
+  1. Yes, file on acme-org/egregore-core
+  2. Just memory — track locally only
+
+> 1
+
+  [2/4] ✓ Filed on acme-org/egregore-core · #27
+  [3/4] ✓ Team notified
+  [4/4] ✓ Auto-saved
+
+┌──────────────────────────────────────────────────────────────────────┐
+│  ✱ ISSUE REPORTED                                bob · Feb 10       │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Title: /save sync drops CONTRIBUTED_BY links                        │
+│  For: acme-org/egregore-core · issue #27                           │
+│                                                                      │
+│  ✓ Saved to memory · graphed · team notified                         │
+│  → memory/knowledge/issues/2026-02-10-save-sync-drops-...            │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+## Full example: smart routing → user overrides to memory
 
 ```
 > /issue the memory symlink breaks after pull
@@ -342,52 +554,21 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
   [1/3] ✓ Issue saved to memory + graph
         → memory/knowledge/issues/2026-02-09-memory-symlink-breaks-after-pull.md
 
-Who's this for?
-  1. Just memory — tracked in knowledge graph, visible on /activity
-  2. egregore — (coming soon — Phase B)
-  3. Curve-Labs/egregore-core — filed on the org's fork
-  4. Curve-Labs/lace — filed on lace
+This looks like an egregore-core issue. File it on acme-org/egregore-core?
+  1. Yes, file on acme-org/egregore-core
+  2. Just memory — track locally only
 
-> 1
+> 2
 
   [2/3] ✓ Team notified
   [3/3] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ✱ ISSUE CAPTURED                                cem · Feb 09       │
+│  ✱ ISSUE CAPTURED                                bob · Feb 09       │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Title: Memory symlink breaks after pull                             │
 │  For: just memory                                                    │
-│                                                                      │
-│  ✓ Saved to memory · graphed · team notified                         │
-│  → memory/knowledge/issues/2026-02-09-memory-symlink.md              │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-## Full example: GitHub repo
-
-```
-> /issue the memory symlink breaks after pull
-
-  [1/4] ✓ Issue saved to memory + graph
-        → memory/knowledge/issues/2026-02-09-memory-symlink-breaks-after-pull.md
-
-Who's this for?
-  ...
-
-> Curve-Labs/egregore-core
-
-  [2/4] ✓ Filed on Curve-Labs/egregore-core · #42
-  [3/4] ✓ Team notified
-  [4/4] ✓ Auto-saved
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  ✱ ISSUE REPORTED                                cem · Feb 09       │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Title: Memory symlink breaks after pull                             │
-│  For: Curve-Labs/egregore-core · issue #42                           │
 │                                                                      │
 │  ✓ Saved to memory · graphed · team notified                         │
 │  → memory/knowledge/issues/2026-02-09-memory-symlink.md              │
@@ -416,7 +597,7 @@ manually — here's the sanitized body:
   [2/2] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ✱ ISSUE CAPTURED                                cem · Feb 09       │
+│  ✱ ISSUE CAPTURED                                bob · Feb 09       │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Title: /save fails silently when graph is offline                   │
@@ -424,6 +605,37 @@ manually — here's the sanitized body:
 │                                                                      │
 │  ✓ Saved to memory · graphed                                         │
 │  → memory/knowledge/issues/2026-02-09-save-fails-silently.md         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+## Full example: ambiguous (low confidence → full picker)
+
+```
+> /issue our team alignment on pricing feels off
+
+  [1/3] ✓ Issue saved to memory + graph
+        → memory/knowledge/issues/2026-02-10-team-pricing-alignment.md
+
+Where should this be filed?
+  1. Just memory — tracked in knowledge graph, visible on /activity
+  2. egregore — (coming soon — Phase B)
+  3. acme-org/egregore-core — filed on the org's fork
+  4. acme-org/frontend — filed on frontend
+
+> 1
+
+  [2/3] ✓ Team notified
+  [3/3] ✓ Auto-saved
+
+┌──────────────────────────────────────────────────────────────────────┐
+│  ✱ ISSUE CAPTURED                                bob · Feb 10       │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Title: Team pricing alignment feels off                             │
+│  For: just memory                                                    │
+│                                                                      │
+│  ✓ Saved to memory · graphed · team notified                         │
+│  → memory/knowledge/issues/2026-02-10-team-pricing-alignment.md      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -437,23 +649,25 @@ What's the issue?
 > The graph query for sessions returns duplicates when a session
 > has multiple HANDED_TO relationships
 
-  [1/3] ✓ Issue saved to memory + graph
+  [1/4] ✓ Issue saved to memory + graph
         → memory/knowledge/issues/2026-02-09-session-query-duplicates.md
 
-Who's this for?
-  ...
+This looks like an egregore-core issue. File it on acme-org/egregore-core?
+  1. Yes, file on acme-org/egregore-core
+  2. Just memory — track locally only
 
-> Just memory
+> 1
 
-  [2/3] ✓ Team notified
-  [3/3] ✓ Auto-saved
+  [2/4] ✓ Filed on acme-org/egregore-core · #43
+  [3/4] ✓ Team notified
+  [4/4] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ✱ ISSUE CAPTURED                                cem · Feb 09       │
+│  ✱ ISSUE REPORTED                                bob · Feb 09       │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Title: Session query returns duplicates with multiple...            │
-│  For: just memory                                                    │
+│  For: acme-org/egregore-core · issue #43                           │
 │                                                                      │
 │  ✓ Saved to memory · graphed · team notified                         │
 │  → memory/knowledge/issues/2026-02-09-session-query-duplicates.md    │

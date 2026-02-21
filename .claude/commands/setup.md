@@ -1,4 +1,4 @@
-First-time setup for Egregore. Sets up shared memory first, projects are optional.
+First-time setup for Egregore.
 
 Arguments: $ARGUMENTS
 
@@ -7,16 +7,25 @@ Arguments: $ARGUMENTS
 - `/setup` — Full setup (memory + optional projects)
 - `/setup [project]` — Add a specific project later
 
-## CRITICAL: Always use SSH
+## CRITICAL: Always use HTTPS
 
-Repos are private. Always use SSH:
+Repos are private. Always use HTTPS (github-auth.sh sets up credential storage):
 ```bash
-git clone git@github.com:Curve-Labs/[repo].git
+git clone https://github.com/{github_org}/[repo].git
 ```
 
 **If clone fails:**
 ```
-Can't access repo. Check your SSH keys: ssh -T git@github.com
+Can't access repo. Re-authenticate: bash bin/github-auth.sh
+```
+
+## Dynamic config
+
+**Always read org config from `egregore.json` first** — never hardcode org names, repos, or memory paths:
+```bash
+GITHUB_ORG=$(jq -r '.github_org' egregore.json)
+MEMORY_REPO=$(jq -r '.memory_repo' egregore.json)
+MEMORY_DIR=$(basename "$MEMORY_REPO" .git)
 ```
 
 ## Full setup flow (no arguments)
@@ -27,35 +36,40 @@ Setting up Egregore...
 [1/3] Setting up shared memory repo...
       This stores handoffs, decisions, and research notes across the team.
 
-      Checking for curve-labs-memory...
+      # Read from egregore.json — NEVER hardcode
+      MEMORY_REPO=$(jq -r '.memory_repo' egregore.json)
+      MEMORY_DIR=$(basename "$MEMORY_REPO" .git)
+      GITHUB_ORG=$(jq -r '.github_org' egregore.json)
 
-      IF not exists (as sibling ../curve-labs-memory):
-        git clone git@github.com:Curve-Labs/curve-labs-memory.git ../curve-labs-memory
+      Checking for $MEMORY_DIR...
+
+      IF not exists (as sibling ../$MEMORY_DIR):
+        git clone https://github.com/$GITHUB_ORG/$MEMORY_DIR.git ../$MEMORY_DIR
         ✓ Cloned
 
       IF already exists:
-        cd ../curve-labs-memory && git pull
+        cd ../$MEMORY_DIR && git pull
         ✓ Already have it, pulled latest
 
       Creating symlink so Claude can access it from here...
-      ln -s ../curve-labs-memory ./memory
+      ln -s ../$MEMORY_DIR ./memory
       ✓ Linked as ./memory
 
 [2/3] Registering you in the knowledge graph...
-      Getting your identity: git config user.name → "Oz Broccoli"
+      Getting your identity: git config user.name → "Alice Smith"
 
       What should we call you? (short name for the team)
-      > oz
+      > alice
 
-      MERGE (p:Person {name: 'oz'}) ...
-      ✓ Registered as "oz" (Oz Broccoli)
+      MERGE (p:Person {name: '$shortName'}) ...
+      ✓ Registered as "$shortName" ($fullName)
 
 [3/3] Project codebases
 
       Memory is ready. Now, do you want to work on any project code?
 
-      • tristero — Coordination infrastructure (Python)
-      • lace — Knowledge graph system (Python + Node)
+      • backend — Coordination infrastructure (Python)
+      • frontend — Knowledge graph system (Python + Node)
 
       Type project names (comma-separated), 'all', or 'none'
 
@@ -66,8 +80,8 @@ Setting up Egregore...
 
 When completing setup, register the person in the knowledge graph:
 
-1. Get full name from git: `git config user.name` → "Oguzhan Broccoli"
-2. Ask for short name: "What should we call you?" → "oz"
+1. Get full name from git: `git config user.name` → "Alice Smith"
+2. Ask for short name: "What should we call you?" → "alice"
 3. Create/update Person node via Neo4j MCP
 
 ```cypher
@@ -76,7 +90,7 @@ ON CREATE SET p.joined = date(), p.fullName = $fullName
 RETURN p.name AS name, p.joined AS joined
 ```
 
-**Existing team members:** oz, cem, ali — already registered, no changes needed.
+**Existing team members** are already registered — query `MATCH (p:Person) RETURN p.name` to check before creating duplicates.
 
 ## Adding a specific project later
 
@@ -87,30 +101,30 @@ jq --arg repo "$REPO" '.repos += [$repo] | .repos |= unique' egregore.json > tmp
 ```
 
 ```
-> /setup tristero
+> /setup backend
 
 Setting up Tristero...
 
 [1/4] Getting the repo...
-      Checking for ../tristero...
+      Checking for ../backend...
 
       IF not exists:
-        git clone git@github.com:Curve-Labs/tristero.git ../tristero
-        ✓ Cloned to ../tristero
+        git clone https://github.com/$GITHUB_ORG/backend.git ../backend
+        ✓ Cloned to ../backend
 
       IF already exists:
-        cd ../tristero && git pull
+        cd ../backend && git pull
         ✓ Already have it, pulled latest
 
 [2/4] Loading shared configuration...
-      cd ../tristero && git submodule update --init --recursive
+      cd ../backend && git submodule update --init --recursive
       ✓ egregore submodule loaded
 
 [3/4] Linking shared memory...
       Checking if memory symlink exists...
 
       IF not linked:
-        ln -s ../curve-labs-memory ../tristero/memory
+        ln -s ../$MEMORY_DIR ../backend/memory
         ✓ Linked as ./memory
 
       IF already linked:
@@ -118,7 +132,7 @@ Setting up Tristero...
 
 [4/4] Setting up Python environment...
       Creating virtual environment and installing dependencies...
-      cd ../tristero && uv venv && source .venv/bin/activate && uv pip install -r requirements.txt
+      cd ../backend && uv venv && source .venv/bin/activate && uv pip install -r requirements.txt
       ✓ Environment ready
 
 Setup complete.
@@ -139,7 +153,7 @@ What you can do now:
   /reflect      — Save a decision or finding
   /pull         — Get latest from team
 
-To add a project later: /setup tristero
+To add a project later: /setup backend
 ```
 
 ## Next
