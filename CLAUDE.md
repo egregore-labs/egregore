@@ -39,6 +39,11 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 1. Derive a topic slug from what the user said (same rules as `/branch`)
 2. `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`
 3. Confirm: `On dev/{author}/{slug} now.`
+4. Update the session in the graph (fire-and-forget, must not delay response):
+   ```bash
+   bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &
+   ```
+   Replace "topic from slug" with the slug words separated by spaces (e.g. `session-naming-bug` → `session naming bug`), and use the actual branch name.
 
 Then proceed with their request.
 
@@ -227,7 +232,8 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Reading** — `/open` (open/read/show me/display/pull up a file — always verbatim, never summarize)
 **Identity** — `/me` (view profile or set display name)
-**Coordination** — `/ask` `/quest` `/issue` `/invite`
+**Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
+**Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save`
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
@@ -238,8 +244,10 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Things to do: `/todo` (personal task) vs `/quest` (team exploration) vs `/issue` (something broken)
 - Questions: `/ask [person]` (async to teammate) vs just asking (agent can answer from context)
 - Reading files: `/open` (show full content verbatim) vs just answering (user asks a question about a file, not to read it)
-- Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs "process the call" (ambiguous — ask which type)
+- Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs `/ingest google` (Google Workspace content) vs "process the call" (ambiguous — ask which type)
+- Connectors: `/connect google` (enable/auth) vs `/ingest google` (bring content in) — "connect google" = setup, "import from drive" = ingest
 - Identity: `/me` (view profile or set display name) — "who am I", "call me oz", "change my name"
+- People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
 
 ## Socratic Questioning (MANDATORY)
 

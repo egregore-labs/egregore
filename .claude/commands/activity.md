@@ -69,6 +69,14 @@ Content rows: `│  {text padded with trailing spaces}  │`
 
 **DO NOT count characters or show reasoning.** Approximate padding is fine — the frame is decorative, not pixel-perfect. Go straight from data to rendered output.
 
+### Topic display rules (MANDATORY)
+
+When displaying a session topic anywhere in the activity view:
+- If `topic` is non-null: show it as-is
+- If `topic` is null/empty: show the branch slug humanized (drop the `dev/author/` prefix, replace hyphens with spaces). E.g. `dev/oz/session-naming-bug` → `session naming bug`
+- If branch is also null or is `develop`/`main`/`master`: show the session date as fallback (e.g. `Feb 24 session`)
+- **NEVER show "untitled", "current session", "quick session", or any invented label**
+
 ### Sections (separated by `├────┤`)
 
 **Header**: `{ORG} EGREGORE ✦ ACTIVITY DASHBOARD` left, `{me} · {date}` right

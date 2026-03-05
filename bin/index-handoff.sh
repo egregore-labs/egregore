@@ -148,7 +148,7 @@ FOREACH (_ IN CASE WHEN proj IS NOT NULL THEN [1] ELSE [] END |
   PROJECT_PARAM=", \"project\": \"${PROJECT}\""
 fi
 
-Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author
+Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
 MERGE (s:Session {id: \$sessionId})
 ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending'
 ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath

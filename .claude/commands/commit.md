@@ -2,6 +2,13 @@ Stage changes and commit with a message.
 
 Message (optional): $ARGUMENTS
 
+## Before anything else
+
+Check `git branch --show-current`. If on `develop`, `main`, or `master`:
+  → Create a working branch first: derive a topic slug from the changes or conversation context, then `git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop`
+  → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
+  → Then proceed with the commit.
+
 ## What to do
 
 1. Show modified and untracked files

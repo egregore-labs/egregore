@@ -144,7 +144,7 @@ if [ -d "$MEMORY/wraps" ]; then
 
       REL_PATH="wraps/${dirmonth}/${fname}.md"
 
-      CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author
+      CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
         MERGE (s:Session {id: \$sid})
         ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary,
           s.filePath = \$filePath, s.status = 'wrapped', s.branch = \$branch
@@ -211,7 +211,7 @@ ON MATCH SET a.title = \$title, a.topics = \$topics"
       if [ -n "$A_AUTHOR_HANDLE" ] && [ "$A_AUTHOR_HANDLE" != "unknown" ]; then
         CYPHER="${CYPHER}
 WITH a
-OPTIONAL MATCH (p:Person) WHERE toLower(p.name) = \$author
+OPTIONAL MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
 FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END |
   MERGE (a)-[:CONTRIBUTED_BY]->(p)
 )"

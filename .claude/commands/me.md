@@ -45,19 +45,25 @@ RESULT=$(bash bin/graph.sh query "MATCH (p:Person) WHERE toLower(p.name) = toLow
 
 If a match is found: `"That name is already taken by {github}. Pick something else."`
 
-**Update** (all three in parallel):
+**Update** (all four in parallel):
 
 1. **State file:**
    ```bash
    jq --arg dn "$ARGUMENTS" '.display_name = $dn' .egregore-state.json > .egregore-state.json.tmp && mv .egregore-state.json.tmp .egregore-state.json
    ```
 
-2. **Neo4j:**
+2. **Neo4j — update name + store previous name:**
    ```bash
-   bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) SET p.name = \$name RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$ARGUMENTS\"}"
+   bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) WITH p, p.name AS oldName SET p.name = \$name, p.previousNames = CASE WHEN oldName IS NOT NULL AND oldName <> \$name THEN coalesce(p.previousNames, []) + oldName ELSE coalesce(p.previousNames, []) END RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$ARGUMENTS\"}"
    ```
 
-3. **Supabase** (via API, non-blocking):
+3. **Neo4j — merge orphaned duplicate** (absorb any Person node with the new name that has no github):
+   ```bash
+   bash bin/graph.sh query "MATCH (real:Person {github: \$gh}), (orphan:Person) WHERE toLower(orphan.name) = toLower(\$name) AND (orphan.github IS NULL OR orphan.github = '') AND orphan <> real WITH real, orphan OPTIONAL MATCH (s1)-[:BY]->(orphan) FOREACH (_ IN CASE WHEN s1 IS NOT NULL THEN [1] ELSE [] END | MERGE (s1)-[:BY]->(real)) WITH real, orphan OPTIONAL MATCH (s2)-[:HANDED_TO]->(orphan) FOREACH (_ IN CASE WHEN s2 IS NOT NULL THEN [1] ELSE [] END | MERGE (s2)-[:HANDED_TO]->(real)) WITH real, orphan OPTIONAL MATCH (m)-[:INVOLVES]->(orphan) FOREACH (_ IN CASE WHEN m IS NOT NULL THEN [1] ELSE [] END | MERGE (m)-[:INVOLVES]->(real)) WITH real, orphan OPTIONAL MATCH (a)-[:CONTRIBUTED_BY]->(orphan) FOREACH (_ IN CASE WHEN a IS NOT NULL THEN [1] ELSE [] END | MERGE (a)-[:CONTRIBUTED_BY]->(real)) WITH real, orphan OPTIONAL MATCH (i)-[:CONDUCTED_BY]->(orphan) FOREACH (_ IN CASE WHEN i IS NOT NULL THEN [1] ELSE [] END | MERGE (i)-[:CONDUCTED_BY]->(real)) WITH real, orphan DETACH DELETE orphan RETURN 'merged' AS status" "{\"gh\":\"$AUTHOR\",\"name\":\"$ARGUMENTS\"}" 2>/dev/null || true
+   ```
+   This is best-effort — transfers known relationship types from the orphan to the real node, then deletes the orphan.
+
+4. **Supabase** (via API, non-blocking):
    ```bash
    API_URL=$(jq -r '.api_url // empty' egregore.json)
    API_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)

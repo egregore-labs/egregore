@@ -134,6 +134,42 @@ bash bin/notify.sh send "USERNAME" "You've been invited to ORG_NAME on Egregore!
 
 If not, skip silently — the link was already shown in Step 3.
 
+## Step 4b: Provision Coder user (if remote hosting enabled)
+
+Check if the org has remote hosting enabled. Run ONE bash call (fire-and-forget, must not delay response):
+
+```bash
+bash -c '
+API_URL=$(jq -r ".api_url" egregore.json)
+API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
+ORG_SLUG=$(jq -r ".slug" egregore.json)
+USERNAME="$1"
+
+# Check if hosting is enabled for this org
+HOSTING=$(curl -sf "${API_URL}/api/hosting/info/${ORG_SLUG}" \
+  -H "Authorization: Bearer $(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)" \
+  --max-time 5 2>/dev/null || echo "{}")
+ENABLED=$(echo "$HOSTING" | jq -r ".hosting_enabled // false")
+
+if [ "$ENABLED" = "true" ]; then
+  # Create Coder user (non-fatal, fire-and-forget)
+  curl -sf -X POST "${API_URL}/api/hosting/user/${ORG_SLUG}" \
+    -H "Authorization: Bearer $API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\": \"$USERNAME\"}" \
+    --max-time 10 >/dev/null 2>&1 || true
+  echo "coder_user_created"
+else
+  echo "no_hosting"
+fi
+' -- "USERNAME"
+```
+
+If the output is `coder_user_created`, include in the summary:
+```
+  Coder workspace:     user created
+```
+
 ## Step 5: Summary line
 
 After all steps complete, show one final status:
