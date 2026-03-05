@@ -126,6 +126,14 @@ Stats move to the footer. Artifacts omitted from daily view (use `/dashboard mon
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+### Topic display rules (MANDATORY)
+
+When displaying a session topic anywhere in the dashboard:
+- If `topic` is non-null: show it as-is
+- If `topic` is null/empty: show the branch slug humanized (drop the `dev/author/` prefix, replace hyphens with spaces). E.g. `dev/oz/session-naming-bug` → `session naming bug`
+- If branch is also null or is `develop`/`main`/`master`: show the session date as fallback (e.g. `Feb 24 session`)
+- **NEVER show "untitled", "current session", "quick session", or any invented label**
+
 ### Section rules
 
 **Header**: `◉ DASHBOARD` left, `{me} · {date}` right.

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CLIENT_ID="Ov23lizB4nYEeIRsHTdb"
-SCOPE="repo,admin:org"
+SCOPE="repo,read:org"
 TIMEOUT=300
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"

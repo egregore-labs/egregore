@@ -3,7 +3,7 @@
 # Called by Stop hook. Output is injected into Claude's context.
 # Silent when nothing to save. 10-minute cooldown between reminders.
 
-set -euo pipefail
+set -eo pipefail
 cd "$(dirname "$0")/.."
 
 # Stable key per project directory (survives across script invocations)

@@ -66,6 +66,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/boundary-check.sh"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/branch-guard.sh"
+          }
+        ]
       }
     ]
   },

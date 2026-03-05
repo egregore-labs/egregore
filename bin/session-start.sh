@@ -112,6 +112,8 @@ SESSION_ID_DIR="$HOME/.egregore"
 mkdir -p "$SESSION_ID_DIR"
 PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
 echo "$EGREGORE_SESSION_ID" > "$SESSION_ID_DIR/session-${PROJ_HASH}.id"
+# Also write project-local file (CLAUDE.md reads this — no glob needed)
+echo "$EGREGORE_SESSION_ID" > "$SCRIPT_DIR/.egregore-session-id"
 
 # --- Check onboarding state ---
 # If state file doesn't exist, assume onboarding complete (existing team member)
@@ -298,6 +300,9 @@ compute_boundary() {
 
 # Run boundary computation (non-blocking, but fast — just file I/O)
 compute_boundary 2>/dev/null || true
+
+# --- Ensure pull.rebase is set (prevents "divergent branches" errors) ---
+git config pull.rebase true 2>/dev/null || true
 
 # --- Fetch all remotes in parallel ---
 # Set git transfer timeout so hangs don't block startup indefinitely.
@@ -504,7 +509,7 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
           fi
 
           if [ "$AUTO_CAPTURE" = "true" ]; then
-            SESSION_CYPHER="MATCH (p:Person) WHERE p.github = \$github OR toLower(p.name) = \$author
+            SESSION_CYPHER="MATCH (p:Person {github: \$github})
               MERGE (s:Session {id: \$sid})
               ON CREATE SET s.date = date(\$date), s.branch = \$branch,
                 s.startedAt = datetime(), s.status = 'active'

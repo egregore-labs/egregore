@@ -47,7 +47,7 @@ is_allowed() {
 
   # Always-allowed system paths
   case "$resolved" in
-    /tmp/*|/tmp) return 0 ;;
+    /tmp/*|/tmp|/private/tmp/*|/private/tmp) return 0 ;;
     "$HOME/.claude"/*|"$HOME/.claude") return 0 ;;
     /usr/*|/etc/*|/var/*|/bin/*|/sbin/*|/opt/*) return 0 ;;
   esac
