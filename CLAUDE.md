@@ -37,15 +37,33 @@ That's it. Do NOT list commands. Do NOT show a menu. Just the greeting + that qu
 **This is a mandatory behavioral rule.** When the user answers "What are you working on?" (or says anything describing work), your **first action** — before reading files, before exploring code, before anything else — is to create a working branch:
 
 1. Derive a topic slug from what the user said (same rules as `/branch`)
-2. `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`
-3. Confirm: `On dev/{author}/{slug} now.`
-4. Update the session in the graph (fire-and-forget, must not delay response):
+2. Create the branch at the right commit: `git fetch origin develop --quiet && git branch dev/{author}/{slug} origin/develop`
+3. Enter worktree: use `EnterWorktree` with `name` set to the slug
+4. Inside the worktree, switch to the named branch: `git checkout dev/{author}/{slug}`
+5. Run setup: `bash <main-project-dir>/bin/worktree.sh setup "$(pwd)" "<main-project-dir>"` (where main-project-dir is the directory you were in before EnterWorktree — use the absolute path so it works regardless of which branch the worktree is on)
+6. Confirm: `On dev/{author}/{slug} (worktree).`
+
+**Fallback:** If `EnterWorktree` fails (not in a git repo, tool unavailable, etc.), fall back to the old flow: `git checkout -b dev/{author}/{slug} origin/develop`.
+
+7. Update the session in the graph (fire-and-forget, must not delay response):
    ```bash
    bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &
    ```
    Replace "topic from slug" with the slug words separated by spaces (e.g. `session-naming-bug` → `session naming bug`), and use the actual branch name.
 
 Then proceed with their request.
+
+### Handoff claiming
+
+If the session context includes `addressed_to_user` handoffs and the user says they're working on one of them (e.g. "I'm picking up the google-connector handoff"), create the IMPLEMENTS link immediately after branch creation:
+
+```bash
+bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
+```
+
+Where `$HANDOFF_SESSION_ID` is the session ID of the handoff being claimed (query the graph if needed: `MATCH (s:Session)-[:HANDED_TO]->(p:Person {github: $gh}) WHERE s.handoffStatus IN ['pending','read'] AND s.topic CONTAINS $keyword RETURN s.id`).
+
+This creates `(:Session)-[:IMPLEMENTS]->(:Session)`. When the session wraps, `/wrap` checks for this link and notifies the handoff author.
 
 **The only exceptions:**
 - User explicitly says `/branch` (they're doing it themselves)
@@ -100,7 +118,7 @@ bash bin/graph.sh schema
 
 **Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls to Neo4j directly. The script reads `api_url` from `egregore.json` and `EGREGORE_API_KEY` from `.env`, then routes queries through the API gateway.
 
-Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, HANDED_TO, INVOKED_BY, INVOLVES, PART_OF, RELATES_TO, STARTED_BY.
+Current schema: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR, Harvest, HarvestSession, HarvestTurn. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, HAS_SESSION, HAS_TURN, IMPLEMENTS, INITIATED_BY, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY, WITH.
 
 ## Notifications
 
@@ -229,12 +247,15 @@ Teams can add their own repos to `egregore.json` → `repos[]` (e.g. `["frontend
 When a user describes intent that maps to a command, invoke it — don't wait for them to type the slash. Each command file has a `## When to invoke` section with trigger phrases and disambiguation. Load the command to get the full spec.
 
 **Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
-**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
-**Reading** — `/open` (open/read/show me/display/pull up a file — always verbatim, never summarize)
+**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest` `/harvest`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user`
 **Connectors** — `/connect` (enable/disable external service integrations like Google Workspace)
+**Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
+**Spirits** — `/summon` (design + launch persistent agent processes — recurring loops or watchdogs)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save`
+**Spirits** — `/summon` (design + launch persistent agent processes — recurring loops or watchdogs)
+**Maintenance** — `/graph-maintain` (iterative graph hygiene, composable with `/loop` or `/summon`)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation** — when intent is ambiguous between similar commands:
@@ -243,11 +264,15 @@ When a user describes intent that maps to a command, invoke it — don't wait fo
 - Ending vs continuing: `/wrap` (personal closure) vs `/handoff` (leaving notes for others) vs `/save` (still working)
 - Things to do: `/todo` (personal task) vs `/quest` (team exploration) vs `/issue` (something broken)
 - Questions: `/ask [person]` (async to teammate) vs just asking (agent can answer from context)
-- Reading files: `/open` (show full content verbatim) vs just answering (user asks a question about a file, not to read it)
 - Ingesting content: `/ingest meeting` (team meeting from Granola) vs `/ingest user-interview` (research session / onboarding call) vs `/ingest google` (Google Workspace content) vs "process the call" (ambiguous — ask which type)
 - Connectors: `/connect google` (enable/auth) vs `/ingest google` (bring content in) — "connect google" = setup, "import from drive" = ingest
 - Identity: `/me` (view profile or set display name) — "who am I", "call me oz", "change my name"
+- Elicitation: `/harvest` (adaptive, multi-person or solo, produces synthesis) vs `/ask` (one question to a person) vs `/ingest user-interview` (analyzing existing transcript, not live elicitation)
 - People: `/invite` (add someone) vs `/delete-user` (remove someone) — "remove user", "kick", "revoke access"
+- PRs: `/pr` (create a PR) vs `/review-pr` (review an existing PR) — "review PR" = review, "create PR" = create
+- Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop
+- Graph health: `/graph-maintain` (iterative fix, composable with `/loop`) vs `/graph-diagnostic` (one-time full capture) vs `/checkup` (env health)
+- Persistent agents: `/summon` (design a spirit through questions, review spec, then launch) vs `/loop` (quick schedule, user already knows what they want) — "I want an agent that..." = /summon, "/loop 5m /foo" = /loop
 
 ## Socratic Questioning (MANDATORY)
 

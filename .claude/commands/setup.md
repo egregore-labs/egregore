@@ -61,7 +61,7 @@ Setting up Egregore...
       What should we call you? (short name for the team)
       > alice
 
-      MERGE (p:Person {name: '$shortName'}) ...
+      MERGE (p:Person {github: '$github'}) ON CREATE SET p.name = '$shortName' ...
       ✓ Registered as "$shortName" ($fullName)
 
 [3/3] Project codebases
@@ -85,8 +85,9 @@ When completing setup, register the person in the knowledge graph:
 3. Create/update Person node via Neo4j MCP
 
 ```cypher
-MERGE (p:Person {name: $name})
-ON CREATE SET p.joined = date(), p.fullName = $fullName
+MERGE (p:Person {github: $github})
+ON CREATE SET p.name = $name, p.joined = date(), p.fullName = $fullName
+ON MATCH SET p.name = $name, p.fullName = $fullName
 RETURN p.name AS name, p.joined AS joined
 ```
 

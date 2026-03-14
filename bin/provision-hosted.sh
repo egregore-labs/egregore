@@ -5,7 +5,8 @@ API_URL=$(jq -r '.api_url' egregore.json)
 SLUG=$(jq -r '.slug // .org_name' egregore.json)
 ORG_NAME=$(jq -r '.org_name' egregore.json)
 GITHUB_ORG=$(jq -r '.github_org' egregore.json)
-REPO_NAME=$(jq -r '.repo_name // "egregore-core"' egregore.json)
+REPO_NAME=$(jq -r '.repo_name // empty' egregore.json)
+if [ -z "$REPO_NAME" ]; then echo "ERROR: repo_name not set in egregore.json"; exit 1; fi
 
 echo "Provisioning hosted Egregore for $ORG_NAME ($SLUG)..."
 echo "API: $API_URL"

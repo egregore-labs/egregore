@@ -44,3 +44,6 @@ node_modules/
 
 # Playwright MCP
 .playwright-mcp/
+
+# Claude Code worktrees (session-isolated working directories)
+.claude/worktrees/

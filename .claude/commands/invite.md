@@ -29,21 +29,29 @@ Run ONE bash call with description "Sending invite to {username}":
 ```bash
 bash -c '
 USERNAME="$1"
-TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
+GH_TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
+API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
 GITHUB_ORG=$(jq -r ".github_org" egregore.json)
 API_URL=$(jq -r ".api_url" egregore.json)
 ORG_NAME=$(jq -r ".org_name" egregore.json)
-REPO_NAME=$(jq -r ".repo_name // \"egregore-core\"" egregore.json)
+REPO_NAME=$(jq -r ".repo_name // empty" egregore.json)
+if [ -z "$REPO_NAME" ]; then echo "ERROR: repo_name not set in egregore.json"; exit 1; fi
+SLUG=$(jq -r ".slug" egregore.json)
 
-if [ -z "$TOKEN" ]; then
+if [ -z "$GH_TOKEN" ]; then
   echo "ERROR: No GitHub token found. Run: bash bin/github-auth.sh"
+  exit 1
+fi
+
+if [ -z "$API_KEY" ]; then
+  echo "ERROR: No Egregore API key found. Check .env for EGREGORE_API_KEY"
   exit 1
 fi
 
 RESP=$(curl -s -X POST "$API_URL/api/org/invite" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d "{\"github_org\": \"$GITHUB_ORG\", \"github_username\": \"$USERNAME\", \"repo_name\": \"$REPO_NAME\"}")
+  -H "Authorization: Bearer $API_KEY" \
+  -d "{\"github_org\": \"$GITHUB_ORG\", \"github_username\": \"$USERNAME\", \"repo_name\": \"$REPO_NAME\", \"slug\": \"$SLUG\", \"github_token\": \"$GH_TOKEN\"}")
 
 # Output structured JSON for parsing
 echo "$RESP" | jq -c "{
@@ -106,7 +114,7 @@ Run these two in parallel. Use description "Recording invite in graph" and "Chec
 
 **Create Person node + sync to Supabase:**
 ```bash
-bash bin/graph.sh query "MERGE (p:Person {name: \$name}) ON CREATE SET p.invited = date(), p.invitedBy = \$inviter RETURN p.name" '{"name": "USERNAME", "inviter": "INVITER"}'
+bash bin/graph.sh query "MERGE (p:Person {github: \$github}) ON CREATE SET p.name = \$github, p.invited = date(), p.invitedBy = \$inviter RETURN p.name" '{"github": "USERNAME", "inviter": "INVITER"}'
 ```
 
 Then sync to Supabase (non-fatal):
@@ -124,7 +132,7 @@ Get the inviter name from `git config user.name` (derive short handle: lowercase
 
 **Check Telegram + notify:**
 ```bash
-bash bin/graph.sh query "MATCH (p:Person {name: \$name}) RETURN p.telegramId" '{"name": "USERNAME"}'
+bash bin/graph.sh query "MATCH (p:Person) WHERE p.github = \$username OR p.name = \$username RETURN p.telegramId" '{"username": "USERNAME"}'
 ```
 
 If they have a telegramId, send the invite:

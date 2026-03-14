@@ -8,6 +8,16 @@ FRAMEWORK_VERSION="2"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+# --- Worktree detection ---
+# Git worktrees have .git as a FILE (not directory) pointing to the main repo's .git/worktrees/
+IS_WORKTREE="false"
+MAIN_PROJECT_DIR="$SCRIPT_DIR"
+if [ -f "$SCRIPT_DIR/.git" ]; then
+  IS_WORKTREE="true"
+  WT_GITDIR=$(sed 's/^gitdir: //' "$SCRIPT_DIR/.git" 2>/dev/null)
+  MAIN_PROJECT_DIR=$(cd "$WT_GITDIR/../../.." 2>/dev/null && pwd)
+fi
+
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
 HEALTH_GIT="skip"
@@ -68,9 +78,18 @@ else
           USAGE_TYPE="founder_group"
         fi
         if [ -f "$STATE_FILE" ]; then
-          jq --arg u "$GH_LOGIN" --arg n "${GH_NAME:-$GH_LOGIN}" --arg ut "$USAGE_TYPE" \
-            '.github_username = $u | .github_name = $n | .name = $n | .onboarding_complete = true | .usage_type = $ut' "$STATE_FILE" > "$STATE_FILE.tmp" \
-            && mv "$STATE_FILE.tmp" "$STATE_FILE"
+          # Existing state file — update identity but preserve onboarding status
+          HAS_ONBOARDING=$(jq -r '.onboarding_complete // "unset"' "$STATE_FILE" 2>/dev/null)
+          if [ "$HAS_ONBOARDING" = "unset" ]; then
+            # State file exists but no onboarding flag — set to false to trigger it
+            jq --arg u "$GH_LOGIN" --arg n "${GH_NAME:-$GH_LOGIN}" --arg ut "$USAGE_TYPE" \
+              '.github_username = $u | .github_name = $n | .name = $n | .onboarding_complete = false | .usage_type = $ut' "$STATE_FILE" > "$STATE_FILE.tmp" \
+              && mv "$STATE_FILE.tmp" "$STATE_FILE"
+          else
+            jq --arg u "$GH_LOGIN" --arg n "${GH_NAME:-$GH_LOGIN}" --arg ut "$USAGE_TYPE" \
+              '.github_username = $u | .github_name = $n | .name = $n | .usage_type = $ut' "$STATE_FILE" > "$STATE_FILE.tmp" \
+              && mv "$STATE_FILE.tmp" "$STATE_FILE"
+          fi
           FIRST_SESSION="false"
         else
           cat > "$STATE_FILE" << STATEEOF
@@ -78,7 +97,7 @@ else
   "github_username": "$GH_LOGIN",
   "github_name": "${GH_NAME:-$GH_LOGIN}",
   "name": "${GH_NAME:-$GH_LOGIN}",
-  "onboarding_complete": true,
+  "onboarding_complete": false,
   "usage_type": "$USAGE_TYPE",
   "first_session": true
 }
@@ -194,8 +213,9 @@ if [ "$KEY_NEEDS_FIX" = "true" ]; then
 fi
 
 # --- Self-register in instance registry (for pre-registry installs) ---
+# Worktrees should NOT register as separate instances
 # Wrapped in subshell — registration is optional, must not block session start
-if command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
+if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
   (
     REGISTRY_DIR="$HOME/.egregore"
     REGISTRY="$REGISTRY_DIR/instances.json"
@@ -265,8 +285,9 @@ compute_boundary() {
   local denied_paths_json="[]"
   local registry="$HOME/.egregore/instances.json"
   if [ -f "$registry" ]; then
-    denied_paths_json=$(jq --arg self "$project_dir" \
-      '[.[] | select(.path != $self) | .path]' "$registry" 2>/dev/null || echo "[]")
+    denied_paths_json=$(jq --arg self "$project_dir" --arg wt_prefix "$project_dir/.claude/worktrees" \
+      '[.[] | select(.path != $self) | select((.path | startswith($wt_prefix)) | not) | .path]' \
+      "$registry" 2>/dev/null || echo "[]")
   fi
 
   # Write boundary file (atomic: write to tmp, then mv)
@@ -331,6 +352,9 @@ done
 
 # Wait for all fetches
 wait 2>/dev/null || true
+
+# --- Worktree orphan cleanup (background, non-blocking) ---
+bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
 
 # --- Git health check ---
 if git show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
@@ -408,7 +432,15 @@ ACTION="ready"
 SAVED_BRANCH=""
 BRANCH="${CURRENT_BRANCH:-develop}"
 
-if ! setup_develop 2>/dev/null; then
+if [ "$IS_WORKTREE" = "true" ]; then
+  # Inside a worktree — skip develop checkout, we're already on our branch
+  BRANCH=$(git branch --show-current 2>/dev/null || echo "?")
+  DEVELOP_SYNCED="true"
+  # Use main project's .env and state if ours are missing
+  if [ ! -f "$SCRIPT_DIR/.env" ] && [ -f "$MAIN_PROJECT_DIR/.env" ]; then
+    export ENV_FILE="$MAIN_PROJECT_DIR/.env"
+  fi
+elif ! setup_develop 2>/dev/null; then
   HEALTH_GIT="fail"
 fi
 
@@ -692,6 +724,42 @@ fi
   fi
 ) > "$CTX_DIR/telegram_health" 2>/dev/null &
 
+# 9. Lifecycle events: merged PRs + implemented handoffs (background)
+(
+  GH_USER_LC=""
+  if [ -f "$STATE_FILE" ]; then
+    GH_USER_LC=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
+  fi
+  DISPLAY_NAME_LC=""
+  if [ -f "$STATE_FILE" ]; then
+    DISPLAY_NAME_LC=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
+  fi
+  # Get last session end date (use 7 days ago as fallback)
+  LAST_END=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
+    MATCH (s:Session)-[:BY]->(p:Person {github: \$gh})
+    WHERE s.wrappedAt IS NOT NULL
+    RETURN toString(s.wrappedAt) AS t
+ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
+  " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null | jq -r '.values[0][0] // empty' 2>/dev/null)
+  if [ -z "$LAST_END" ]; then
+    LAST_END="$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo '2026-03-03')T00:00:00Z"
+  fi
+
+  MERGED_JSON="[]"
+  if [ -n "$GH_USER_LC" ]; then
+    MERGED_JSON=$(bash "$SCRIPT_DIR/bin/graph-op.sh" my-merged-prs "$GH_USER_LC" "$(echo "$LAST_END" | cut -dT -f1)" 2>/dev/null || echo "[]")
+  fi
+
+  IMPL_JSON="[]"
+  IMPL_NAME="${DISPLAY_NAME_LC:-$GH_USER_LC}"
+  if [ -n "$IMPL_NAME" ]; then
+    IMPL_JSON=$(bash "$SCRIPT_DIR/bin/graph-op.sh" my-implemented-handoffs "$IMPL_NAME" "$(echo "$LAST_END" | cut -dT -f1)" 2>/dev/null || echo "[]")
+  fi
+
+  jq -n --argjson merged "$MERGED_JSON" --argjson impl "$IMPL_JSON" \
+    '{merged_prs: $merged, implemented_handoffs: $impl}' 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}'
+) > "$CTX_DIR/lifecycle" 2>/dev/null &
+
 # Wait for all context gathering + health checks to finish
 wait
 
@@ -778,6 +846,18 @@ if [ "$HAS_FAILURE" = "true" ]; then
   echo "  ⚠ Issues detected — run /checkup to diagnose and fix"
 fi
 
+# Show lifecycle events (merged PRs + implemented handoffs)
+LIFECYCLE_JSON=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{}')
+MERGED_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.merged_prs.values // [] | length' 2>/dev/null || echo "0")
+IMPL_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.implemented_handoffs.values // [] | length' 2>/dev/null || echo "0")
+
+if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null; then
+  echo "$LIFECYCLE_JSON" | jq -r '.merged_prs.values[]? // empty | "  ✓ PR #\(.[0]) merged (\(.[1]))"' 2>/dev/null || true
+fi
+if [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
+  echo "$LIFECYCLE_JSON" | jq -r '.implemented_handoffs.values[]? // empty | "  ✓ \(.[1]) worked on your handoff: \(.[0])"' 2>/dev/null || true
+fi
+
 # Show auto-save notice if work was committed from a previous branch
 if [ -n "$SAVED_BRANCH" ]; then
   echo "  ✓ Auto-saved uncommitted work on $SAVED_BRANCH"
@@ -833,6 +913,36 @@ CONTEXT_QUESTS=$(cat "$CTX_DIR/quests" 2>/dev/null || echo "[]")
 CONTEXT_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
 CONTEXT_TEAM=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
 CONTEXT_SOUL=$(cat "$CTX_DIR/soul_summary" 2>/dev/null || echo "")
+CONTEXT_LIFECYCLE=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}')
+
+# --- Write compact subagent context cache (reuses already-gathered data) ---
+SUBAGENT_CTX="/tmp/egregore-subagent-ctx-${EGREGORE_SESSION_ID}.txt"
+(
+  SA_ORG_NAME=$(jq -r '.org_name // "Unknown"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "Unknown")
+  SA_GITHUB_ORG=$(jq -r '.github_org // "unknown"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "unknown")
+
+  # Format quests list
+  SA_QUESTS="none"
+  if [ "$CONTEXT_QUESTS" != "[]" ]; then
+    SA_QUESTS=$(echo "$CONTEXT_QUESTS" | jq -r '.[]' 2>/dev/null | paste -sd', ' - 2>/dev/null || echo "none")
+  fi
+
+  # Format recent handoffs
+  SA_HANDOFFS="none"
+  if [ "$CONTEXT_HANDOFFS" != "[]" ]; then
+    SA_HANDOFFS=$(echo "$CONTEXT_HANDOFFS" | jq -r '.[] | .name' 2>/dev/null | head -5 | paste -sd', ' - 2>/dev/null || echo "none")
+  fi
+
+  cat > "$SUBAGENT_CTX" << SAEOF
+<!-- egregore-context
+Organization: $SA_ORG_NAME (github: $SA_GITHUB_ORG)
+Session: $BRANCH — ${EGREGORE_SESSION_ID}
+Active quests: $SA_QUESTS
+Recent handoffs: $SA_HANDOFFS
+Memory: memory/ is a symlink to shared knowledge base. Use bin/graph.sh for Neo4j queries.
+-->
+SAEOF
+) 2>/dev/null || true
 
 cat << CTXEOF
 
@@ -845,7 +955,8 @@ cat << CTXEOF
   "quests": $CONTEXT_QUESTS,
   "last_user_activity": "$CONTEXT_ACTIVITY",
   "team_recent_memory": $CONTEXT_TEAM,
-  "soul_self_summary": "$CONTEXT_SOUL"
+  "soul_self_summary": "$CONTEXT_SOUL",
+  "lifecycle": $CONTEXT_LIFECYCLE
 }
 -->
 CTXEOF

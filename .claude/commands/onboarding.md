@@ -285,8 +285,6 @@ questions:
     options:
       - label: "Session tracking"
         description: "Powers /dashboard and /handoff. Your sessions appear in /activity."
-      - label: "Transcript sharing"
-        description: "Session transcripts are stored for team context. Others can see what you worked on."
       - label: "Anonymous telemetry"
         description: "Command names, session durations, error codes. Never code or content."
       - label: "Notifications"
@@ -297,9 +295,9 @@ questions:
 - Default: ALL selected (if user doesn't deselect)
 - Map selections to boolean flags:
   - "Session tracking" selected → `session_tracking: true`
-  - "Transcript sharing" selected → `transcript_sharing: true`
   - "Anonymous telemetry" selected → `telemetry: true` (absence → `telemetry: false`)
   - "Notifications" selected → `contact_preference: "all"` (absence → `contact_preference: "none"`)
+- Note: `transcript_sharing` is set during website setup, not here. Inherit from egregore.json or default to the org setting.
 
 **Save to state (nested + flat keys for backward compat):**
 ```json

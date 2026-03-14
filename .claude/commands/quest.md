@@ -176,8 +176,27 @@ Add initial threads? (or skip)
 Recording in knowledge graph...
   ✓ Quest node created, linked to backend + frontend
 
-✓ Quest created. Run /save to share.
+Pushing to shared memory...
+  ✓ Quest saved to memory/quests/research-agent.md
+
+✓ Quest created and shared.
 ```
+
+## Auto-push to memory (MANDATORY on quest create/update)
+
+Quest files live in `memory/` which is its own repo on `main`. After writing or updating a quest file, **always** commit and push immediately — do not defer to `/save`.
+
+```bash
+git -C memory add "quests/${slug}.md"
+git -C memory commit -m "quest: ${slug} — ${action}" --quiet
+git -C memory push origin main --quiet
+```
+
+Where `${action}` is `created`, `updated`, `paused`, `completed`, `prioritized`, or `contribution`.
+
+This applies to: `/quest new`, `/quest contribute`, `/quest pause`, `/quest complete`, `/quest prioritize` — any operation that modifies a quest file.
+
+If the push fails, warn the user: `Quest saved locally but push failed — run /save to retry.`
 
 ## Notifications
 
@@ -227,4 +246,4 @@ Omit the Todos section entirely if no todos are linked to the quest.
 
 ## Next
 
-Use `/add` to attach artifacts, `/save` to share.
+Use `/add` to attach artifacts. Quest files are auto-pushed to memory — no `/save` needed.

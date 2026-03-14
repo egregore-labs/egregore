@@ -779,7 +779,7 @@ Build a JSON array of queries for `bash bin/graph-batch.sh` calls.
 **Interview → Person (researcher) relationship** (CONDUCTED_BY):
 ```json
 {
-  "statement": "MATCH (i:Interview {id: $interviewId}) MERGE (p:Person {name: $personName}) MERGE (i)-[:CONDUCTED_BY]->(p)",
+  "statement": "MATCH (i:Interview {id: $interviewId}) MATCH (p:Person {name: $personName}) MERGE (i)-[:CONDUCTED_BY]->(p)",
   "parameters": {"interviewId": "...", "personName": "{researcher graph name}"}
 }
 ```

@@ -120,6 +120,27 @@ multiSelect: true
 
 If no relevant links found, skip this step entirely.
 
+## Step 3.5: Notify handoff authors (if implementing)
+
+Check if this session implements any handoffs:
+```bash
+bash bin/graph-op.sh check-implements "$SID" 2>/dev/null
+```
+
+If results are returned (this session IMPLEMENTS a handoff):
+1. Collect what was produced this session: PRs (from `git log`), files changed, commits
+2. For each implemented handoff, notify the original author via Telegram:
+   ```bash
+   bash bin/notify.sh send "$AUTHOR_NAME" "$IMPLEMENTOR worked on your handoff '$TOPIC' — $SUMMARY" 2>/dev/null &
+   ```
+   Where `$SUMMARY` is a brief description like "PR #265 opened, 3 commits" or "3 files changed".
+3. Mark the handoff as `done`:
+   ```bash
+   bash bin/graph-op.sh mark-done "$HANDOFF_SESSION_ID" 2>/dev/null &
+   ```
+
+This fires only when someone explicitly claimed a handoff at session start. No false positives.
+
 ## Step 4: Execute batch
 
 All writes go through WAL first (`bash bin/graph-wal.sh append`), then direct write (`bash bin/graph.sh query`). Suppress all output.
@@ -219,6 +240,13 @@ Run the `/save` flow: commit + push working branch, create PR to develop if need
 ```bash
 bash bin/telemetry.sh emit "command" '{"command":"wrap"}' 2>/dev/null &
 ```
+
+## Step 7.5: Worktree cleanup
+
+If currently in a worktree (check: `[ -f .git ]` — worktrees have .git as a file, not directory):
+1. Note the current worktree path for cleanup
+2. Use `ExitWorktree` with action `"remove"` to leave and clean up
+3. If ExitWorktree fails due to uncommitted changes, warn user and use action `"keep"`
 
 ## Step 8: Confirmation TUI
 
