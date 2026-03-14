@@ -466,8 +466,10 @@ Session included N artifacts:
   - [Type]: [Title]
   - [Type]: [Title]
 
-Entry point: memory/[handoff file path]
+Entry point: https://github.com/{org}/{memory-repo}/blob/main/[handoff file path]
 ```
+
+Derive the GitHub URL from `egregore.json`: read `memory_repo` (strip `.git` suffix and extract `{org}/{repo}` from the URL), then append `/blob/main/` + the file path relative to the memory root (e.g. `handoffs/2026-02/07-bob-defensibility-architecture.md`).
 
 Example:
 ```
@@ -479,7 +481,7 @@ Session included 2 artifacts:
   - Decision: Defensibility architecture framework
   - Finding: Harvest flywheel as training surface
 
-Entry point: memory/handoffs/2026-02/07-bob-defensibility-architecture.md
+Entry point: https://github.com/Curve-Labs/Curve-Labs-memory/blob/main/handoffs/2026-02/07-bob-defensibility-architecture.md
 ```
 
 Show progress:

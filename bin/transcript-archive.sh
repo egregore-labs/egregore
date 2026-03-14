@@ -74,6 +74,35 @@ ENDED_AT=$(tail -1 "$TRANSCRIPT_PATH" 2>/dev/null | jq -r '.timestamp // empty' 
 MESSAGE_COUNT=$(wc -l < "$TRANSCRIPT_PATH" 2>/dev/null | tr -d ' ')
 SIZE_BYTES=$(wc -c < "$TRANSCRIPT_PATH" 2>/dev/null | tr -d ' ')
 
+# --- Drain observation buffer → ActivitySummary node via WAL ---
+OBS_BUFFER="/tmp/egregore-obs-${SESSION_ID}.jsonl"
+if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
+  OBS_COUNT=$(wc -l < "$OBS_BUFFER" 2>/dev/null | tr -d ' ')
+  OBS_TOOLS=$(awk -F'"tool":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | paste -sd',' -)
+  OBS_PATHS=$(awk -F'"path":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | head -50 | paste -sd',' -)
+
+  # Build arrays as JSON strings for Cypher
+  OBS_TOOLS_JSON=$(echo "$OBS_TOOLS" | tr ',' '\n' | jq -R . | jq -s '.' 2>/dev/null || echo '[]')
+  OBS_PATHS_JSON=$(echo "$OBS_PATHS" | tr ',' '\n' | jq -R . | jq -s '.' 2>/dev/null || echo '[]')
+
+  ACTIVITY_CYPHER="MATCH (s:Session {id: \$sid})
+    MERGE (a:ActivitySummary {session: \$sid})
+    SET a.tools = \$tools, a.paths = \$paths, a.count = \$count, a.createdAt = datetime()
+    MERGE (s)-[:HAS_ACTIVITY]->(a)"
+  ACTIVITY_PARAMS=$(jq -n -c \
+    --arg sid "$SESSION_ID" \
+    --argjson tools "$OBS_TOOLS_JSON" \
+    --argjson paths "$OBS_PATHS_JSON" \
+    --argjson count "${OBS_COUNT:-0}" \
+    '{sid: $sid, tools: $tools, paths: $paths, count: $count}')
+
+  bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$ACTIVITY_CYPHER" "$ACTIVITY_PARAMS" 2>/dev/null || true
+
+  # Clean up buffer and compact sequence counter
+  rm -f "$OBS_BUFFER"
+  rm -f "/tmp/egregore-compact-seq-${SESSION_ID}" 2>/dev/null
+fi
+
 # --- Emit session_end telemetry + flush buffer (background, non-blocking) ---
 (
   # Calculate duration from transcript timestamps

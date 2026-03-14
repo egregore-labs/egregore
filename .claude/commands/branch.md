@@ -10,8 +10,12 @@ Description: $ARGUMENTS
    - `dev/{author}/{topic-slug}` — default for session work
    - `feature/{topic-slug}` — explicit feature work
    - `bugfix/{topic-slug}` — bug fixes
-4. Create branch from develop
-5. Switch to the new branch
+4. Create branch at the right commit (don't switch yet): `git branch {branch-name} origin/develop`
+5. Enter worktree: use `EnterWorktree` with `name` set to the topic slug
+6. Inside the worktree, switch to the named branch: `git checkout {branch-name}`
+7. Run setup: `bash <main-project-dir>/bin/worktree.sh setup "$(pwd)" "<main-project-dir>"`
+
+**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} origin/develop`
 
 ## Deriving the topic slug
 
@@ -46,8 +50,11 @@ If a match is found, offer to resume it instead of creating a new one.
 Creating branch...
 
   git fetch origin develop --quiet
-  git checkout -b dev/alice/auth-flow origin/develop
-  ✓ Created dev/alice/auth-flow (from develop)
+  git branch dev/alice/auth-flow origin/develop
+  EnterWorktree → .claude/worktrees/auth-flow/
+  git checkout dev/alice/auth-flow
+  bash <main-dir>/bin/worktree.sh setup "$(pwd)" "<main-dir>"
+  ✓ Created dev/alice/auth-flow (worktree, from develop)
 
 Ready to work. /save when done.
 ```
@@ -58,8 +65,10 @@ Ready to work. /save when done.
 Creating branch...
 
   git fetch origin develop --quiet
-  git checkout -b bugfix/fix-payment-endpoint origin/develop
-  ✓ Created bugfix/fix-payment-endpoint (from develop)
+  git branch bugfix/fix-payment-endpoint origin/develop
+  EnterWorktree → .claude/worktrees/fix-payment-endpoint/
+  git checkout bugfix/fix-payment-endpoint
+  ✓ Created bugfix/fix-payment-endpoint (worktree, from develop)
 
 Ready to work. /save when done.
 ```
@@ -69,8 +78,10 @@ Ready to work. /save when done.
 
 No description given. Using today's date.
 
-  git checkout -b dev/alice/2026-02-12 origin/develop
-  ✓ Created dev/alice/2026-02-12 (from develop)
+  git branch dev/alice/2026-02-12 origin/develop
+  EnterWorktree → .claude/worktrees/2026-02-12/
+  git checkout dev/alice/2026-02-12
+  ✓ Created dev/alice/2026-02-12 (worktree, from develop)
 
 Ready to work. /save when done.
 ```
