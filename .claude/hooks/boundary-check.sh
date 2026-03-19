@@ -9,6 +9,11 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# --- Guard: if project dir no longer exists (worktree deleted), allow gracefully ---
+if [ ! -d "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
 # --- Load boundary file (cached at session start) ---
 HASH=$(echo -n "$PROJECT_DIR" | md5 2>/dev/null || echo -n "$PROJECT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
 BOUNDARY_FILE="/tmp/egregore-boundary-${HASH}.json"

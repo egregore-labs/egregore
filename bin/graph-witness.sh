@@ -50,7 +50,11 @@ run_metrics() {
 
     {"statement": "MATCH (a:Artifact)-[:RELATES_TO]-(a2:Artifact) WITH a, count(DISTINCT a2) AS neighbors RETURN avg(neighbors) AS avg_neighbors, max(neighbors) AS max_neighbors, percentileDisc(neighbors, 0.5) AS median_neighbors", "parameters": {}},
 
-    {"statement": "MATCH (p:Person)<-[:BY]-(s:Session) WITH p, count(s) AS sessions MATCH (p)<-[:CONTRIBUTED_BY]-(a:Artifact) WITH p, sessions, count(a) AS artifacts RETURN p.name AS person, sessions, artifacts", "parameters": {}}
+    {"statement": "MATCH (p:Person)<-[:BY]-(s:Session) WITH p, count(s) AS sessions MATCH (p)<-[:CONTRIBUTED_BY]-(a:Artifact) WITH p, sessions, count(a) AS artifacts RETURN p.name AS person, sessions, artifacts", "parameters": {}},
+
+    {"statement": "MATCH ()-[r:CONTINUES]->() WHERE r.createdBy = '\''pulse'\'' RETURN count(r) AS pulse_continues", "parameters": {}},
+    {"statement": "MATCH ()-[r:INVOLVES]->() WHERE r.createdBy = '\''pulse'\'' RETURN count(r) AS pulse_involves, sum(CASE WHEN r.proposed = true THEN 1 ELSE 0 END) AS proposed", "parameters": {}},
+    {"statement": "MATCH (p:Person) WHERE p.lastBrief IS NOT NULL RETURN count(p) AS persons_with_briefs", "parameters": {}}
   ]' 2>/dev/null
 }
 
@@ -94,7 +98,13 @@ case "$MODE" in
           max_relates_to_neighbors: (.results[14].values[0][1] // 0),
           median_relates_to_neighbors: (.results[14].values[0][2] // 0)
         },
-        contributors: (.results[15].values // [] | map({name: .[0], sessions: .[1], artifacts: .[2]}))
+        contributors: (.results[15].values // [] | map({name: .[0], sessions: .[1], artifacts: .[2]})),
+        pulse: {
+          continues_edges: (.results[16].values[0][0] // 0),
+          involves_edges: (.results[17].values[0][0] // 0),
+          involves_proposed: (.results[17].values[0][1] // 0),
+          persons_with_briefs: (.results[18].values[0][0] // 0)
+        }
       }
     }'
     ;;
@@ -114,7 +124,9 @@ case "$MODE" in
       builds_on_edges:   (.results[8].values[0][0] // 0),
       part_of_edges:     (.results[9].values[0][0] // 0),
       advanced_edges:    (.results[10].values[0][0] // 0),
-      artifacts_with_topics: (.results[13].values[0][0] // 0)
+      artifacts_with_topics: (.results[13].values[0][0] // 0),
+      pulse_continues:   (.results[16].values[0][0] // 0),
+      pulse_involves:    (.results[17].values[0][0] // 0)
     }' > "$BASELINE_FILE"
 
     echo "Baseline saved to $BASELINE_FILE"
@@ -141,7 +153,9 @@ case "$MODE" in
       builds_on_edges:   (.results[8].values[0][0] // 0),
       part_of_edges:     (.results[9].values[0][0] // 0),
       advanced_edges:    (.results[10].values[0][0] // 0),
-      artifacts_with_topics: (.results[13].values[0][0] // 0)
+      artifacts_with_topics: (.results[13].values[0][0] // 0),
+      pulse_continues:   (.results[16].values[0][0] // 0),
+      pulse_involves:    (.results[17].values[0][0] // 0)
     }')
 
     jq -n --argjson baseline "$BASELINE" --argjson current "$CURRENT" '{
@@ -155,7 +169,9 @@ case "$MODE" in
         builds_on_edges:      ($current.builds_on_edges - $baseline.builds_on_edges),
         part_of_edges:        ($current.part_of_edges - $baseline.part_of_edges),
         advanced_edges:       ($current.advanced_edges - $baseline.advanced_edges),
-        artifacts_with_topics: ($current.artifacts_with_topics - $baseline.artifacts_with_topics)
+        artifacts_with_topics: ($current.artifacts_with_topics - $baseline.artifacts_with_topics),
+        pulse_continues:      (($current.pulse_continues // 0) - ($baseline.pulse_continues // 0)),
+        pulse_involves:       (($current.pulse_involves // 0) - ($baseline.pulse_involves // 0))
       },
       direction: {
         isolation: (if ($current.artifact_isolated < $baseline.artifact_isolated) then "improving" elif ($current.artifact_isolated == $baseline.artifact_isolated) then "stable" else "degrading" end),

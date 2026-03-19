@@ -90,41 +90,43 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     fi
   }
 
-  case "${1:-help}" in
-    send)
-      recipient="${2:?Usage: notify.sh send <name> <message>}"
-      message="${3:?Usage: notify.sh send <name> <message>}"
-      result=$(send_to_person "$recipient" "$message")
-      if [[ "$result" == Failed* ]]; then
-        send_to_group "@${recipient}: ${message}"
-        echo "DM failed, sent to group instead. ${result}"
-      else
-        echo "$result"
-      fi
-      ;;
-    group)
-      message="${2:?Usage: notify.sh group <message>}"
-      send_to_group "$message"
-      ;;
-    file)
-      echo "File upload not yet supported via API. Use direct mode." >&2
-      exit 1
-      ;;
-    test)
-      test_connection
-      ;;
-    help|*)
-      echo "Usage: notify.sh <command>"
-      echo ""
-      echo "Commands:"
-      echo "  send <name> <message>   Send DM to a person (auto-fallback to group on failure)"
-      echo "  group <message>         Send to the group chat"
-      echo "  file <path> [caption]   Send a file to the group chat"
-      echo "  test                    Test connection"
-      ;;
-  esac
-
 else
-  echo "Error: EGREGORE_API_KEY not set. Add it to .env (get it from your team admin or during setup)." >&2
-  exit 1
+  # === OFFLINE MODE: No API key — skip notifications (OSS/local) ===
+  send_to_person() { echo '{"status":"offline","reason":"no_api_key"}'; }
+  send_to_group() { echo '{"status":"offline","reason":"no_api_key"}'; }
+  test_connection() { echo '{"status":"offline","reason":"no_api_key"}'; }
 fi
+
+case "${1:-help}" in
+  send)
+    recipient="${2:?Usage: notify.sh send <name> <message>}"
+    message="${3:?Usage: notify.sh send <name> <message>}"
+    result=$(send_to_person "$recipient" "$message")
+    if [[ "$result" == Failed* ]]; then
+      send_to_group "@${recipient}: ${message}"
+      echo "DM failed, sent to group instead. ${result}"
+    else
+      echo "$result"
+    fi
+    ;;
+  group)
+    message="${2:?Usage: notify.sh group <message>}"
+    send_to_group "$message"
+    ;;
+  file)
+    echo "File upload not yet supported via API. Use direct mode." >&2
+    exit 1
+    ;;
+  test)
+    test_connection
+    ;;
+  help|*)
+    echo "Usage: notify.sh <command>"
+    echo ""
+    echo "Commands:"
+    echo "  send <name> <message>   Send DM to a person (auto-fallback to group on failure)"
+    echo "  group <message>         Send to the group chat"
+    echo "  file <path> [caption]   Send a file to the group chat"
+    echo "  test                    Test connection"
+    ;;
+esac

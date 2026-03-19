@@ -9,8 +9,16 @@
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# --- Guard: if project dir no longer exists (worktree deleted), allow gracefully ---
+if [ ! -d "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
 # --- Get current branch ---
-BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+# In a worktree, CWD is the worktree — git without -C returns the correct branch.
+# Fallback to -C PROJECT_DIR for non-worktree contexts.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || \
+  BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 
 # Only guard protected branches
 case "$BRANCH" in
@@ -18,16 +26,7 @@ case "$BRANCH" in
   *) exit 0 ;;
 esac
 
-# --- Maintainer fast-path ---
-# Founders/maintainers can push directly to develop (not main).
-# This unblocks shipping fixes without waiting on PR reviews.
-# main is always protected — use /release for that.
-USAGE_TYPE=$(jq -r '.usage_type // empty' "$PROJECT_DIR/.egregore-state.json" 2>/dev/null) || true
-if [[ "$USAGE_TYPE" == "founder_group" || "$USAGE_TYPE" == "founder_solo" ]] && [[ "$BRANCH" == "develop" ]]; then
-  exit 0
-fi
-
-# --- Read tool input from stdin ---
+# --- Read tool input from stdin (before fast-path so we can check tool) ---
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
 
@@ -169,6 +168,12 @@ case "$TOOL_NAME" in
       echo "$BLOCK_MSG" >&2
       exit 2
     fi
+    ;;
+
+  EnterPlanMode)
+    # Block plan mode on protected branches — forces branch creation first
+    echo "$BLOCK_MSG" >&2
+    exit 2
     ;;
 
   *)

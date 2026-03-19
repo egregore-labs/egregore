@@ -8,19 +8,25 @@ Arguments: $ARGUMENTS (Optional: connector name + subcommand)
 - `/connect google` — enable Google Workspace connector
 - `/connect google status` — check connection status
 - `/connect google revoke` — disconnect Google account
+- `/connect granola` — enable Granola meeting integration (MCP)
+- `/connect granola status` — check Granola MCP connection
 
 ## When to invoke
 
 **Trigger phrases:**
 - "connect google", "enable google", "set up google workspace", "link google" → `/connect google`
 - "disconnect google", "disable google", "revoke google", "unlink google" → `/connect google revoke`
+- "connect granola", "enable granola", "set up granola", "link granola", "granola meetings" → `/connect granola`
 - "connector status", "google status", "is google connected" → `/connect google status`
+- "granola status", "is granola connected" → `/connect granola status`
 - "what connectors", "available connectors", "integrations" → `/connect`
 
 **Disambiguation:**
 - "connect to google" → `/connect google` (enablement flow)
 - "search my google drive" → NOT /connect — user wants to use an already-connected service
 - "ingest from google" → NOT /connect — route to `/ingest google` instead
+- "connect granola" → `/connect granola` (MCP setup)
+- "process a meeting" → NOT /connect — route to `/meeting` instead
 
 ## What to do
 
@@ -32,6 +38,8 @@ $ARGUMENTS parsing:
   "google"            → Google enablement flow (Step 2)
   "google status"     → status check (Step 3)
   "google revoke"     → revoke flow (Step 4)
+  "granola"           → Granola enablement flow (Step 6)
+  "granola status"    → Granola status check (Step 7)
 ```
 
 ### Step 2: Google enablement flow
@@ -100,11 +108,74 @@ Confirm: "Google access revoked. Run `/connect google` to reconnect."
 
 ### Step 5: List connectors (no arguments)
 
-Read `egregore.json` → `connectors` section. List available connectors and their status:
+Show all connectors and their status:
 
 ```
 Available connectors:
   Google Workspace  [connected / not connected / not enabled]
+  Granola           [connected / not connected]
 ```
 
-If no connectors configured: "No connectors are configured for this org. Add them to egregore.json."
+For Google: check `egregore.json` → `connectors` section and `.egregore-state.json` → `google_auth_complete`.
+For Granola: check `.claude/mcp.json` for the granola server config and use ToolSearch to verify MCP tools are loaded.
+
+### Step 6: Granola enablement flow
+
+1. **Check if MCP config exists:**
+   Read `.claude/mcp.json` — check if `mcpServers.granola` is defined.
+
+2. **If not configured**, add it:
+   Read current `.claude/mcp.json`, add the Granola MCP server, write back:
+   ```json
+   {
+     "mcpServers": {
+       "granola": {
+         "type": "url",
+         "url": "https://mcp.granola.ai/mcp"
+       }
+     }
+   }
+   ```
+   Preserve any existing MCP servers in the file.
+
+3. **Check if MCP tools are available:**
+   Use `ToolSearch` with query `"granola"` to check if tools are loaded.
+
+4. **If tools are NOT loaded** (config just added or not yet authenticated):
+   ```
+   Granola MCP server configured. To complete setup:
+   1. Restart Claude Code (the MCP server loads on startup)
+   2. Run `/mcp` → select granola → Authenticate
+   3. Complete the browser OAuth flow
+
+   After authenticating, `/meeting` will have access to your Granola meetings.
+   ```
+
+5. **If tools ARE loaded** (already authenticated):
+   Try calling `list_meetings` to verify the connection works.
+   - **Success**: "Granola connected. Your meetings are accessible via `/meeting`."
+   - **Auth error**: "Granola MCP is configured but authentication expired. Run `/mcp` → select granola → Authenticate."
+
+6. **Update state:**
+   ```bash
+   jq '.connected_services.granola = true' .egregore-state.json > tmp.$$.json && mv tmp.$$.json .egregore-state.json
+   ```
+
+7. **Telemetry:**
+   ```bash
+   bash bin/telemetry.sh emit "command" '{"command":"connect","connector":"granola"}' 2>/dev/null &
+   ```
+
+### Step 7: Granola status check
+
+1. Check `.claude/mcp.json` for granola config.
+2. Use `ToolSearch` to check if MCP tools are loaded.
+3. If tools are loaded, try `list_meetings` to verify auth.
+
+Report:
+```
+Granola:
+  MCP config: ✓ (https://mcp.granola.ai/mcp)
+  MCP tools:  ✓ / ✗ (loaded / not loaded — restart Claude Code)
+  Auth:       ✓ / ✗ (authenticated / expired — run /mcp → Authenticate)
+```

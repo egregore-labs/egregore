@@ -10,7 +10,14 @@ set -euo pipefail
 # Suppress all output — nothing should reach the user's terminal
 exec >/dev/null 2>&1
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)" || SCRIPT_DIR=""
+if [ -z "$SCRIPT_DIR" ] || [ ! -d "$SCRIPT_DIR" ]; then
+  # Worktree directory may have been deleted — try CLAUDE_PROJECT_DIR
+  SCRIPT_DIR="${CLAUDE_PROJECT_DIR:-}"
+fi
+if [ -z "$SCRIPT_DIR" ] || [ ! -d "$SCRIPT_DIR" ]; then
+  exit 0  # No valid project dir — skip archival silently
+fi
 
 # --- Read hook input from stdin ---
 INPUT=$(cat /dev/stdin 2>/dev/null || echo "{}")
@@ -98,9 +105,18 @@ if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
 
   bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$ACTIVITY_CYPHER" "$ACTIVITY_PARAMS" 2>/dev/null || true
 
+  # --- Pulse: copy buffer for post-session synthesis before cleanup ---
+  PULSE_BUFFER="/tmp/egregore-pulse-${SESSION_ID}.jsonl"
+  cp "$OBS_BUFFER" "$PULSE_BUFFER" 2>/dev/null || true
+
   # Clean up buffer and compact sequence counter
   rm -f "$OBS_BUFFER"
   rm -f "/tmp/egregore-compact-seq-${SESSION_ID}" 2>/dev/null
+
+  # --- Launch Pulse synthesis (background, non-blocking) ---
+  bash "$SCRIPT_DIR/bin/pulse.sh" \
+    "$SESSION_ID" "$AUTHOR" "$BRANCH" "$PULSE_BUFFER" "$TRANSCRIPT_PATH" \
+    &
 fi
 
 # --- Emit session_end telemetry + flush buffer (background, non-blocking) ---
@@ -129,6 +145,26 @@ fi
   # Drain graph WAL on session end
   bash "$SCRIPT_DIR/bin/graph-wal.sh" drain 2>/dev/null || true
 ) &
+
+# --- Worktree cleanup on session end ---
+# Always clean up worktrees when the session ends. There is no mechanism
+# to resume a worktree, so keeping them is pointless.
+
+# 1. Process any explicit cleanup markers (written by /wrap)
+for MARKER_FILE in "$HOME/.egregore"/worktree-cleanup-*.marker; do
+  [ -f "$MARKER_FILE" ] || continue
+  WT_CLEANUP_PATH=$(cat "$MARKER_FILE" 2>/dev/null)
+  if [ -n "$WT_CLEANUP_PATH" ] && [ -d "$WT_CLEANUP_PATH" ]; then
+    bash "$SCRIPT_DIR/bin/worktree.sh" cleanup "$WT_CLEANUP_PATH" 2>/dev/null || true
+  fi
+  rm -f "$MARKER_FILE" 2>/dev/null || true
+done
+
+# 2. If this session was running in a worktree, clean it up too
+if [ -f "$SCRIPT_DIR/.git" ] 2>/dev/null; then
+  # .git as a FILE (not directory) means this is a worktree
+  bash "$SCRIPT_DIR/bin/worktree.sh" cleanup "$SCRIPT_DIR" 2>/dev/null || true
+fi
 
 # --- Gzip to temp file ---
 TMP_FILE="/tmp/egregore-transcript-${SESSION_ID}.jsonl.gz"

@@ -26,8 +26,9 @@ API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
 API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
-  echo "Error: API mode required for batch queries. Set EGREGORE_API_KEY in .env." >&2
-  exit 1
+  # === OFFLINE MODE: No API key — return empty results (OSS/local) ===
+  echo '{"results":[]}'
+  exit 0
 fi
 
 QUERIES_JSON="${1:?Usage: graph-batch.sh '<json array of queries>'}"

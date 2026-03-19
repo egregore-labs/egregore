@@ -1,46 +1,23 @@
 #!/bin/bash
 # PreCompact hook — fires before context compaction.
-# Auto-commits unsaved work on working branches, externalizes session
-# knowledge to the graph via WAL, then re-injects a richer summary
-# so Claude has continuity after compaction.
+# Externalizes session knowledge to the graph via WAL, then re-injects
+# a richer summary so Claude has continuity after compaction.
 set -euo pipefail
 
-# pwd is worktree-aware; SCRIPT_DIR would resolve to main repo in worktrees.
-REPO_DIR="$(pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-BRANCH=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "unknown")
-CHANGED=$(git -C "$REPO_DIR" diff --name-only 2>/dev/null | wc -l | tr -d ' ')
-STAGED=$(git -C "$REPO_DIR" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+BRANCH=$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || echo "unknown")
+CHANGED=$(git -C "$SCRIPT_DIR" diff --name-only 2>/dev/null | wc -l | tr -d ' ')
+STAGED=$(git -C "$SCRIPT_DIR" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
 TOTAL=$((CHANGED + STAGED))
-DEVELOP_REF=$(git -C "$REPO_DIR" rev-parse --short develop 2>/dev/null || echo 'unknown')
+DEVELOP_REF=$(git -C "$SCRIPT_DIR" rev-parse --short develop 2>/dev/null || echo 'unknown')
 
-# --- Auto-commit checkpoint on working branches ---
-# Prevents work loss if context compaction discards edit history.
-# Only on working branches (dev/*, feature/*, bugfix/*), never develop/main.
-COMMITTED=0
-if [ "$TOTAL" -gt 0 ]; then
-  case "$BRANCH" in
-    dev/*|feature/*|bugfix/*)
-      git -C "$REPO_DIR" add -A 2>/dev/null
-      git -C "$REPO_DIR" commit -m "checkpoint: pre-compact $(date +%H:%M)" --quiet 2>/dev/null && COMMITTED=1
-      # Recount after commit
-      CHANGED=0
-      STAGED=0
-      TOTAL=0
-      ;;
-  esac
-fi
-
-# --- Read session ID (check worktree first, then main repo) ---
+# --- Read session ID ---
 SESSION_ID=""
-for SID_DIR in "$REPO_DIR" "$SCRIPT_DIR"; do
-  SID_FILE="$SID_DIR/.egregore-session-id"
-  if [ -f "$SID_FILE" ]; then
-    SESSION_ID=$(cat "$SID_FILE" 2>/dev/null) || true
-    [ -n "$SESSION_ID" ] && break
-  fi
-done
+SID_FILE="$SCRIPT_DIR/.egregore-session-id"
+if [ -f "$SID_FILE" ]; then
+  SESSION_ID=$(cat "$SID_FILE" 2>/dev/null) || true
+fi
 
 # --- Observation buffer summary ---
 # Buffer parsing uses awk/grep (safe). Graph write uses jq (can fail).
@@ -108,9 +85,7 @@ echo "CONTEXT_REINJECT:"
 echo "  Branch: $BRANCH"
 echo "  Develop: $DEVELOP_REF"
 
-if [ "$COMMITTED" -eq 1 ]; then
-  echo "  ✓ Auto-committed checkpoint before compaction"
-elif [ "$TOTAL" -gt 0 ]; then
+if [ "$TOTAL" -gt 0 ]; then
   echo "  Unsaved changes: $TOTAL files"
 fi
 
@@ -126,7 +101,7 @@ if [ "$OBS_COUNT" -gt 0 ]; then
   echo "  Compaction #$SEQ_DISPLAY — your earlier work is preserved in the graph."
 fi
 
-if [ "$TOTAL" -gt 0 ] && [ "$COMMITTED" -eq 0 ]; then
+if [ "$TOTAL" -gt 0 ]; then
   echo ""
   echo "IMPORTANT: Tell the user they have $TOTAL unsaved changes. Suggest running /save before continuing."
 fi
