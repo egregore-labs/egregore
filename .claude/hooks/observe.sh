@@ -6,6 +6,11 @@
 # No set -e — must never accidentally block by crashing
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
+# --- Guard: if project dir no longer exists (worktree deleted), exit silently ---
+if [ ! -d "$PROJECT_DIR" ]; then
+  exit 0
+fi
+
 # --- Read session ID (written by session-start.sh) ---
 SESSION_ID=""
 SID_FILE="$PROJECT_DIR/.egregore-session-id"

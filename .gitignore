@@ -47,3 +47,4 @@ node_modules/
 
 # Claude Code worktrees (session-isolated working directories)
 .claude/worktrees/
+.pulse/

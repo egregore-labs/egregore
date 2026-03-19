@@ -4,7 +4,12 @@
 # Silent when nothing to save. 10-minute cooldown between reminders.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." 2>/dev/null || exit 0
+
+# Guard: if working directory was deleted (e.g., worktree removed), exit silently
+if ! pwd >/dev/null 2>&1; then
+  exit 0
+fi
 
 # Stable key per project directory (survives across script invocations)
 PROJECT_HASH=$(echo "$PWD" | md5sum 2>/dev/null | cut -c1-8 || md5 -q -s "$PWD" 2>/dev/null | cut -c1-8 || echo "default")

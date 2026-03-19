@@ -1,6 +1,6 @@
 Save your contributions to Egregore. Pushes working branch, creates PR to develop.
 
-**Worktree note:** Git operations (commit, push, `gh pr create`) work normally from within a worktree — no special handling needed. After save completes, work continues in the worktree (cleanup happens on `/wrap`).
+**Worktree note:** Git operations (commit, push, `gh pr create`) work normally from within a worktree — no special handling needed. After save completes, work continues in the worktree. Worktree cleanup happens automatically when the session ends (WorktreeRemove hook), never during an active session.
 
 ## When to invoke
 
@@ -12,6 +12,34 @@ Not this: user is leaving/done → `/handoff` (which auto-saves)
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines (e.g. "Synced 2 sessions, 1 artifact to graph").
 
 ## What to do
+
+### Step 0: Branch health check
+
+Before saving, verify the current branch is still valid:
+
+```bash
+CURRENT_BRANCH=$(git branch --show-current)
+```
+
+**Case A: On a protected branch (develop/main)** — the user should not be here. Create a working branch:
+1. Derive a topic slug from conversation context or recent commits
+2. `git fetch origin develop --quiet && git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop`
+3. Continue with save
+
+**Case B: Remote branch gone (PR was merged)** — detect with:
+```bash
+git fetch origin --prune --quiet 2>/dev/null
+git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null | grep -q "$CURRENT_BRANCH"
+```
+If the remote branch is gone:
+1. Use AskUserQuestion to ask:
+   > Your branch `$CURRENT_BRANCH` was merged to develop. What's next?
+   - **"Working on something new"** → ask what they're working on, derive topic slug, create `dev/$AUTHOR/$NEW_SLUG` in the same worktree
+   - **"I'm done for now"** → session continues normally, worktree cleaned up on exit
+2. If in a worktree, stay in the same worktree — just switch branches within it
+3. Continue with save on the new branch
+
+**Case C: Branch exists and is healthy** — proceed normally.
 
 1. **Sync to Neo4j first** (CRITICAL):
    - Scan memory/handoffs/ for files without Session nodes

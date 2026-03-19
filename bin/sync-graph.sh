@@ -315,11 +315,5 @@ bash "$SCRIPT_DIR/bin/graph.sh" query \
    RETURN count(q)" \
   '{}' >/dev/null 2>&1 || true
 
-# --- Step 7: Enrichment ---
-ENRICH_RESULT=$(bash "$SCRIPT_DIR/bin/enrich-graph.sh" 2>/dev/null) || true
-ENRICHED_TOPICS=$(echo "$ENRICH_RESULT" | jq -r '.topics_backfilled // 0' 2>/dev/null || echo "0")
-ENRICHED_TYPES=$(echo "$ENRICH_RESULT" | jq -r '.types_backfilled // 0' 2>/dev/null || echo "0")
-ENRICHED_EDGES=$(echo "$ENRICH_RESULT" | jq -r '.edges_created // 0' 2>/dev/null || echo "0")
-
 # --- Output ---
-echo "{\"sessions\":${SESSIONS},\"artifacts\":${ARTIFACTS},\"quests\":${QUESTS},\"resolved\":${RESOLVED},\"enriched_topics\":${ENRICHED_TOPICS},\"enriched_types\":${ENRICHED_TYPES},\"enriched_edges\":${ENRICHED_EDGES}}"
+echo "{\"sessions\":${SESSIONS},\"artifacts\":${ARTIFACTS},\"quests\":${QUESTS},\"resolved\":${RESOLVED}}"

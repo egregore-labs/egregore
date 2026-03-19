@@ -53,7 +53,7 @@ Determine transcript source from `$ARGUMENTS`:
 Read the file directly. Parse for speaker turns.
 
 **If $ARGUMENTS is a search term** (non-empty, not a path):
-Search Granola: `bash bin/granola.sh search "$ARGUMENTS"`
+Search Granola via MCP: use the `get_meetings` MCP tool to search by title/content.
 If one match, use it. If multiple, present via AskUserQuestion. If none, say so.
 
 **If $ARGUMENTS is empty**, present source picker:
@@ -72,22 +72,11 @@ AskUserQuestion:
 ```
 
 **For Granola source:**
-Check Granola availability:
-```bash
-bash bin/granola.sh test
-```
+Check Granola MCP availability: use `ToolSearch` with query `"granola"` to check if MCP tools are loaded.
 
-Read interview folder config from `.egregore-state.json`:
-```bash
-jq -r '.interview_folders // .granola_folders // empty' .egregore-state.json
-```
+If not available: "Granola not connected. Run `/connect granola` to set it up."
 
-If no folder config exists, list folders via `bash bin/granola.sh folders` and let user select (same flow as meeting.md Step 0). Save to `interview_folders` in state.
-
-Then list and let user pick:
-```bash
-bash bin/granola.sh list --folder "FolderName"
-```
+If available: use the `list_meetings` MCP tool to get recent meetings, then present via AskUserQuestion for selection. Use `get_meeting_transcript` to fetch the selected interview's transcript.
 
 **For paste source:**
 Tell the user: "Paste the interview transcript below. I'll look for speaker turns (Name: or [timestamp] patterns)."

@@ -4,16 +4,14 @@ Description: $ARGUMENTS
 
 ## What to do
 
-1. Fetch latest develop
-2. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
-3. Determine branch type from description:
+1. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
+2. Determine branch type from description:
    - `dev/{author}/{topic-slug}` — default for session work
    - `feature/{topic-slug}` — explicit feature work
    - `bugfix/{topic-slug}` — bug fixes
-4. Create branch at the right commit (don't switch yet): `git branch {branch-name} origin/develop`
-5. Enter worktree: use `EnterWorktree` with `name` set to the topic slug
-6. Inside the worktree, switch to the named branch: `git checkout {branch-name}`
-7. Run setup: `bash <main-project-dir>/bin/worktree.sh setup "$(pwd)" "<main-project-dir>"`
+3. Call `EnterWorktree` with `name` set to the topic slug
+
+The WorktreeCreate hook handles everything: fetches develop, creates the branch, creates the worktree, sets up symlinks.
 
 **Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} origin/develop`
 
@@ -41,6 +39,18 @@ git branch --list "dev/$AUTHOR/*$SLUG*" "feature/*$SLUG*" "bugfix/*$SLUG*"
 ```
 
 If a match is found, offer to resume it instead of creating a new one.
+
+## Reusing current worktree
+
+If already in a worktree and the user needs a new branch (e.g., after their PR was merged):
+1. Do NOT exit the worktree or create a new one
+2. Create the new branch and checkout within the existing worktree:
+   ```bash
+   git fetch origin develop --quiet
+   git checkout -b dev/$AUTHOR/$NEW_SLUG origin/develop
+   ```
+3. The worktree directory stays the same — only the branch changes
+4. Confirm: `Switched to dev/$AUTHOR/$NEW_SLUG (same worktree).`
 
 ## Example
 

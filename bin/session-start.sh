@@ -92,7 +92,35 @@ else
           fi
           FIRST_SESSION="false"
         else
-          cat > "$STATE_FILE" << STATEEOF
+          # No state file — check graph to see if this person already exists
+          # (handles fresh clone / new machine for existing team members)
+          GRAPH_PERSON=""
+          GRAPH_DISPLAY_NAME=""
+          GRAPH_PERSON=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+            "MATCH (p:Person {github: \$github}) RETURN p.name AS name" \
+            "{\"github\":\"$GH_LOGIN\"}" 2>/dev/null || echo "")
+          if echo "$GRAPH_PERSON" | jq -e '.values | length > 0' &>/dev/null; then
+            GRAPH_DISPLAY_NAME=$(echo "$GRAPH_PERSON" | jq -r '.values[0][0] // empty' 2>/dev/null)
+            # Existing team member — skip onboarding
+            cat > "$STATE_FILE" << STATEEOF
+{
+  "github_username": "$GH_LOGIN",
+  "github_name": "${GH_NAME:-$GH_LOGIN}",
+  "name": "${GRAPH_DISPLAY_NAME:-${GH_NAME:-$GH_LOGIN}}",
+  "display_name": "${GRAPH_DISPLAY_NAME:-}",
+  "onboarding_complete": true,
+  "usage_type": "$USAGE_TYPE",
+  "session_tracking": true,
+  "transcript_sharing": true,
+  "telemetry": true,
+  "contact_preference": "all",
+  "telemetry_noticed": true
+}
+STATEEOF
+            FIRST_SESSION="false"
+          else
+            # Genuinely new user — trigger onboarding
+            cat > "$STATE_FILE" << STATEEOF
 {
   "github_username": "$GH_LOGIN",
   "github_name": "${GH_NAME:-$GH_LOGIN}",
@@ -102,7 +130,8 @@ else
   "first_session": true
 }
 STATEEOF
-          FIRST_SESSION="true"
+            FIRST_SESSION="true"
+          fi
         fi
       fi
     fi
@@ -147,33 +176,45 @@ if [ "$ONBOARDING_COMPLETE" != "true" ]; then
   exit 0
 fi
 
-# --- Auto-provision or fix EGREGORE_API_KEY (background, non-blocking) ---
+# --- Detect local mode and auto-provision API key ---
 ENV_FILE="$SCRIPT_DIR/.env"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
-# Check if key is missing OR if the key's slug doesn't match egregore.json slug
-KEY_NEEDS_FIX="false"
-if [ -f "$ENV_FILE" ]; then
-  CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
-  EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
-  if [ -z "$CURRENT_KEY" ]; then
-    KEY_NEEDS_FIX="true"
-  elif [ -n "$EXPECTED_SLUG" ]; then
-    # Extract slug from key: ek_<slug>_<secret> → <slug>
-    KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
-    if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
-      KEY_NEEDS_FIX="true"
-    fi
-  fi
+# Detect local mode: no api_url in egregore.json means intentionally local/OSS
+LOCAL_MODE="false"
+API_URL_CONFIGURED=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+if [ -z "$API_URL_CONFIGURED" ]; then
+  LOCAL_MODE="true"
 fi
 
-# Track API key health
-if [ "$KEY_NEEDS_FIX" = "true" ]; then
-  HEALTH_APIKEY="fail"
-elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
-  HEALTH_APIKEY="ok"
-else
-  HEALTH_APIKEY="fail"
+# In local mode, skip all key validation and auto-fix
+KEY_NEEDS_FIX="false"
+HEALTH_APIKEY="skip"
+
+if [ "$LOCAL_MODE" != "true" ]; then
+  # Check if key is missing OR if the key's slug doesn't match egregore.json slug
+  if [ -f "$ENV_FILE" ]; then
+    CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
+    EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
+    if [ -z "$CURRENT_KEY" ]; then
+      KEY_NEEDS_FIX="true"
+    elif [ -n "$EXPECTED_SLUG" ]; then
+      # Extract slug from key: ek_<slug>_<secret> → <slug>
+      KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+      if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+        KEY_NEEDS_FIX="true"
+      fi
+    fi
+  fi
+
+  # Track API key health
+  if [ "$KEY_NEEDS_FIX" = "true" ]; then
+    HEALTH_APIKEY="fail"
+  elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
+    HEALTH_APIKEY="ok"
+  else
+    HEALTH_APIKEY="fail"
+  fi
 fi
 
 if [ "$KEY_NEEDS_FIX" = "true" ]; then
@@ -353,8 +394,46 @@ done
 # Wait for all fetches
 wait 2>/dev/null || true
 
-# --- Worktree orphan cleanup (background, non-blocking) ---
-bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+# --- Worktree orphan cleanup (background, throttled to max once/hour) ---
+_CLEANUP_MARKER="/tmp/egregore-cleanup-last-$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)"
+_RUN_CLEANUP="false"
+if [ ! -f "$_CLEANUP_MARKER" ]; then
+  _RUN_CLEANUP="true"
+else
+  _CM_MTIME=$(stat -f %m "$_CLEANUP_MARKER" 2>/dev/null || stat -c %Y "$_CLEANUP_MARKER" 2>/dev/null || echo "0")
+  _CM_NOW=$(date +%s)
+  [ $((_CM_NOW - _CM_MTIME)) -gt 3600 ] 2>/dev/null && _RUN_CLEANUP="true"
+fi
+if [ "$_RUN_CLEANUP" = "true" ]; then
+  touch "$_CLEANUP_MARKER" 2>/dev/null || true
+  bash "$SCRIPT_DIR/bin/worktree.sh" cleanup-orphans "$SCRIPT_DIR" 2>/dev/null &
+fi
+
+# --- Clean up stale worktree cleanup markers (from crashed sessions) ---
+(
+  _MK_NOW=$(date +%s)
+  for MARKER_FILE in "$HOME/.egregore"/worktree-cleanup-*.marker; do
+    [ -f "$MARKER_FILE" ] || continue
+    WT_MARKER_PATH=$(cat "$MARKER_FILE" 2>/dev/null)
+    if [ -n "$WT_MARKER_PATH" ] && [ -d "$WT_MARKER_PATH" ]; then
+      # Skip worktrees younger than 1 hour
+      _MK_MTIME=$(stat -f %m "$WT_MARKER_PATH" 2>/dev/null || stat -c %Y "$WT_MARKER_PATH" 2>/dev/null || echo "$_MK_NOW")
+      _MK_AGE=$((_MK_NOW - _MK_MTIME))
+      if [ "$_MK_AGE" -lt 3600 ] 2>/dev/null; then
+        continue
+      fi
+      PID_FILE="$WT_MARKER_PATH/.egregore-worktree-pid"
+      if [ -f "$PID_FILE" ]; then
+        STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
+          continue  # PID alive — another session still using this worktree
+        fi
+      fi
+      bash "$SCRIPT_DIR/bin/worktree.sh" cleanup "$WT_MARKER_PATH" 2>/dev/null || true
+    fi
+    rm -f "$MARKER_FILE" 2>/dev/null || true
+  done
+) 2>/dev/null &
 
 # --- Git health check ---
 if git show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
@@ -380,7 +459,16 @@ setup_develop() {
   CURRENT_BRANCH=$(git branch --show-current)
 
   # Update local develop ref from remote without switching branches
-  git fetch origin develop:develop --quiet 2>/dev/null || true
+  # Use fetch + force-update to handle divergence (e.g., from auto-update commits)
+  git fetch origin develop --quiet 2>/dev/null || true
+  if [[ "$CURRENT_BRANCH" != "develop" ]]; then
+    # Safe to force-update when not checked out
+    git branch -f develop origin/develop 2>/dev/null || true
+  else
+    # On develop — try ff merge, fall back to reset
+    git merge --ff-only origin/develop --quiet 2>/dev/null || \
+      git reset --hard origin/develop --quiet 2>/dev/null || true
+  fi
   DEVELOP_SYNCED="true"
 
   # Count commits on develop ahead of main
@@ -708,7 +796,9 @@ fi
 
 # 7. Graph health (background — zero added latency, runs in parallel)
 (
-  if bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
     echo "ok"
   else
     echo "fail"
@@ -717,7 +807,9 @@ fi
 
 # 8. Telegram health (background)
 (
-  if bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
+  if [ "$LOCAL_MODE" = "true" ]; then
+    echo "skip"
+  elif bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
     echo "ok"
   else
     echo "fail"
@@ -739,7 +831,7 @@ fi
     MATCH (s:Session)-[:BY]->(p:Person {github: \$gh})
     WHERE s.wrappedAt IS NOT NULL
     RETURN toString(s.wrappedAt) AS t
-ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
+    ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
   " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null | jq -r '.values[0][0] // empty' 2>/dev/null)
   if [ -z "$LAST_END" ]; then
     LAST_END="$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo '2026-03-03')T00:00:00Z"
@@ -759,6 +851,36 @@ ORDER BY s.wrappedAt DESC SKIP 1 LIMIT 1
   jq -n --argjson merged "$MERGED_JSON" --argjson impl "$IMPL_JSON" \
     '{merged_prs: $merged, implemented_handoffs: $impl}' 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}'
 ) > "$CTX_DIR/lifecycle" 2>/dev/null &
+
+# 10. Last Pulse brief (background) — gated on feature flag + API key
+(
+  PULSE_ENABLED=$(jq -r '.features.pulse // "false"' "$CONFIG" 2>/dev/null || echo "false")
+  HAS_API_KEY=false
+  if [ -f "$SCRIPT_DIR/.env" ]; then
+    _key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
+    [ -n "$_key" ] && HAS_API_KEY=true
+  fi
+
+  if [ "$PULSE_ENABLED" = "true" ] && [ "$HAS_API_KEY" = "true" ] && [ -n "$GH_USER_LC" ]; then
+    BRIEF_RESULT=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
+      MATCH (p:Person {github: \$gh})
+      WHERE p.lastBrief IS NOT NULL
+        AND p.lastBriefDate >= date() - duration('P7D')
+      RETURN p.lastBrief, toString(p.lastBriefDate), p.lastRecommendations
+    " "{\"gh\":\"$GH_USER_LC\"}" 2>/dev/null || echo '{"values":[]}')
+    BRIEF=$(echo "$BRIEF_RESULT" | jq -r '.values[0][0] // empty' 2>/dev/null || true)
+    BRIEF_DATE=$(echo "$BRIEF_RESULT" | jq -r '.values[0][1] // empty' 2>/dev/null || true)
+    RECS=$(echo "$BRIEF_RESULT" | jq -c '.values[0][2] // []' 2>/dev/null || echo '[]')
+    if [ -n "$BRIEF" ]; then
+      jq -n --arg brief "$BRIEF" --arg date "$BRIEF_DATE" --argjson recs "$RECS" \
+        '{brief: $brief, date: $date, recommendations: $recs}'
+    else
+      echo '{}'
+    fi
+  else
+    echo '{}'
+  fi
+) > "$CTX_DIR/pulse_brief" 2>/dev/null &
 
 # Wait for all context gathering + health checks to finish
 wait
@@ -782,68 +904,55 @@ cat << 'GREETING'
 GREETING
 
 # --- Ornamented status ---
-# Humanize repo_name: egregore-0 → Egregore 0
 REPO_NAME=$(jq -r '.repo_name // "egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-INSTANCE_NAME=$(echo "$REPO_NAME" | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+GITHUB_ORG_DISPLAY=$(jq -r '.github_org // ""' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 ORG_NAME=$(jq -r '.org_name // ""' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 
-# Build the status line with right-aligned org name
-SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
-echo "$SEPARATOR"
-
-# Instance + org line (right-aligned org)
-LEFT="  ◈ $INSTANCE_NAME"
-RIGHT="$ORG_NAME"
-LINE_WIDTH=67
-LEFT_LEN=${#LEFT}
-RIGHT_LEN=${#RIGHT}
-PADDING=$((LINE_WIDTH - LEFT_LEN - RIGHT_LEN))
-if [ "$PADDING" -lt 1 ]; then PADDING=1; fi
-printf "%s%*s%s\n" "$LEFT" "$PADDING" "" "$RIGHT"
-
-# User + branch + memory line
 DISPLAY_NAME=""
 if [ -f "$STATE_FILE" ]; then
   DISPLAY_NAME=$(jq -r '.display_name // .name // empty' "$STATE_FILE" 2>/dev/null)
 fi
 GREETING_NAME="${DISPLAY_NAME:-$AUTHOR}"
 
-BRANCH_STATUS="$BRANCH · synced"
+# --- Line 1: Org/Repo + User + Branch (primary info) ---
+SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
+
+# Build identity line: Org/repo on left, user + branch on right
+if [ "$LOCAL_MODE" = "true" ]; then
+  IDENTITY_LEFT="  Egregore (local mode)"
+else
+  IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
+fi
+BRANCH_COMPACT="$BRANCH"
 if [ "$COMMITS_AHEAD" -gt 0 ] 2>/dev/null; then
-  BRANCH_STATUS="$BRANCH_STATUS · $COMMITS_AHEAD ahead"
+  BRANCH_COMPACT="${BRANCH} · ${COMMITS_AHEAD}↑"
 fi
+IDENTITY_RIGHT="${GREETING_NAME} · ${BRANCH_COMPACT}"
+LINE_WIDTH=67
+ID_LEFT_LEN=${#IDENTITY_LEFT}
+ID_RIGHT_LEN=${#IDENTITY_RIGHT}
+ID_PADDING=$((LINE_WIDTH - ID_LEFT_LEN - ID_RIGHT_LEN))
+if [ "$ID_PADDING" -lt 1 ]; then ID_PADDING=1; fi
+printf "\n%s%*s%s\n" "$IDENTITY_LEFT" "$ID_PADDING" "" "$IDENTITY_RIGHT"
+echo "$SEPARATOR"
 
-MEMORY_STATUS=""
-if [ "$MEMORY_SYNCED" = "true" ]; then
-  MEMORY_STATUS="◆ memory · synced"
-fi
-
-echo "  ◇ $GREETING_NAME        ⎇ $BRANCH_STATUS        $MEMORY_STATUS"
-
-# --- Health dots ---
-health_symbol() {
-  case "$1" in
-    ok)   printf "✓" ;;
-    fail) printf "✗" ;;
-    *)    printf "—" ;;
-  esac
-}
-
-HEALTH_LINE="  ●"
-HEALTH_LINE="$HEALTH_LINE github $(health_symbol "$HEALTH_GITHUB")"
-HEALTH_LINE="$HEALTH_LINE  git $(health_symbol "$HEALTH_GIT")"
-HEALTH_LINE="$HEALTH_LINE  api-key $(health_symbol "$HEALTH_APIKEY")"
-HEALTH_LINE="$HEALTH_LINE  graph $(health_symbol "$HEALTH_GRAPH")"
-HEALTH_LINE="$HEALTH_LINE  telegram $(health_symbol "$HEALTH_TELEGRAM")"
-echo "$HEALTH_LINE"
-
-# Show /checkup hint if anything failed
-HAS_FAILURE="false"
-for h in "$HEALTH_GITHUB" "$HEALTH_GIT" "$HEALTH_APIKEY" "$HEALTH_GRAPH" "$HEALTH_TELEGRAM"; do
-  if [ "$h" = "fail" ]; then HAS_FAILURE="true"; break; fi
-done
-if [ "$HAS_FAILURE" = "true" ]; then
-  echo "  ⚠ Issues detected — run /checkup to diagnose and fix"
+# --- Team activity (secondary info) ---
+TEAM_JSON=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
+TEAM_COUNT=$(echo "$TEAM_JSON" | jq 'length' 2>/dev/null || echo "0")
+if [ "$TEAM_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_COUNT" != "0" ]; then
+  echo "$TEAM_JSON" | jq -r '.[] | "  \(.author)\t\(.message)\t\(.time)"' 2>/dev/null | while IFS=$'\t' read -r T_AUTHOR T_MSG T_TIME; do
+    # Extract first name only, lowercase
+    T_NAME=$(echo "$T_AUTHOR" | awk '{print tolower($1)}')
+    # Truncate message to fit
+    T_MSG_SHORT=$(echo "$T_MSG" | cut -c1-42)
+    # Right-align time
+    LEFT_PART="  ${T_NAME}    ${T_MSG_SHORT}"
+    LEFT_LEN=${#LEFT_PART}
+    TIME_LEN=${#T_TIME}
+    T_PAD=$((LINE_WIDTH - LEFT_LEN - TIME_LEN))
+    if [ "$T_PAD" -lt 1 ]; then T_PAD=1; fi
+    printf "%s%*s%s\n" "$LEFT_PART" "$T_PAD" "" "$T_TIME"
+  done
 fi
 
 # Show lifecycle events (merged PRs + implemented handoffs)
@@ -863,29 +972,88 @@ if [ -n "$SAVED_BRANCH" ]; then
   echo "  ✓ Auto-saved uncommitted work on $SAVED_BRANCH"
 fi
 
-# Managed repos status
-if [ -n "$REPOS_STATUS" ]; then
-  printf "$REPOS_STATUS"
-fi
+# --- Footer: health + repos + memory (tertiary) ---
+echo "$SEPARATOR"
 
-# Auto-apply upstream framework updates (bin/, .claude/commands/, CLAUDE.md, skills/)
-# Only update when upstream has NEW commits we don't have (forward-only).
-# git log HEAD..upstream/main shows commits in upstream that aren't in our history.
-UPSTREAM_NEW=$(git log HEAD..upstream/main --oneline -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-if [ -n "$UPSTREAM_NEW" ]; then
-  UPDATE_COUNT=$(echo "$UPSTREAM_NEW" | wc -l | tr -d ' ')
-  # Check for uncommitted local changes to framework files (protects active development)
-  LOCAL_FRAMEWORK_DIRTY=$(git diff -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
-  if [ -n "$LOCAL_FRAMEWORK_DIRTY" ]; then
-    echo "  ⟳ Framework update available — run /update"
-  elif git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null; then
-    git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
-    git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-    echo "  ✓ Framework updated"
+# Build compact footer line
+if [ "$LOCAL_MODE" = "true" ]; then
+  # Local mode: only check github + git, skip api-key/graph/telegram
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
+    fi
+  done
+
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
   else
-    echo "  ⟳ Framework update available — run /update"
+    FOOTER_LEFT="  ✓ local"
+
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT="/connect to enable graph + dashboard"
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+  fi
+else
+  # Connected mode: check all services
+  HAS_FAILURE="false"
+  FAILED_SERVICES=""
+  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
+    svc="${pair%%:*}"
+    status="${pair#*:}"
+    if [ "$status" = "fail" ]; then
+      HAS_FAILURE="true"
+      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
+    fi
+  done
+
+  if [ "$HAS_FAILURE" = "true" ]; then
+    echo "  ⚠${FAILED_SERVICES} — run /checkup"
+  else
+    # Compact footer: ready + repos + memory
+    FOOTER_LEFT="  ✓ ready"
+
+    # Add managed repos inline
+    if [ -n "$REPOS_STATUS" ]; then
+      # Extract repo info into compact format (strip ornaments)
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+      fi
+    fi
+
+    FOOTER_RIGHT=""
+    if [ "$MEMORY_SYNCED" = "true" ]; then
+      FOOTER_RIGHT="◆ memory synced"
+    fi
+
+    FL_LEN=${#FOOTER_LEFT}
+    FR_LEN=${#FOOTER_RIGHT}
+    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
+    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
+    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
   fi
 fi
+
+# Framework updates come through PRs to develop — no separate auto-update channel.
+# The develop sync above already keeps framework files current.
+# Use /update for manual upstream pulls when needed.
 
 # --- One-time migration: fix aliases to use 'claude "start"' ---
 # v1: 'claude start' → 'claude' (cross-instance bug)
@@ -914,6 +1082,7 @@ CONTEXT_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
 CONTEXT_TEAM=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
 CONTEXT_SOUL=$(cat "$CTX_DIR/soul_summary" 2>/dev/null || echo "")
 CONTEXT_LIFECYCLE=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}')
+CONTEXT_PULSE=$(cat "$CTX_DIR/pulse_brief" 2>/dev/null || echo '{}')
 
 # --- Write compact subagent context cache (reuses already-gathered data) ---
 SUBAGENT_CTX="/tmp/egregore-subagent-ctx-${EGREGORE_SESSION_ID}.txt"
@@ -956,7 +1125,8 @@ cat << CTXEOF
   "last_user_activity": "$CONTEXT_ACTIVITY",
   "team_recent_memory": $CONTEXT_TEAM,
   "soul_self_summary": "$CONTEXT_SOUL",
-  "lifecycle": $CONTEXT_LIFECYCLE
+  "lifecycle": $CONTEXT_LIFECYCLE,
+  "pulse": $CONTEXT_PULSE
 }
 -->
 CTXEOF
