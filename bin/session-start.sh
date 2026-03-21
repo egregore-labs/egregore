@@ -180,10 +180,11 @@ fi
 ENV_FILE="$SCRIPT_DIR/.env"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
-# Detect local mode: no api_url in egregore.json means intentionally local/OSS
+# Detect local mode: explicit mode field OR no api_url means intentionally local/OSS
 LOCAL_MODE="false"
+EGREGORE_MODE=$(jq -r '.mode // empty' "$CONFIG" 2>/dev/null)
 API_URL_CONFIGURED=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
-if [ -z "$API_URL_CONFIGURED" ]; then
+if [ "$EGREGORE_MODE" = "local" ] || [ -z "$API_URL_CONFIGURED" ]; then
   LOCAL_MODE="true"
 fi
 
@@ -748,22 +749,132 @@ fi
   git log --author="$AUTHOR" --format="%ar|%s" -1 2>/dev/null > "$CTX_DIR/activity" || echo "" > "$CTX_DIR/activity"
 ) &
 
-# 4. Team recent memory commits (background)
+# 3b. Personal todos from graph (background)
 (
-  JSON="[]"
-  if [ -d "$SCRIPT_DIR/memory/.git" ]; then
-    JSON="["
-    FIRST=true
-    while IFS='|' read -r T_AUTHOR T_TIME T_MSG; do
-      [ -z "$T_AUTHOR" ] && continue
-      T_MSG_ESC=$(echo "$T_MSG" | sed 's/"/\\"/g')
-      $FIRST || JSON="$JSON,"
-      JSON="$JSON{\"author\":\"$T_AUTHOR\",\"time\":\"$T_TIME\",\"message\":\"$T_MSG_ESC\"}"
-      FIRST=false
-    done <<< "$(git -C "$SCRIPT_DIR/memory" log --format="%an|%ar|%s" -5 2>/dev/null)"
-    JSON="$JSON]"
+  _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  _API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
+    TODO_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+      "MATCH (t:Todo)-[:BY]->(p:Person {github: \$me}) WHERE t.status IN ['open', 'blocked'] OPTIONAL MATCH (t)-[:PART_OF]->(q:Quest) RETURN t.text AS text, t.priority AS priority, t.status AS status, t.created AS created, q.id AS quest ORDER BY t.priority DESC, t.created DESC LIMIT 5" \
+      "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
+    if [ -n "$TODO_RAW" ]; then
+      echo "$TODO_RAW" | jq '[.values[] | {text: .[0], priority: (.[1] // 0), status: .[2], created: .[3], quest: (.[4] // "")}]' 2>/dev/null || echo "[]"
+    else
+      echo "[]"
+    fi
+  else
+    echo "[]"
   fi
-  echo "$JSON" > "$CTX_DIR/team"
+) > "$CTX_DIR/todos" 2>/dev/null &
+
+# 4. Team presence — last seen + active branches (background)
+(
+  # --- Read config inside subshell ---
+  _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  _API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+
+  # --- Graph: last-seen per person (excluding self) ---
+  GRAPH_DATA="[]"
+  if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, max(s.date) AS lastSeen ORDER BY lastSeen DESC"
+    GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "{\"me\":\"$AUTHOR\"}" 2>/dev/null || echo "")
+    if [ -n "$GRAPH_RAW" ]; then
+      GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
+    fi
+  fi
+
+  # --- Git: active dev/* branches (excluding self) ---
+  SELF_LC=$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')
+  SELF_DISPLAY_LC=""
+  if [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
+    SELF_DISPLAY_LC=$(jq -r '.display_name // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  fi
+  BRANCH_DATA=$(git -C "$SCRIPT_DIR" branch -r --format='%(refname:short)' 2>/dev/null | grep "^origin/dev/" | sed 's|^origin/dev/||' || echo "")
+
+  BRANCH_MAP="{}"
+  if [ -n "$BRANCH_DATA" ]; then
+    BRANCH_MAP=$(echo "$BRANCH_DATA" | while IFS='/' read -r B_AUTHOR B_SLUG_REST || [ -n "$B_AUTHOR" ]; do
+      [ -z "$B_AUTHOR" ] && continue
+      B_AUTHOR_LC=$(echo "$B_AUTHOR" | tr '[:upper:]' '[:lower:]')
+      [ "$B_AUTHOR_LC" = "$SELF_LC" ] && continue
+      [ -n "$SELF_DISPLAY_LC" ] && [ "$B_AUTHOR_LC" = "$SELF_DISPLAY_LC" ] && continue
+      B_HUMAN=$(echo "$B_SLUG_REST" | tr '-' ' ')
+      echo "${B_AUTHOR_LC}|${B_HUMAN}"
+    done | jq -Rn '
+      [inputs | split("|") | {author: .[0], branch: .[1]}]
+      | group_by(.author)
+      | map({(.[0].author): [.[] | .branch]})
+      | add // {}
+    ' 2>/dev/null || echo "{}")
+  fi
+
+  # --- Relative time + epoch helpers (cross-platform) ---
+  NOW_EPOCH=$(date +%s)
+
+  iso_to_epoch() {
+    local iso="$1"
+    local clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
+    if command -v gdate &>/dev/null; then
+      gdate -d "$clean" +%s 2>/dev/null || echo "0"
+    else
+      date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
+      date -j -f "%Y-%m-%d" "${clean%%T*}" "+%s" 2>/dev/null || echo "0"
+    fi
+  }
+
+  epoch_to_relative() {
+    local epoch="$1"
+    [ "$epoch" = "0" ] && echo "--" && return
+    local delta=$(( NOW_EPOCH - epoch ))
+    if [ "$delta" -lt 60 ]; then echo "just now"
+    elif [ "$delta" -lt 3600 ]; then echo "$(( delta / 60 ))m ago"
+    elif [ "$delta" -lt 86400 ]; then echo "$(( delta / 3600 ))h ago"
+    elif [ "$delta" -lt 172800 ]; then echo "yesterday"
+    else echo "$(( delta / 86400 ))d ago"
+    fi
+  }
+
+  # --- Merge graph + branches into presence array ---
+  ALL_NAMES=$(echo "$GRAPH_DATA" | jq -r '.[].name' 2>/dev/null || echo "")
+  BRANCH_NAMES=$(echo "$BRANCH_MAP" | jq -r 'keys[]' 2>/dev/null || echo "")
+
+  UNION_NAMES=$(printf "%s\n%s" "$ALL_NAMES" "$BRANCH_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
+
+  if [ -z "$UNION_NAMES" ]; then
+    echo "[]" > "$CTX_DIR/team"
+    exit 0
+  fi
+
+  # --- Build presence JSON ---
+  PRESENCE="["
+  FIRST=true
+  for PNAME in $UNION_NAMES; do
+    LAST_SEEN_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
+    if [ -n "$LAST_SEEN_ISO" ]; then
+      LAST_SEEN_EPOCH=$(iso_to_epoch "$LAST_SEEN_ISO")
+      LAST_SEEN_REL=$(epoch_to_relative "$LAST_SEEN_EPOCH")
+    else
+      LAST_SEEN_EPOCH="0"
+      LAST_SEEN_REL="--"
+    fi
+
+    BRANCHES_JSON=$(echo "$BRANCH_MAP" | jq --arg n "$PNAME" '.[$n] // []' 2>/dev/null || echo "[]")
+    BR_COUNT=$(echo "$BRANCHES_JSON" | jq 'length' 2>/dev/null || echo "0")
+    if [ "$BR_COUNT" -gt 2 ]; then
+      EXTRA=$((BR_COUNT - 2))
+      BRANCHES_JSON=$(echo "$BRANCHES_JSON" | jq --arg e "+${EXTRA} more" '[.[0:2][], $e]' 2>/dev/null || echo "$BRANCHES_JSON")
+    fi
+
+    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" \
+      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches}')
+    $FIRST || PRESENCE="$PRESENCE,"
+    PRESENCE="$PRESENCE$ENTRY"
+    FIRST=false
+  done
+  PRESENCE="$PRESENCE]"
+
+  PRESENCE=$(echo "$PRESENCE" | jq 'sort_by(-.last_seen_sort)' 2>/dev/null || echo "$PRESENCE")
+  echo "$PRESENCE" > "$CTX_DIR/team"
 ) &
 
 # 5. Soul self-summary (background)
@@ -775,23 +886,43 @@ fi
   echo "$SUMMARY" > "$CTX_DIR/soul_summary"
 ) &
 
-# 6. Handoffs addressed to user (background)
+# 6. Handoffs addressed to user (background, enriched with author/topic)
 (
   JSON="[]"
+  RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | head -5 || true)
+    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     JSON="["
+    RICH="["
     FIRST=true
     for AF in $ADDRESSED; do
       [ -z "$AF" ] && continue
       AF_NAME=$(basename "$AF" .md)
+      AF_AUTHOR=$(sed -n 's/^\*\*Author\*\*: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_AUTHOR" ]; then
+        AF_AUTHOR=$(sed -n 's/^From: *//p' "$AF" 2>/dev/null | head -1)
+      fi
+      AF_TOPIC=$(sed -n 's/^# Handoff: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_TOPIC" ]; then
+        AF_TOPIC=$(sed -n 's/^# *//p' "$AF" 2>/dev/null | head -1)
+      fi
+      AF_DATE=$(sed -n 's/^\*\*Date\*\*: *//p' "$AF" 2>/dev/null | head -1)
+      if [ -z "$AF_DATE" ]; then
+        AF_DATE=$(sed -n 's/^Date: *//p' "$AF" 2>/dev/null | head -1)
+      fi
       $FIRST || JSON="$JSON,"
+      $FIRST || RICH="$RICH,"
       JSON="$JSON\"$AF_NAME\""
+      AF_TOPIC_ESC=$(echo "$AF_TOPIC" | sed 's/"/\\"/g')
+      AF_AUTHOR_ESC=$(echo "$AF_AUTHOR" | sed 's/"/\\"/g')
+      RICH="$RICH{\"name\":\"$AF_NAME\",\"author\":\"$AF_AUTHOR_ESC\",\"topic\":\"$AF_TOPIC_ESC\",\"date\":\"$AF_DATE\"}"
       FIRST=false
     done
     JSON="$JSON]"
+    RICH="$RICH]"
   fi
   echo "$JSON" > "$CTX_DIR/addressed"
+  echo "$RICH" > "$CTX_DIR/addressed_rich"
 ) &
 
 # 7. Graph health (background — zero added latency, runs in parallel)
@@ -936,35 +1067,129 @@ if [ "$ID_PADDING" -lt 1 ]; then ID_PADDING=1; fi
 printf "\n%s%*s%s\n" "$IDENTITY_LEFT" "$ID_PADDING" "" "$IDENTITY_RIGHT"
 echo "$SEPARATOR"
 
-# --- Team activity (secondary info) ---
-TEAM_JSON=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
-TEAM_COUNT=$(echo "$TEAM_JSON" | jq 'length' 2>/dev/null || echo "0")
-if [ "$TEAM_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_COUNT" != "0" ]; then
-  echo "$TEAM_JSON" | jq -r '.[] | "  \(.author)\t\(.message)\t\(.time)"' 2>/dev/null | while IFS=$'\t' read -r T_AUTHOR T_MSG T_TIME; do
-    # Extract first name only, lowercase
-    T_NAME=$(echo "$T_AUTHOR" | awk '{print tolower($1)}')
-    # Truncate message to fit
-    T_MSG_SHORT=$(echo "$T_MSG" | cut -c1-42)
-    # Right-align time
-    LEFT_PART="  ${T_NAME}    ${T_MSG_SHORT}"
-    LEFT_LEN=${#LEFT_PART}
-    TIME_LEN=${#T_TIME}
-    T_PAD=$((LINE_WIDTH - LEFT_LEN - TIME_LEN))
-    if [ "$T_PAD" -lt 1 ]; then T_PAD=1; fi
-    printf "%s%*s%s\n" "$LEFT_PART" "$T_PAD" "" "$T_TIME"
+# --- Shared rendering state ---
+TEAM_DATA=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
+TEAM_DATA_COUNT=$(echo "$TEAM_DATA" | jq 'length' 2>/dev/null || echo "0")
+NOW_RENDER=$(date +%s)
+ONLINE_THRESHOLD=7200  # 2 hours — considered "online"
+# Column layout: 2(indent) + 2(dot+space) + 9(name) + 12(time) + 40(info) = 65
+MAX_INFO=40
+
+# --- Section 1: For you (always present) ---
+echo "  ◦ for you"
+ADDRESSED_RICH=$(cat "$CTX_DIR/addressed_rich" 2>/dev/null || echo "[]")
+ADDRESSED_COUNT=$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")
+TODOS_DATA=$(cat "$CTX_DIR/todos" 2>/dev/null || echo "[]")
+TODOS_COUNT=$(echo "$TODOS_DATA" | jq 'length' 2>/dev/null || echo "0")
+
+# Handoffs addressed to you
+if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; then
+  echo "$ADDRESSED_RICH" | jq -r '.[] | "\(.author)\t\(.date)\t\(.topic)"' 2>/dev/null | while IFS=$'\t' read -r H_AUTHOR H_DATE H_TOPIC; do
+    [ -z "$H_AUTHOR" ] && continue
+    H_NAME=$(echo "$H_AUTHOR" | awk '{print tolower($1)}')
+    if [ ${#H_NAME} -gt 8 ]; then H_NAME="${H_NAME:0:8}"; fi
+    # Online status from team presence data
+    H_SEEN_EPOCH=$(echo "$TEAM_DATA" | jq -r --arg n "$H_NAME" '[.[] | select((.name | ascii_downcase) == $n) | .last_seen_sort] | .[0] // 0' 2>/dev/null || echo "0")
+    if [ "$H_SEEN_EPOCH" -gt 0 ] 2>/dev/null && [ $(( NOW_RENDER - H_SEEN_EPOCH )) -lt $ONLINE_THRESHOLD ] 2>/dev/null; then
+      DOT="●"
+    else
+      DOT="○"
+    fi
+    # Convert date to relative
+    H_EPOCH=$(date -j -f "%Y-%m-%d" "${H_DATE%%T*}" "+%s" 2>/dev/null || \
+              date -d "${H_DATE%%T*}" "+%s" 2>/dev/null || echo "0")
+    H_DELTA=$(( NOW_RENDER - H_EPOCH ))
+    if [ "$H_DELTA" -lt 86400 ] 2>/dev/null; then H_AGO="today"
+    elif [ "$H_DELTA" -lt 172800 ] 2>/dev/null; then H_AGO="yesterday"
+    else H_AGO="$(( H_DELTA / 86400 ))d ago"
+    fi
+    if [ ${#H_TOPIC} -gt $MAX_INFO ]; then H_TOPIC="${H_TOPIC:0:$((MAX_INFO - 1))}…"; fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$H_NAME" "$H_AGO" "$H_TOPIC"
   done
 fi
 
-# Show lifecycle events (merged PRs + implemented handoffs)
+# Personal todos
+if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
+  echo "$TODOS_DATA" | jq -r '.[] | "\(.text)\t\(.created // "")\t\(.quest // "")\t\(.status)"' 2>/dev/null | head -3 | while IFS=$'\t' read -r T_TEXT T_CREATED T_QUEST T_STATUS; do
+    [ -z "$T_TEXT" ] && continue
+    if [ "$T_STATUS" = "blocked" ]; then DOT="✗"; else DOT="□"; fi
+    T_SRC="${T_QUEST:-todo}"
+    if [ ${#T_SRC} -gt 8 ]; then T_SRC="${T_SRC:0:8}"; fi
+    # Parse created date to relative
+    T_AGO="--"
+    if [ -n "$T_CREATED" ]; then
+      T_CLEAN=$(echo "$T_CREATED" | sed 's/Z$//; s/+00:00$//')
+      T_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$T_CLEAN" "+%s" 2>/dev/null || \
+                date -j -f "%Y-%m-%d" "${T_CLEAN%%T*}" "+%s" 2>/dev/null || \
+                date -d "$T_CLEAN" "+%s" 2>/dev/null || \
+                date -d "${T_CLEAN%%T*}" "+%s" 2>/dev/null || echo "0")
+      if [ "$T_EPOCH" -gt 0 ] 2>/dev/null; then
+        T_DELTA=$(( NOW_RENDER - T_EPOCH ))
+        if [ "$T_DELTA" -lt 86400 ]; then T_AGO="today"
+        elif [ "$T_DELTA" -lt 172800 ]; then T_AGO="yesterday"
+        else T_AGO="$(( T_DELTA / 86400 ))d ago"
+        fi
+      fi
+    fi
+    if [ ${#T_TEXT} -gt $MAX_INFO ]; then T_TEXT="${T_TEXT:0:$((MAX_INFO - 1))}…"; fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$T_SRC" "$T_AGO" "$T_TEXT"
+  done
+fi
+
+# Fallback: last activity if no handoffs and no todos
+if { [ "$ADDRESSED_COUNT" = "0" ] || [ -z "$ADDRESSED_COUNT" ]; } && \
+   { [ "$TODOS_COUNT" = "0" ] || [ -z "$TODOS_COUNT" ]; }; then
+  LAST_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
+  if [ -n "$LAST_ACTIVITY" ]; then
+    LA_TIME=$(echo "$LAST_ACTIVITY" | cut -d'|' -f1)
+    # Compact relative time: "20 hours ago" → "20h ago", "3 days ago" → "3d ago"
+    LA_TIME=$(echo "$LA_TIME" | sed 's/ hours\{0,1\} ago/h ago/; s/ days\{0,1\} ago/d ago/; s/ minutes\{0,1\} ago/m ago/; s/ weeks\{0,1\} ago/w ago/; s/ months\{0,1\} ago/mo ago/')
+    LA_MSG=$(echo "$LAST_ACTIVITY" | cut -d'|' -f2-)
+    if [ ${#LA_MSG} -gt $MAX_INFO ]; then LA_MSG="${LA_MSG:0:$((MAX_INFO - 1))}…"; fi
+    printf "  ◇ %-9s%-12s%s\n" "you" "$LA_TIME" "$LA_MSG"
+  fi
+fi
+
+echo ""
+# --- Section 2: Around (team presence with online status) ---
+if [ "$TEAM_DATA_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_DATA_COUNT" != "0" ]; then
+  echo "  ◦ around"
+  # Presence roster with online/offline dots (hide inactive >5 days)
+  STALE_THRESHOLD=$((5 * 86400))
+  echo "$TEAM_DATA" | jq -r '.[] | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(.branches | join(", "))"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
+    [ -z "$P_NAME" ] && continue
+    # Skip if last seen >5 days ago (or never seen)
+    if [ "$P_EPOCH" -le 0 ] 2>/dev/null || [ $(( NOW_RENDER - P_EPOCH )) -ge $STALE_THRESHOLD ] 2>/dev/null; then
+      continue
+    fi
+    if [ ${#P_NAME} -gt 8 ]; then P_NAME="${P_NAME:0:8}"; fi
+    # Online: last seen within threshold
+    if [ $(( NOW_RENDER - P_EPOCH )) -lt $ONLINE_THRESHOLD ] 2>/dev/null; then
+      DOT="●"
+    else
+      DOT="○"
+    fi
+    if [ ${#P_BRANCHES} -gt $MAX_INFO ]; then
+      P_BRANCHES="${P_BRANCHES:0:$((MAX_INFO - 9))}... +more"
+    fi
+    printf "  %s %-9s%-12s%s\n" "$DOT" "$P_NAME" "$P_SEEN" "$P_BRANCHES"
+  done
+fi
+
+# --- Section 3: Recently merged PRs + implemented handoffs ---
 LIFECYCLE_JSON=$(cat "$CTX_DIR/lifecycle" 2>/dev/null || echo '{}')
 MERGED_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.merged_prs.values // [] | length' 2>/dev/null || echo "0")
 IMPL_COUNT=$(echo "$LIFECYCLE_JSON" | jq '.implemented_handoffs.values // [] | length' 2>/dev/null || echo "0")
 
-if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null; then
-  echo "$LIFECYCLE_JSON" | jq -r '.merged_prs.values[]? // empty | "  ✓ PR #\(.[0]) merged (\(.[1]))"' 2>/dev/null || true
-fi
-if [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
-  echo "$LIFECYCLE_JSON" | jq -r '.implemented_handoffs.values[]? // empty | "  ✓ \(.[1]) worked on your handoff: \(.[0])"' 2>/dev/null || true
+if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null || [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
+  echo ""
+  echo "  ◦ merged"
+  if [ "$MERGED_COUNT" -gt 0 ] 2>/dev/null; then
+    echo "$LIFECYCLE_JSON" | jq -r '.merged_prs.values[]? // empty | "  ✓ PR #\(.[0]) \(.[1])"' 2>/dev/null || true
+  fi
+  if [ "$IMPL_COUNT" -gt 0 ] 2>/dev/null; then
+    echo "$LIFECYCLE_JSON" | jq -r '.implemented_handoffs.values[]? // empty | "  ✓ \(.[1]) worked on your handoff"' 2>/dev/null || true
+  fi
 fi
 
 # Show auto-save notice if work was committed from a previous branch
@@ -1002,7 +1227,7 @@ if [ "$LOCAL_MODE" = "true" ]; then
       fi
     fi
 
-    FOOTER_RIGHT="/connect to enable graph + dashboard"
+    FOOTER_RIGHT="local mode"
 
     FL_LEN=${#FOOTER_LEFT}
     FR_LEN=${#FOOTER_RIGHT}

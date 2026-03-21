@@ -33,7 +33,19 @@ Map to short name: "Alice Smith" → alice, "Bob Jones" → bob, etc.
 
 ## Step 2: Inward Mode
 
-Query context (all in parallel):
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` context queries and `bin/notify.sh` notifications. Answer from conversation context + memory files only. No "Graph offline" messaging. For outward asks (@person), save to `memory/knowledge/questions/` and push — the person will see it when they next open Egregore.
+
+**Connected mode**: Full behavior including graph context, notifications, QuestionSet nodes.
+
+---
+
+Query context (all in parallel) — **skip this section entirely in local mode**:
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
 

@@ -40,6 +40,16 @@ Priority values: `0` (none/default), `1` (low), `2` (medium), `3` (high). Used b
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls. Create quest file in `memory/quests/`, update `memory/quests/index.md`, commit, push. No graph node creation, no notifications. Quest management works entirely from filesystem.
+
+**Connected mode**: Full behavior including graph nodes and notifications as specified below.
+
 ## Neo4j Quest creation (via bin/graph.sh, on `/quest new`)
 
 Run with `bash bin/graph.sh query "..." '{"param": "value"}'`

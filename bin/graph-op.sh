@@ -17,6 +17,14 @@ set -euo pipefail
 #   merge-person <keep-name> <remove-name>
 #                               Merge two Person nodes — transfers relationships from
 #                               remove-name to keep-name, stores remove-name as alias
+#   create-harvest <id> <topic> <intent> <initiator>
+#                               Create a Harvest node and link to initiator (WAL-backed)
+#   create-harvest-session <harvest-id> <session-id> <person-name>
+#                               Create a HarvestSession linked to a Harvest and Person
+#   record-harvest-turn <session-id> <turn> <question> <intent> [answer] [eval]
+#                               Record a question-answer turn in a HarvestSession
+#   complete-harvest <harvest-id> <artifact-path>
+#                               Mark harvest complete and link synthesis artifact
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 GS="$SCRIPT_DIR/bin/graph.sh"
@@ -247,8 +255,98 @@ case "$OP" in
     bash "$SCRIPT_DIR/bin/graph-wal.sh" status
     ;;
 
+  create-harvest)
+    HID="${1:?missing harvest-id}"
+    TOPIC="${2:?missing topic}"
+    INTENT="${3:?missing intent}"
+    INITIATOR="${4:?missing initiator}"
+    CYPHER="
+      MERGE (h:Harvest {id: \$hid})
+      ON CREATE SET h.topic = \$topic, h.intent = \$intent,
+        h.status = 'active', h.created = datetime()
+      WITH h
+      MATCH (p:Person) WHERE toLower(p.name) = toLower(\$initiator) OR p.github = \$initiator
+      MERGE (h)-[:INITIATED_BY]->(p)
+      RETURN h.id AS id, h.topic AS topic, h.status AS status
+    "
+    PARAMS="{\"hid\":\"$HID\",\"topic\":\"$TOPIC\",\"intent\":\"$INTENT\",\"initiator\":\"$INITIATOR\"}"
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$PARAMS"
+    ;;
+
+  create-harvest-session)
+    HID="${1:?missing harvest-id}"
+    HSID="${2:?missing session-id}"
+    PERSON="${3:?missing person-name}"
+    bash "$GS" query "
+      MATCH (h:Harvest {id: \$hid})
+      MERGE (hs:HarvestSession {id: \$hsid})
+      ON CREATE SET hs.status = 'active', hs.created = datetime()
+      MERGE (h)-[:HAS_SESSION]->(hs)
+      WITH hs
+      MATCH (p:Person) WHERE toLower(p.name) = toLower(\$person) OR p.github = \$person
+      MERGE (hs)-[:WITH]->(p)
+      RETURN hs.id AS id, hs.status AS status
+    " "{\"hid\":\"$HID\",\"hsid\":\"$HSID\",\"person\":\"$PERSON\"}"
+    ;;
+
+  record-harvest-turn)
+    HSID="${1:?missing session-id}"
+    TURN="${2:?missing turn-number}"
+    QUESTION="${3:?missing question}"
+    QINTENT="${4:?missing question-intent}"
+    ANSWER="${5:-}"
+    EVAL="${6:-}"
+    TURN_ID="${HSID}-turn-${TURN}"
+    PARAMS=$(jq -n \
+      --arg hsid "$HSID" --arg tid "$TURN_ID" --arg turn "$TURN" \
+      --arg question "$QUESTION" --arg qintent "$QINTENT" \
+      --arg answer "$ANSWER" --arg eval "$EVAL" \
+      '{hsid:$hsid, tid:$tid, turn:$turn, question:$question, qintent:$qintent, answer:$answer, eval:$eval}')
+    if [ -n "$ANSWER" ]; then
+      bash "$GS" query "
+        MATCH (hs:HarvestSession {id: \$hsid})
+        MERGE (t:HarvestTurn {id: \$tid})
+        ON CREATE SET t.turnNumber = toInteger(\$turn), t.question = \$question,
+          t.questionIntent = \$qintent, t.created = datetime()
+        SET t.answer = \$answer, t.answeredAt = datetime()
+        SET t.evaluation = CASE WHEN \$eval <> '' THEN \$eval ELSE t.evaluation END
+        MERGE (hs)-[:HAS_TURN]->(t)
+        RETURN t.id AS id, t.turnNumber AS turnNumber
+      " "$PARAMS"
+    else
+      bash "$GS" query "
+        MATCH (hs:HarvestSession {id: \$hsid})
+        MERGE (t:HarvestTurn {id: \$tid})
+        ON CREATE SET t.turnNumber = toInteger(\$turn), t.question = \$question,
+          t.questionIntent = \$qintent, t.created = datetime()
+        MERGE (hs)-[:HAS_TURN]->(t)
+        RETURN t.id AS id, t.turnNumber AS turnNumber
+      " "$PARAMS"
+    fi
+    ;;
+
+  complete-harvest)
+    HID="${1:?missing harvest-id}"
+    ARTIFACT_PATH="${2:?missing artifact-path}"
+    bash "$GS" query "
+      MATCH (h:Harvest {id: \$hid})
+      SET h.status = 'complete', h.completedAt = datetime(), h.synthesisPath = \$path
+      WITH h
+      OPTIONAL MATCH (h)-[:HAS_SESSION]->(hs:HarvestSession)
+      WHERE hs.status <> 'complete'
+      SET hs.status = 'complete', hs.completedAt = datetime()
+      WITH h
+      MERGE (a:Artifact {id: \$hid + '-synthesis'})
+      ON CREATE SET a.type = 'harvest', a.title = h.topic, a.filePath = \$path,
+        a.created = datetime(), a.topics = coalesce([h.topic], [])
+      MERGE (h)-[:PRODUCED]->(a)
+      RETURN h.id AS id, h.status AS status, a.id AS artifact
+    " "{\"hid\":\"$HID\",\"path\":\"$ARTIFACT_PATH\"}"
+    ;;
+
   *)
-    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status"]}'
+    echo '{"error":"unknown operation: '"$OP"'","operations":["mark-read","mark-done","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest"]}'
     exit 1
     ;;
 
