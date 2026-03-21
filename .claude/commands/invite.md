@@ -22,6 +22,120 @@ Usage: /invite <github-username>
 Example: /invite newuser
 ```
 
+## Step 1b: Local mode detection
+
+Check `api_url` from `egregore.json`:
+```bash
+API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
+```
+
+**If `api_url` is empty → use LOCAL INVITE FLOW (Step 2L below). Skip Steps 2-4b entirely.**
+**If `api_url` is set → use CONNECTED INVITE FLOW (Step 2 below).**
+
+---
+
+## Step 2L: Local mode invite (GitHub API only)
+
+Run ONE bash call with description "Inviting {username} via GitHub":
+
+```bash
+bash -c '
+USERNAME="$1"
+GH_TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
+GITHUB_ORG=$(jq -r ".github_org" egregore.json)
+REPO_NAME=$(jq -r ".repo_name // empty" egregore.json)
+MEMORY_REPO=$(jq -r ".memory_repo // empty" egregore.json)
+MEMORY_NAME=$(basename "$MEMORY_REPO" .git)
+REPOS=$(jq -r ".repos[]? // empty" egregore.json)
+
+if [ -z "$GH_TOKEN" ]; then
+  echo "ERROR: No GitHub token. Run: bash bin/github-auth.sh"
+  exit 1
+fi
+if [ -z "$REPO_NAME" ]; then
+  echo "ERROR: repo_name not set in egregore.json"
+  exit 1
+fi
+
+# Add collaborator to core repo
+CORE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+  -H "Authorization: Bearer $GH_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$GITHUB_ORG/$REPO_NAME/collaborators/$USERNAME" \
+  -d "{\"permission\":\"push\"}")
+
+# Add collaborator to memory repo
+MEM=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+  -H "Authorization: Bearer $GH_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$GITHUB_ORG/$MEMORY_NAME/collaborators/$USERNAME" \
+  -d "{\"permission\":\"push\"}")
+
+# Add to managed repos
+for REPO in $REPOS; do
+  curl -s -o /dev/null -X PUT \
+    -H "Authorization: Bearer $GH_TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/$GITHUB_ORG/$REPO/collaborators/$USERNAME" \
+    -d "{\"permission\":\"push\"}" 2>/dev/null || true
+done
+
+echo "{\"core\":\"$CORE\",\"memory\":\"$MEM\",\"username\":\"$USERNAME\",\"org\":\"$GITHUB_ORG\",\"repo\":\"$REPO_NAME\"}"
+' -- "$ARGUMENTS"
+```
+
+**Create person file in memory:**
+```bash
+USERNAME="$ARGUMENTS"
+INVITER=$(jq -r '.display_name // .github_username' .egregore-state.json 2>/dev/null)
+TODAY=$(date -u +%Y-%m-%d)
+cat > "memory/people/${USERNAME}.md" << EOF
+---
+name: ${USERNAME}
+github: ${USERNAME}
+invited_by: ${INVITER}
+joined: ${TODAY}
+---
+EOF
+cd memory && git add -A && git commit -m "Invite ${USERNAME}" && git push 2>/dev/null && cd -
+```
+
+**Display result:**
+
+If core HTTP status is 201 or 204:
+```
+Invited {username} to {org_name}.
+
+  Core repo access:    ✓ added
+  Memory repo access:  ✓ added
+  Person file:         ✓ created
+
+Tell them to run:
+
+  npx create-egregore@latest join {github_org}/{repo_name}
+```
+
+**Telegram group link:** After the join command, check `egregore.json` for `telegram_group_link`. If present, append:
+```
+Telegram group: {telegram_group_link}
+```
+
+If core HTTP status is 422: user was already a collaborator — show "already has access."
+
+If core HTTP status is 403 or other error:
+```
+Could not add {username} as a collaborator.
+You may need org admin permissions. Add them manually:
+  https://github.com/{github_org}/{repo_name}/settings/access
+```
+
+**After local invite, STOP.** Do not proceed to Steps 3-5 (they require the API).
+
+Graph node creation and Telegram notification require a connected Egregore. Show:
+> "Run `/connect` to enable the knowledge graph and team notifications."
+
+---
+
 ## Step 2: Send invite (single call — credentials stay hidden)
 
 Run ONE bash call with description "Sending invite to {username}":
@@ -86,6 +200,11 @@ Share this link with {username}:
 
 They'll authenticate with GitHub, accept the org invite,
 and get a one-line install command.
+```
+
+**Telegram group link:** After the invite link block, check `egregore.json` for `telegram_group_link`. If present, append:
+```
+Telegram group: {telegram_group_link}
 ```
 
 **GitHub invite failed** (github_invite contains an error):

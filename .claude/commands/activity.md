@@ -47,6 +47,25 @@ Returns JSON with these fields. Arrays are arrays of objects (NOT `{fields, valu
 
 The response includes `graph_status` (`"connected"` or `"offline"`) and `graph_reason` (one of: `missing_config`, `unreachable`, `auth_error`, `server_error`, `invalid_response`).
 
+### Mode detection
+
+Read `mode` from `egregore.json`:
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+### Local mode (`mode === "local"`)
+
+Do NOT show graph status, graph_reason, or any "/connect", "/setup", "/env" messaging. Read everything from filesystem:
+- Recent sessions from `memory/handoffs/index.md` (last 5-10 entries)
+- Active quests from `memory/quests/index.md`
+- Recent decisions from `memory/knowledge/decisions/` (last 3 by date)
+- PRs from `prs` field (git-based, always available)
+- Footer: `"Local mode — showing activity from memory"`
+
+### Connected mode — graph offline
+
+Only applies when `mode === "connected"` (or mode not set):
 - `graph_status: "connected"` → normal dashboard
 - `graph_status: "offline"` → fall back to reading `memory/` files. Add `(offline)` after ✦ in header. Show the reason in footer:
   - `unreachable` → `Graph unreachable — check your network connection`

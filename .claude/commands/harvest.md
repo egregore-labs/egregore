@@ -24,18 +24,26 @@ Get current user:
 git config user.name
 ```
 
+### Step 0.5: Check graph availability
+
+```bash
+GRAPH_OK=$(bash bin/graph.sh test 2>/dev/null | jq -r '.status // "offline"')
+```
+
+If not `"ok"`: note "Graph offline — running solo harvest." All graph-op calls below are non-fatal — skip them and continue conversationally. The synthesis file is the canonical record.
+
 ### Step 1: Seed context
 
-Run in parallel:
+Run in parallel (all queries are non-fatal — continue without graph context if they fail):
 ```bash
 # Who exists in the graph
-bash bin/graph.sh query "MATCH (p:Person) RETURN p.name AS name, p.role AS role, p.domain AS domain"
+bash bin/graph.sh query "MATCH (p:Person) RETURN p.name AS name, p.role AS role, p.domain AS domain" 2>/dev/null || true
 
 # Prior harvests on this topic (if any)
-bash bin/graph.sh query "MATCH (h:Harvest) WHERE h.topic CONTAINS \$topic RETURN h.id, h.status, h.created ORDER BY h.created DESC LIMIT 3" '{"topic":"$TOPIC"}'
+bash bin/graph.sh query "MATCH (h:Harvest) WHERE h.topic CONTAINS \$topic RETURN h.id, h.status, h.created ORDER BY h.created DESC LIMIT 3" '{"topic":"$TOPIC"}' 2>/dev/null || true
 
 # Recent artifacts related to topic
-bash bin/graph.sh query "MATCH (a:Artifact) WHERE a.title CONTAINS \$topic OR \$topic IN a.topics RETURN a.title, a.type, a.created ORDER BY a.created DESC LIMIT 5" '{"topic":"$TOPIC"}'
+bash bin/graph.sh query "MATCH (a:Artifact) WHERE a.title CONTAINS \$topic OR \$topic IN a.topics RETURN a.title, a.type, a.created ORDER BY a.created DESC LIMIT 5" '{"topic":"$TOPIC"}' 2>/dev/null || true
 ```
 
 If `--seed` path provided, read the file.
@@ -43,8 +51,10 @@ If `--seed` path provided, read the file.
 ### Step 2: Create harvest in graph
 
 ```bash
-bash bin/graph-op.sh create-harvest "$HARVEST_ID" "$TOPIC" "$INTENT" "$INITIATOR"
+bash bin/graph-op.sh create-harvest "$HARVEST_ID" "$TOPIC" "$INTENT" "$INITIATOR" 2>/dev/null || true
 ```
+
+If this fails, continue — the synthesis file is the canonical record.
 
 Where `$HARVEST_ID` = `harvest-{YYYY-MM-DD}-{topic-slug}`.
 
@@ -59,14 +69,14 @@ If topic is clear and respondents are known, proceed. Otherwise, use AskUserQues
 
 **Apply `skills/harvest/SKILL.md` from here.** The skill describes the cognitive process — seeding, question generation, evaluation, checkpoints, cascade, synthesis. Follow its rhythm.
 
-For each respondent, create a HarvestSession:
+For each respondent, create a HarvestSession (non-fatal — continue if graph is unavailable):
 ```bash
-bash bin/graph-op.sh create-harvest-session "$HARVEST_ID" "$SESSION_ID" "$PERSON_NAME"
+bash bin/graph-op.sh create-harvest-session "$HARVEST_ID" "$SESSION_ID" "$PERSON_NAME" 2>/dev/null || true
 ```
 
-For each question-answer turn:
+For each question-answer turn (non-fatal — continue if graph is unavailable):
 ```bash
-bash bin/graph-op.sh record-harvest-turn "$SESSION_ID" "$TURN_NUMBER" "$QUESTION" "$QUESTION_INTENT" "$ANSWER" "$EVALUATION"
+bash bin/graph-op.sh record-harvest-turn "$SESSION_ID" "$TURN_NUMBER" "$QUESTION" "$QUESTION_INTENT" "$ANSWER" "$EVALUATION" 2>/dev/null || true
 ```
 
 ### Step 5: Synthesize
@@ -80,14 +90,18 @@ cat > "memory/knowledge/harvests/{date}-{slug}.md" << 'HARVESTEOF'
 HARVESTEOF
 ```
 
-Create Artifact node and link:
+Create Artifact node and link (non-fatal — the synthesis file is the canonical record):
 ```bash
-bash bin/graph-op.sh complete-harvest "$HARVEST_ID" "$ARTIFACT_PATH"
+bash bin/graph-op.sh complete-harvest "$HARVEST_ID" "$ARTIFACT_PATH" 2>/dev/null || true
 ```
 
 ### Step 6: Confirm
 
 Show completion. Sigil: `⊙ HARVEST`.
+
+Footer varies based on graph availability:
+- **Graph available:** `✓ Harvested · synthesized · graphed · pushed`
+- **Graph offline:** `✓ Harvested · synthesized · saved to memory`
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐

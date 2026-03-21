@@ -36,9 +36,26 @@ The script auto-detects the user from `.egregore-state.json`. Returns JSON with:
 - `identity_hint` (non-null if identity mismatch detected)
 - `git{branch, dirty}`
 
-### Graph offline handling
+### Mode detection
 
-If `graph_status` is not `"connected"`:
+Read `mode` from `egregore.json`:
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+### Local mode (`mode === "local"`)
+
+Do NOT show graph status, graph_reason, or any "/connect", "/env", "/setup" messaging. Instead:
+- Show current session from `current_session`
+- Read recent handoffs from `memory/handoffs/index.md` (last 3-5 entries)
+- Read active quests from `memory/quests/index.md`
+- Show git branch + dirty status from `git` field
+- Footer: `"Local mode — memory is your source of truth"`
+- Skip: todos, open_threads (graph-dependent)
+
+### Connected mode — graph offline handling
+
+Only applies when `mode === "connected"` (or mode not set). If `graph_status` is not `"connected"`:
 - Show `(offline)` after sigil in header
 - Show the current session from `current_session` (client-side fallback always works)
 - Skip todos, quests, handoffs, open_threads sections

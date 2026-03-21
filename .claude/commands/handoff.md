@@ -9,6 +9,16 @@ Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls. Create the handoff file in memory, commit, push. No graph sync messaging — just save and confirm. No "Graph offline — file saved, will sync" warnings.
+
+**Connected mode**: Full behavior as specified below.
+
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.

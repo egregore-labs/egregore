@@ -30,11 +30,47 @@ Six moments. Everything else is invisible plumbing.
 VERIFY → WELCOME → HARVEST_IDENTITY → HARVEST_CONNECTION → CONSENT → ORIENT → COMPLETE
 ```
 
+## Local mode gate (applies to ALL states below)
+
+During VERIFY, you will check `api_url` from `egregore.json`. Store the result for the entire flow.
+
+**If `api_url` is empty — this is local mode. For the ENTIRE onboarding flow:**
+- **DO NOT call `bin/graph.sh` under any circumstances.**
+- **DO NOT call `curl` or any HTTP endpoint.**
+- **DO NOT run any code block that contacts an API, Neo4j, or Supabase.**
+- The ONLY external calls allowed are `git` operations (push memory).
+
+**If `api_url` is set — connected mode.** All API calls proceed normally.
+
+This is non-negotiable. Graph calls in local mode confuse the user and serve no purpose — `graph.sh` returns empty results anyway.
+
+---
+
 ## Resumption
 
 Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY — jump directly to the saved phase and use any data already in state.
 
-If `onboarding_complete` is true, say: "You're already set up. Run `/me` to update your profile, or just start working." Then stop.
+If `onboarding_complete` is true, validate the people file before accepting it:
+
+```bash
+USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
+PEOPLE_FILE="memory/people/${USERNAME}.md"
+if [ -f "$PEOPLE_FILE" ]; then
+  # Check if file has real content (Role/Focus/Work style) vs invite stub
+  HAS_ROLE=$(grep -c '^Role:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
+  HAS_FOCUS=$(grep -c '^Focus:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
+  echo "valid:$(( HAS_ROLE > 0 && HAS_FOCUS > 0 ? 1 : 0 ))"
+else
+  echo "valid:0"
+fi
+```
+
+- IF `valid:1` → say: "You're already set up. Run `/me` to update your profile, or just start working." Then stop.
+- IF `valid:0` → the people file is missing or still an invite stub. Reset state and resume:
+  ```bash
+  jq '.onboarding_complete = false | .onboarding.phase = "orient"' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+  ```
+  Say: "Looks like setup didn't fully land last time — picking up where we left off." Then resume from ORIENT (harvest data is preserved in state).
 
 ---
 
@@ -96,7 +132,7 @@ Welcome to {org_name}.
 Let's get you set up — a few quick questions.
 ```
 
-4. Save to state: `onboarding.phase = "welcome"`, `onboarding.type = "joiner"`, `onboarding.started_at = {ISO timestamp}`
+4. Save to state: `onboarding.phase = "welcome"`, `onboarding.started_at = {ISO timestamp}`. **Do NOT set `onboarding.type` or `usage_type`** — the installer already set `usage_type` correctly (`founder_group` or `joiner_group`). Preserve whatever is already in state.
 
 **Exit:** → HARVEST_IDENTITY (always, unconditional)
 
@@ -342,9 +378,9 @@ Flat keys are required for backward compatibility — `bin/telemetry.sh` and `bi
 
 **Actions:**
 
-1. **Check `api_url` from `egregore.json`.** If empty (local mode), skip graph queries entirely — go straight to displaying "It's early — you're one of the first here." and the AskUserQuestion below.
+1. **If local mode (`api_url` empty): DO NOT run the graph query below.** Go straight to displaying "It's early — you're one of the first here." and the AskUserQuestion in step 3.
 
-   **If `api_url` is set (connected mode):** Query graph for active quests AND recent handoffs in a single bash call — do NOT make two separate graph queries:
+   **If connected mode (`api_url` set):** Query graph for active quests AND recent handoffs in a single bash call — do NOT make two separate graph queries:
 ```bash
 QUESTS=$(bash bin/graph.sh query "MATCH (q:Quest {status: 'active'}) OPTIONAL MATCH (a:Artifact)-[:PART_OF]->(q) RETURN q.id AS quest, q.title AS title, count(a) AS artifacts ORDER BY count(a) DESC LIMIT 3" 2>/dev/null) && \
 HANDOFFS=$(bash bin/graph.sh query "MATCH (s:Session) WHERE s.date IS NOT NULL MATCH (s)-[:BY]->(author:Person) RETURN s.topic AS topic, author.name AS author ORDER BY s.date DESC LIMIT 3" 2>/dev/null) && \
@@ -372,6 +408,7 @@ questions:
 
 4. IF "Jump in":
    Show 1-2 specific suggestions based on harvest answers:
+   - IF local mode: "Just tell me what you're working on and I'll set up a branch."
    - IF focus = `building` AND quests exist: "Check out the {quest_title} quest — `/quest {slug}`"
    - IF focus = `exploring`: "Try `/activity` to see what's happening, or `/reflect` to capture your first thought."
    - IF focus = `evaluating`: "Run `/dashboard` to see the system from your perspective."
@@ -391,11 +428,31 @@ questions:
 
 **Entry:** ORIENT completed
 
-**Actions (steps 1-2 always execute; steps 3-4 are skipped in local mode):**
+**Actions (steps 1-2 always execute; steps 3-4 are connected mode only):**
 
-**Local mode detection:** Check `api_url` from `egregore.json`. If empty, skip steps 3 (Neo4j) and 4 (Supabase) — the person file in memory is sufficient.
+**Local mode: DO NOT run steps 3 or 4. DO NOT call `bin/graph.sh` or `curl`.** The person file in memory (step 2) is sufficient. Only run steps 1, 2, 5, 6, 7.
 
-**Batching:** In connected mode, run steps 1-4 in parallel (egregore.md update + memory commit + graph MERGE + Supabase sync). In local mode, run steps 1-2 in parallel (egregore.md update + memory commit). Then run steps 5-7 in one parallel call (state update + shell alias + telemetry). The user should see ONE message at the end: "You're in." — not a play-by-play of each step. Suppress ALL output with `2>/dev/null` or variable capture.
+**Batching:** In connected mode, run steps 1-4 in parallel (egregore.md update + memory commit + graph MERGE + Supabase sync). In local mode, run steps 1-2 in parallel (egregore.md update + memory commit).
+
+**CRITICAL — gate step 5 on steps 1-2:** After steps 1-2 complete, verify the people file was actually written before proceeding to step 5:
+
+```bash
+USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
+PEOPLE_FILE="memory/people/${USERNAME}.md"
+if [ -f "$PEOPLE_FILE" ] && grep -q '^Role:' "$PEOPLE_FILE" 2>/dev/null; then
+  echo "people_file:ok"
+else
+  echo "people_file:missing"
+fi
+```
+
+- IF `people_file:ok` → proceed to steps 5-7 (state update + shell alias + telemetry)
+- IF `people_file:missing` → do NOT set `onboarding_complete: true`. Instead:
+  - Set `onboarding.phase = "orient"` in state (so next session resumes from ORIENT)
+  - Tell the user: "Almost done, but your profile didn't save to memory. This can happen if there's a git conflict. Try `/onboarding` again — your answers are saved, so you won't need to re-answer questions."
+  - Stop. Do NOT proceed to steps 5-7.
+
+Then run steps 5-7 in one parallel call (state update + shell alias + telemetry). The user should see ONE message at the end: "You're in." — not a play-by-play of each step. Suppress ALL output with `2>/dev/null` or variable capture.
 
 ### 1. Update `egregore.md` Members section
 
@@ -482,10 +539,11 @@ Fill all values from state. `member_role` maps to the harvest role answer, `focu
     "phase": "complete",
     "completed_at": "{ISO timestamp}"
   },
-  "display_name": "...",
-  "usage_type": "joiner_group"
+  "display_name": "..."
 }
 ```
+
+**Do NOT set `usage_type` here.** It was already set by the installer. Preserve the existing value.
 
 ### 6. Shell alias
 
@@ -497,10 +555,13 @@ Tell the user: "From now on, just type **`{ALIAS_NAME}`** in any terminal to lau
 
 ### 7. Emit telemetry
 
+Read `usage_type` from `.egregore-state.json` and use it:
 ```bash
-bash bin/telemetry.sh emit "onboarding_complete" '{"type":"joiner","rounds":2}' 2>/dev/null &
+TYPE=$(jq -r '.usage_type // "joiner_group"' .egregore-state.json 2>/dev/null)
+bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\",\"rounds\":2}" 2>/dev/null &
 ```
 
 ### 8. Done
 
-Display: **"You're in. Type `/activity` to see what's happening, or just start working."**
+- **Local mode**: Display: **"You're in. Just tell me what you're working on."**
+- **Connected mode**: Display: **"You're in. Type `/activity` to see what's happening, or just start working."**

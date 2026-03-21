@@ -25,15 +25,25 @@ Topic: $ARGUMENTS
 - Arguments match `[category]: [content]` (decision/finding/pattern prefix) → Quick mode with category override
 - Any other arguments → Quick mode
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls silently. No context gathering from graph, no Artifact node creation, no "Graph offline — file saved, will sync" messaging. Create the reflection file in memory from conversation context only. Commit and push.
+
+**Connected mode**: Full behavior as specified below.
+
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines.
 
 - 1 Bash call: `git config user.name`
-- 5-6 Neo4j queries for context gathering (run in parallel)
+- 5-6 Neo4j queries for context gathering (run in parallel) — **skip in local mode**
 - 0-3 AskUserQuestion calls depending on mode
-- 1-3 Neo4j queries for Artifact creation + relation detection
+- 1-3 Neo4j queries for Artifact creation + relation detection — **skip in local mode**
 - Auto-save via `/save` flow
 - Progress shown incrementally
 

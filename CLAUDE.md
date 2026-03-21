@@ -123,7 +123,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
-**Connectors** — `/connect` (external service integrations)
+**Connectors** — `/connect` (external service integrations) `/telegram-connect` (Telegram group setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Spirits** — `/summon` (persistent agent processes)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
@@ -135,7 +135,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Tasks: `/todo` (personal) · `/quest` (team exploration) · `/issue` (something broken)
 - Questions: `/ask [person]` (async) · just ask (agent answers from context)
 - Ingestion: `/ingest meeting` · `/ingest user-interview` · `/ingest google` · ambiguous → ask which type
-- Connectors: `/connect` (setup) · `/ingest` (bring content in)
+- Connectors: `/connect` (setup) · `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
 - Identity: `/me` — "who am I", "call me oz"
 - People: `/invite` (add) · `/delete-user` (remove)
 - PRs: `/pr` (create) · `/review-pr` (review)
@@ -158,9 +158,13 @@ Privacy-respecting, opt-out telemetry. After every slash command, emit fire-and-
 Never collected: file contents, code, env var values, conversation content.
 On first session (if `telemetry_noticed` not set in state file), mention the notice once, then set `telemetry_noticed: true`. Full spec: `.claude/context/telemetry.md`.
 
-## Offline Mode
+## Mode
 
-When `EGREGORE_API_KEY` is not configured, Egregore runs in local mode. Graph queries return empty results. Commands that write to `memory/` still work. Commands that need the graph show reduced output. Run `/connect` to enable knowledge graph + dashboard.
+Egregore runs in two modes, set by `mode` in `egregore.json`:
+
+**Local mode** (`"mode": "local"`) — Filesystem-only. No API, no graph, no live notifications. All core commands work: `/reflect`, `/handoff`, `/quest`, `/ask`, `/activity`, `/dashboard`, `/todo`. Memory is the source of truth. `/telegram-connect` stores the group link so joiners see it, but live notifications require connected mode. Don't mention `/connect`, graph, or API features unless the user asks about upgrading.
+
+**Connected mode** (`"mode": "connected"`) — Full features. Graph, dashboard, notifications, hosted workspaces. If the graph is offline, show troubleshooting. Use `/env` to check API key, `/checkup` for diagnostics.
 
 ## Environment Isolation
 
