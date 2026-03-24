@@ -1,10 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Default: official Egregore GitHub OAuth App (Device Flow — Client ID is public by design)
+# Override per-org via github_oauth_client_id in egregore.json
 CLIENT_ID="Ov23lizB4nYEeIRsHTdb"
+if [ -f "$SCRIPT_DIR/egregore.json" ]; then
+  _CUSTOM_ID=$(jq -r '.github_oauth_client_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null || true)
+  [ -n "$_CUSTOM_ID" ] && CLIENT_ID="$_CUSTOM_ID"
+fi
+
 SCOPE="repo,read:org"
 TIMEOUT=300
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 
 # Request device code

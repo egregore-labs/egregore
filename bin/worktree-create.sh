@@ -78,17 +78,5 @@ fi
 # egregore.json
 [ -f "$REPO_ROOT/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ] && ln -sfn "$REPO_ROOT/egregore.json" "$WT_PATH/egregore.json"
 
-# --- PID tracking (walk up to find Claude Code process) ---
-_pid=$$
-_cc_pid=""
-while [ "$_pid" -gt 1 ] 2>/dev/null; do
-  _cmd=$(ps -o comm= -p "$_pid" 2>/dev/null | tr -d ' ')
-  case "$_cmd" in
-    node|claude) _cc_pid="$_pid"; break ;;
-  esac
-  _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
-done
-echo "${_cc_pid:-$$}" > "$WT_PATH/.egregore-worktree-pid"
-
 # --- Output the worktree path (ONLY stdout line) ---
 echo "$WT_PATH"

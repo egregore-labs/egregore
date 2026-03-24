@@ -85,8 +85,8 @@ SIZE_BYTES=$(wc -c < "$TRANSCRIPT_PATH" 2>/dev/null | tr -d ' ')
 OBS_BUFFER="/tmp/egregore-obs-${SESSION_ID}.jsonl"
 if [ -f "$OBS_BUFFER" ] && [ -s "$OBS_BUFFER" ]; then
   OBS_COUNT=$(wc -l < "$OBS_BUFFER" 2>/dev/null | tr -d ' ')
-  OBS_TOOLS=$(awk -F'"tool":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | paste -sd',' -)
-  OBS_PATHS=$(awk -F'"path":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | head -50 | paste -sd',' -)
+  OBS_TOOLS=$(jq -r '.tool // empty' "$OBS_BUFFER" 2>/dev/null | sort -u | paste -sd',' -)
+  OBS_PATHS=$(jq -r '.path // empty' "$OBS_BUFFER" 2>/dev/null | sort -u | head -50 | paste -sd',' -)
 
   # Build arrays as JSON strings for Cypher
   OBS_TOOLS_JSON=$(echo "$OBS_TOOLS" | tr ',' '\n' | jq -R . | jq -s '.' 2>/dev/null || echo '[]')
@@ -198,8 +198,9 @@ gzip -c "$TRANSCRIPT_PATH" > "$TMP_FILE" 2>/dev/null || exit 0
     fi
   fi
 
-  # Optional: git push to egregore-transcripts if the repo exists locally (CL internal)
-  TRANSCRIPTS_DIR="$SCRIPT_DIR/../egregore-transcripts"
+  # Optional: git push to transcripts repo if it exists locally
+  TRANSCRIPTS_DIR=$(jq -r '.transcripts_dir // empty' "$CONFIG" 2>/dev/null || true)
+  [ -z "$TRANSCRIPTS_DIR" ] && TRANSCRIPTS_DIR="$SCRIPT_DIR/../egregore-transcripts"
   if [ -d "$TRANSCRIPTS_DIR/.git" ]; then
     if [ -n "$STARTED_AT" ]; then
       MONTH=$(echo "$STARTED_AT" | grep -oE '^[0-9]{4}-[0-9]{2}' || date -u +%Y-%m)

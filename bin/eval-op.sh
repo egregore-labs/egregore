@@ -13,6 +13,29 @@
 #   get-latest-report <pipelineId>
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: eval-op.sh <operation> [args...]"
+  echo ""
+  echo "Named graph operations for eval pipelines."
+  echo ""
+  echo "Operations:"
+  echo "  create-run <runId> <pipelineId> <config> <input> <output> <tokens> <cost> <latency>"
+  echo "  create-match <matchId> <pipelineId> <configA> <configB> <input> <dim> <winner> <conf> <reason> <judge>"
+  echo "  create-report <reportId> <pipelineId> <file> <configs> <elo> <best> <efficiency> <matches>"
+  echo "  get-runs <pipelineId>           Get recent runs"
+  echo "  get-matches <pipelineId>        Get recent matches"
+  echo "  get-latest-report <pipelineId>  Get latest report"
+  exit 0
+fi
+
+# --- Local mode gate: bail immediately ---
+_MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  echo '{"results":[]}'
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 
 OP="${1:-}"

@@ -8,16 +8,38 @@ Arguments: $ARGUMENTS
 
 This is the explicit entry point for quest sensemaking. Unlike the automatic check at `/activity` time (which runs once daily with cooldown), this always runs. `/activity` shows an orphan count hint pointing here.
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls. Instead, analyze quests from filesystem only:
+
+1. Read all quest files from `memory/quests/` (parse frontmatter for status, priority, started date)
+2. Read recent artifact files from `memory/knowledge/` (decisions/, findings/, patterns/) — last 14 days by filename date prefix
+3. Check which artifacts have a `quests:` field in frontmatter vs which don't (orphans)
+4. Check which active quests have no recent artifacts (stale)
+5. Apply the same trigger thresholds below using filesystem-derived data
+6. Present the same sensemaking dialogue
+7. When acting on responses (create quests, link artifacts, pause quests): only modify filesystem files — update quest markdown frontmatter, update artifact frontmatter `quests:` field. No graph writes, no SensemakingCheck node.
+
+Do NOT show any graph-related messaging. No "Graph offline", no "will sync on /save".
+
+**Connected mode**: Full behavior as specified below.
+
 ## What to do
 
-1. Run all 3 drift metrics queries in parallel via `bash bin/graph.sh query "..."`
+1. Run all 3 drift metrics queries in parallel via `bash bin/graph.sh query "..."` — **connected mode only**
 2. Analyze the results against trigger thresholds
 3. Compose a sensemaking observation with 2-3 natural language questions
 4. Present options via AskUserQuestion
 5. Act on user response
-6. Update SensemakingCheck node
+6. Update SensemakingCheck node — **connected mode only**
 
-## Drift metrics — 3 parallel queries
+## Drift metrics — 3 parallel queries — CONNECTED MODE ONLY
+
+**Skip these queries in local mode.** Use filesystem-derived data instead (see local mode section above).
 
 **DM1 — Orphan ratio + topic clusters:**
 
@@ -119,7 +141,9 @@ Run `/quest new` flow with pre-filled title and slug from the top cluster topics
 
 ### "Link orphaned artifacts to existing quests"
 
-Run the topic overlap query to find best matches. Uses a frequency filter to exclude high-frequency topics (appearing in >30% of all artifacts):
+**Connected mode:** Run the topic overlap query to find best matches. Uses a frequency filter to exclude high-frequency topics (appearing in >30% of all artifacts):
+
+**Local mode:** Match orphaned artifacts to quests by comparing `Topics:` fields in artifact frontmatter against quest frontmatter. Present the same confirmation UI, then update artifact frontmatter `quests:` field. No graph writes.
 
 ```cypher
 MATCH (all:Artifact) WHERE all.topics IS NOT NULL
@@ -153,7 +177,7 @@ I'd link these — look right?
   "German Funding" → grants (2 shared: funding, nlnet)
 ```
 
-User confirms → batch-create PART_OF relationships:
+User confirms → **Connected mode:** batch-create PART_OF relationships:
 
 ```cypher
 MATCH (a:Artifact {id: $artifactId}), (q:Quest {id: $questId})
@@ -162,23 +186,29 @@ CREATE (a)-[:PART_OF]->(q)
 
 Also update the artifact's markdown frontmatter — add the quest to the `quests:` list.
 
+**Local mode:** Only update the artifact's markdown frontmatter — add the quest to the `quests:` list. No graph writes.
+
 ### "Pause/reprioritize stale quests"
 
 For each stale quest listed, ask what to do:
-- Pause → run `MATCH (q:Quest {id: $slug}) SET q.status = 'paused'`
-- Deprioritize → run `MATCH (q:Quest {id: $slug}) SET q.priority = 0`
+- Pause → **Connected mode:** run `MATCH (q:Quest {id: $slug}) SET q.status = 'paused'`. **Local mode:** update quest markdown frontmatter `status: paused`.
+- Deprioritize → **Connected mode:** run `MATCH (q:Quest {id: $slug}) SET q.priority = 0`. **Local mode:** update quest markdown frontmatter `priority: 0`.
 - Keep → no action
 
 ### "Skip — structure is fine"
 
-Set skippedUntil on cooldown node:
+**Connected mode:** Set skippedUntil on cooldown node:
 
 ```cypher
 MERGE (sc:SensemakingCheck)
 SET sc.lastRun = date(), sc.skippedUntil = date() + duration('P7D')
 ```
 
-## Update SensemakingCheck (always, after any response)
+**Local mode:** No cooldown tracking — the user controls when to run `/quest suggest`.
+
+## Update SensemakingCheck (always, after any response) — CONNECTED MODE ONLY
+
+**Skip in local mode.** No SensemakingCheck node updates.
 
 ```cypher
 MERGE (sc:SensemakingCheck)

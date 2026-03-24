@@ -5,6 +5,18 @@
 #   boundary.sh validate-repos       — validates egregore.json repos[] has no traversal
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: boundary.sh <command> [args...]"
+  echo ""
+  echo "Path validation utility for environment isolation."
+  echo "Ensures sessions stay within their allowed boundaries."
+  echo ""
+  echo "Commands:"
+  echo "  check <path>      Exit 0 if path is within boundary, 1 if not"
+  echo "  validate-repos    Check egregore.json repos[] for path traversal"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- Load boundary file ---

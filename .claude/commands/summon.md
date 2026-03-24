@@ -10,6 +10,20 @@ Summon a spirit — a persistent agent that runs on a schedule or watches for co
 - Quick one-shot schedule → `/loop` directly (user already knows what they want)
 - One-time task → just do it, no spirit needed
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-batch.sh`, and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging.
+
+Local-mode adjustments:
+- **Phase 1**: Skip the graph scan. Generate options from conversation context, `memory/quests/` files, and `.spirits/` directory instead of the graph.
+- **Phase 5**: Skip Spirit node creation in Neo4j. Write the spec file to `.spirits/{name}.json` and create the CronCreate schedule — these work without the graph.
+- **Phase 6**: Skip LoopReport creation in Neo4j. The TUI report still renders, but the graph artifact is not created.
+- **Managing Spirits**: Read from `.spirits/` directory instead of querying the graph. Suspend/resume only uses CronDelete/CronCreate, not graph updates.
+
 ## Instructions
 
 ### Phase 1: Intent Discovery
@@ -20,7 +34,7 @@ Start with one open question via AskUserQuestion:
 What should this spirit do?
 ```
 
-Options should be derived from current graph context — not hardcoded. Before asking, run a lightweight graph scan to understand what's happening:
+**Connected mode:** Options should be derived from current graph context — not hardcoded. Before asking, run a lightweight graph scan to understand what's happening:
 
 ```bash
 # Get active quests, recent sessions, health signals
@@ -33,7 +47,14 @@ CONTEXT=$(bash bin/graph-batch.sh '[
 
 Use this context to generate options that are relevant — e.g. if there are dormant quests, offer "reconcile dormant work"; if there's a PR-heavy period, offer "watch PRs". Always include a free-text option.
 
-The agent has full discretion to decide what graph context is relevant given the user's stated intent. Do not follow a fixed query set. Pull whatever slice of the graph illuminates the design space.
+**Local mode:** Skip the graph scan. Instead, derive options from:
+- Active quests in `memory/quests/` (parse frontmatter for status)
+- Recent handoffs in `memory/handoffs/index.md`
+- Existing spirits in `.spirits/` directory
+- Conversation context
+Always include a free-text option.
+
+The agent has full discretion to decide what context is relevant given the user's stated intent.
 
 ### Phase 2: Adaptive Convergence
 
@@ -126,7 +147,8 @@ Ask: "Launch this spirit?" with options: Launch, Edit (back to questioning), Can
 ### Phase 5: Launch
 
 1. **Write spec file**: `.spirits/{name}.json`
-2. **Create Spirit node in graph**:
+2. **Create Spirit node in graph** — **CONNECTED MODE ONLY**:
+   **Skip this step in local mode.** Do not run `bin/graph.sh`.
    ```bash
    bash bin/graph.sh query "
      MERGE (sp:Spirit {name: \$name})
@@ -167,7 +189,8 @@ When a spirit runs (via `/loop` invoking its prompt), each cycle MUST:
    └───────────────────────────────────────────────────┘
    ```
 
-3. **Write LoopReport to graph**:
+3. **Write LoopReport to graph** — **CONNECTED MODE ONLY**:
+   **Skip this step in local mode.** Do not run `bin/graph.sh`. The TUI report still renders but is not persisted to the graph.
    ```bash
    bash bin/graph.sh query "
      MATCH (sp:Spirit {name: \$name})
@@ -191,10 +214,17 @@ bash bin/telemetry.sh emit "command" '{"command":"summon"}' 2>/dev/null &
 
 ## Managing Spirits
 
+**Connected mode:**
 - **List active**: `bash bin/graph.sh query "MATCH (sp:Spirit {status: 'active'}) RETURN sp.name, sp.type, sp.cadence"`
 - **Suspend**: Set `sp.status = 'suspended'` + CronDelete
 - **Resume**: Set `sp.status = 'active'` + CronCreate
 - **View history**: `MATCH (lr:Artifact {origin: 'spirit'})-[:GENERATED_BY]->(sp:Spirit {name: $name}) RETURN lr ORDER BY lr.created DESC`
+
+**Local mode:**
+- **List active**: Read `.spirits/*.json` files, filter by `"status": "active"`. Display name, type, cadence from each spec file.
+- **Suspend**: Update spec file `"status": "suspended"` + CronDelete
+- **Resume**: Update spec file `"status": "active"` + CronCreate
+- **View history**: Not available in local mode (no graph artifact storage). Show: `Spirit history requires connected mode.`
 
 ## Design Principles
 

@@ -17,7 +17,7 @@ A shared intelligence layer for teams using Claude Code. Persistent memory, asyn
 ## Install
 
 ```bash
-npx create-egregore@latest --local
+npx create-egregore@latest --open
 ```
 
 This walks you through:

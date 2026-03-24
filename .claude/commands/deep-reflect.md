@@ -100,7 +100,9 @@ This list is **open** — the model may name a custom signal type if the relatio
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Deep-reflect requires graph data. In local mode, silently delegate to `/reflect` — do NOT say "graph too sparse" or "graph offline". Just run `/reflect` with the same arguments.
+**Local mode** (`mode === "local"`): Deep-reflect requires graph data. In local mode, silently delegate to `/reflect` with the same arguments. Do NOT say "graph too sparse", "graph offline", or mention Neo4j. Do NOT run any `bin/graph.sh`, `bin/graph-batch.sh`, or `bin/notify.sh` calls. Just invoke `/reflect $ARGUMENTS` and stop.
+
+**IMPORTANT**: Check mode FIRST, before any other step. If local → delegate immediately. Do not proceed to Step 0 or any context queries.
 
 **Connected mode**: Full behavior as specified below.
 

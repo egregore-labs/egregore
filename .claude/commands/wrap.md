@@ -241,7 +241,115 @@ Run the `/save` flow: commit + push working branch, create PR to develop if need
 bash bin/telemetry.sh emit "command" '{"command":"wrap"}' 2>/dev/null &
 ```
 
-## Step 7.5: Worktree
+## Step 7.5: Session Report (optional)
+
+**Gate**: Check if `report_url` is configured in `egregore.json`:
+```bash
+jq -r '.report_url // empty' egregore.json
+```
+If empty, skip this entire step.
+
+### 7.5.1 Ask to share
+
+AskUserQuestion:
+```
+header: "Share"
+question: "Share a session report with the Egregore team? Helps us improve the product."
+options:
+  - label: "Yes, share report"
+    description: "Sends an AI-analyzed summary + your description. Never sends code or conversation content."
+  - label: "No thanks"
+    description: "Skip — your session stays private"
+```
+
+If "No thanks" → skip to Step 7.6.
+
+### 7.5.2 Generate structured report
+
+The agent generates a JSON report from the session context already gathered in Steps 0–1:
+
+```json
+{
+  "report_type": "session",
+  "topic": "{topic from Step 1}",
+  "summary": "{summary from Step 1}",
+  "gaps": [
+    {"type": "missing_skill|missing_tool|repeated_failure|wrong_info|confusing_ux", "detail": "..."}
+  ],
+  "system_info": {"mode": "local|connected", "framework_version": "2", "platform": "darwin|linux", "shell": "zsh|bash"},
+  "session_duration_ms": 0,
+  "message_count": 0
+}
+```
+
+The `gaps` array is the agent's introspective analysis of the session: commands the user wanted but didn't exist, repeated errors, confusing moments, missing information. If the session went smoothly, `gaps` can be empty.
+
+### 7.5.3 Ask for user note
+
+AskUserQuestion:
+```
+header: "Details"
+question: "Anything specific you'd like to share? (bugs, suggestions, what went well)"
+options:
+  - label: "Just the summary"
+    description: "Send the AI analysis only"
+  - label: "Add a note"
+    description: "I'll write a brief description"
+```
+
+If "Add a note": wait for the user's free-text response. Set it as the `description` field in the report JSON.
+
+### 7.5.4 Ask about GitHub issue
+
+First check if `gh` is available:
+```bash
+gh auth status 2>/dev/null
+```
+
+If `gh` is authenticated, AskUserQuestion:
+```
+header: "GitHub"
+question: "Also create a GitHub issue on Curve-Labs/egregore-core?"
+options:
+  - label: "Yes, create issue"
+    description: "Public issue with sanitized content — helps us track and prioritize"
+  - label: "No"
+    description: "Report goes to Supabase only"
+```
+
+If `gh` is not authenticated, skip this step.
+
+### 7.5.5 Submit
+
+Pipe the report JSON to the submission script:
+```bash
+echo '$REPORT_JSON' | bash bin/session-report.sh submit 2>/dev/null
+```
+
+Show progress: `✓ Report shared`
+
+### 7.5.6 Create GitHub issue (if selected)
+
+Apply sanitization rules (same as `/issue` Step 4 — replace org name, person names, token patterns):
+
+```bash
+gh issue create --repo Curve-Labs/egregore-core \
+  --title "Session report: $TOPIC" \
+  --body "$SANITIZED_BODY"
+```
+
+Capture the returned URL. Show: `✓ GitHub issue #N created`
+
+Set `github_issue_url` on the report if the Supabase insert already succeeded (best-effort update).
+
+### 7.5.7 Record in TUI
+
+Add a line to the Step 8 confirmation box status section:
+- If report shared + GitHub issue: `✓ Report shared · GitHub #N`
+- If report shared only: `✓ Report shared`
+- If skipped: omit
+
+## Step 7.6: Worktree
 
 Do NOT call ExitWorktree or clean up the worktree. The WorktreeRemove hook handles cleanup automatically when the session ends.
 
@@ -265,10 +373,13 @@ Display the wrap confirmation using the standard TUI box format. 72-char outer w
 │  → [quest-id]                                                        │
 ├──────────────────────────────────────────────────────────────────────┤
 │  ✓ Saved · graphed · pushed                                         │
+│  ✓ Report shared · GitHub #42                                        │
 │  Pick up where you left off with /activity.                          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 If no links were made, omit the links section (and its separator).
+
+The `✓ Report shared` line only appears if the user shared a session report in Step 7.5. Include `· GitHub #N` if a GitHub issue was created. Omit the entire line if the user declined or reporting was not configured.
 
 **Output the TUI box directly as a code block.** Do not narrate or explain it.

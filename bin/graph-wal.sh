@@ -12,12 +12,53 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: graph-wal.sh <command>"
+  echo ""
+  echo "Graph Write-Ahead Log — resilient graph writes with local buffer."
+  echo ""
+  echo "Commands:"
+  echo "  append <cypher> <params>  Append entry to WAL (no network)"
+  echo "  drain                     Execute pending entries via graph-batch"
+  echo "  status                    Show pending count + file size (JSON)"
+  exit 0
+fi
+
 WAL_DIR="$HOME/.egregore"
 # WAL file is per-instance to prevent cross-org data leakage on multi-instance machines
 PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
 WAL_FILE="$WAL_DIR/graph-wal-${PROJ_HASH}.jsonl"
 MAX_BUFFER_BYTES=2097152  # 2MB
 MAX_ENTRIES_AFTER_TRUNCATE=200
+LOCK_DIR="$WAL_DIR/graph-wal-${PROJ_HASH}.lock"
+
+# --- Cross-platform file locking via mkdir (atomic on all POSIX systems) ---
+_lock() {
+  local attempts=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt 50 ]; then
+      # Stale lock — check if holder PID is alive
+      local holder_pid
+      holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+      if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
+        rm -rf "$LOCK_DIR" 2>/dev/null
+        continue
+      fi
+      echo "graph-wal: lock timeout after 5s" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo $$ > "$LOCK_DIR/pid" 2>/dev/null
+}
+
+_unlock() {
+  rm -rf "$LOCK_DIR" 2>/dev/null
+}
+
+trap '_unlock' EXIT
 
 # --- Resolve session ID (same pattern as telemetry.sh) ---
 _resolve_session_id() {
@@ -47,17 +88,23 @@ cmd_append() {
   local sid
   sid=$(_resolve_session_id)
 
-  # Build JSON line and append
-  jq -n -c \
+  # Build JSON line
+  local line
+  line=$(jq -n -c \
     --arg ts "$ts" \
     --arg sid "$sid" \
     --arg cypher "$cypher" \
     --argjson params "$params" \
-    '{ts: $ts, sid: $sid, cypher: $cypher, params: $params}' \
-    >> "$WAL_FILE"
+    '{ts: $ts, sid: $sid, cypher: $cypher, params: $params}')
+
+  # Append under lock — if lock fails, append anyway (durability > mutual exclusion)
+  local _locked=true
+  _lock || _locked=false
+  echo "$line" >> "$WAL_FILE"
 
   # Buffer guard: truncate to last N entries if file exceeds max size
-  if [ -f "$WAL_FILE" ]; then
+  # Only safe under lock — tail+mv is not atomic and races with concurrent writers
+  if [ "$_locked" = "true" ] && [ -f "$WAL_FILE" ]; then
     local size
     size=$(wc -c < "$WAL_FILE" 2>/dev/null | tr -d ' ')
     if [ "$size" -gt "$MAX_BUFFER_BYTES" ] 2>/dev/null; then
@@ -73,6 +120,7 @@ cmd_append() {
         || rm -f "$tmp"
     fi
   fi
+  [ "$_locked" = "true" ] && _unlock
 }
 
 # --- drain: execute pending entries via graph-batch.sh ---
@@ -81,9 +129,11 @@ cmd_drain() {
     return 0
   fi
 
-  # Atomic rotate: move to temp file so new appends don't conflict
+  # Atomic rotate under lock: move to temp file so new appends don't conflict
+  _lock || return 0
   local drain_file="$WAL_FILE.drain.$$"
-  mv "$WAL_FILE" "$drain_file" 2>/dev/null || return 0
+  mv "$WAL_FILE" "$drain_file" 2>/dev/null || { _unlock; return 0; }
+  _unlock
 
   local total
   total=$(wc -l < "$drain_file" 2>/dev/null | tr -d ' ')
@@ -124,6 +174,7 @@ cmd_drain() {
     remaining=$(tail -n "+$((offset + 1))" "$drain_file" 2>/dev/null)
 
     if [ -n "$remaining" ]; then
+      _lock || { echo "$remaining" > "$WAL_FILE" 2>/dev/null; rm -f "$drain_file"; return 1; }
       if [ -f "$WAL_FILE" ]; then
         # New entries were written while draining; prepend remaining
         local merge_file="$WAL_FILE.merge.$$"
@@ -135,6 +186,7 @@ cmd_drain() {
         echo "$remaining" > "$WAL_FILE"
         rm -f "$drain_file"
       fi
+      _unlock
     else
       rm -f "$drain_file"
     fi
@@ -147,7 +199,7 @@ cmd_status() {
     local count size
     count=$(wc -l < "$WAL_FILE" 2>/dev/null | tr -d ' ')
     size=$(wc -c < "$WAL_FILE" 2>/dev/null | tr -d ' ')
-    echo "{\"pending\":${count},\"bytes\":${size}}"
+    jq -n --argjson pending "$count" --argjson bytes "$size" '{pending: $pending, bytes: $bytes}'
   else
     echo '{"pending":0,"bytes":0}'
   fi

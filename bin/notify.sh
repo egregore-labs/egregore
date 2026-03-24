@@ -9,9 +9,17 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-# Source .env if it exists (for local overrides)
+# --- Local mode gate: bail immediately ---
+_MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  echo '{"status":"offline","reason":"local_mode"}'
+  exit 0
+fi
+
+# Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
 if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a; source "$SCRIPT_DIR/.env"; set +a
+  EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+  EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
 # Check if API mode or direct mode

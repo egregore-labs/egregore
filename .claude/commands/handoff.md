@@ -15,7 +15,20 @@ Topic: $ARGUMENTS
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls. Create the handoff file in memory, commit, push. No graph sync messaging — just save and confirm. No "Graph offline — file saved, will sync" warnings.
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, `bin/index-handoff.sh`, and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode flow:
+- **Step 0**: Get user via `git config user.name`. For team members: read from `memory/people/` directory (list `.md` files, extract names from filenames or frontmatter) instead of querying the graph.
+- **Step 0.5 (Triage)**: Read open handoffs from `memory/handoffs/index.md` — filter for handoffs directed at the current user. Display the same triage UI, but skip all `bin/graph.sh` mark-read/mark-done calls. Triage responses are informational only in local mode — the user tracks status manually.
+- **Steps 1-4**: Same as connected mode (parsing, briefing, file creation, index update).
+- **Step 5**: Skip entirely — no `bin/index-handoff.sh`, no artifact query. Show progress as `[3/N] ✓ Skipped graph (local mode)` — actually, just renumber steps to exclude graph step.
+- **Step 6**: Auto-save — same as connected mode.
+- **Step 7**: Skip entirely — no notifications.
+- **Step 8**: TUI — use `✓ Saved · pushed` (not "graphed"). Omit "· {Recipient} notified" line.
+- **Step 9**: Skip entirely — no reflection prompt query.
+
+Progress steps in local mode (no recipient): `[1/3] ✓ Conversation file` → `[2/3] ✓ Index updated` → `[3/3] ✓ Pushed + PR created`
+Progress steps in local mode (with recipient): same — notification step is removed.
 
 **Connected mode**: Full behavior as specified below.
 
@@ -48,21 +61,28 @@ git config user.name
 
 Derive author handle: lowercase first word of git user.name (e.g. "Alice Smith" → "alice").
 
-Query all team members from the graph (suppress raw output, parse names):
+**Connected mode:** Query all team members from the graph (suppress raw output, parse names):
 ```bash
 MEMBERS=$(bash bin/graph.sh query "MATCH (p:Person) RETURN p.name AS name, p.github AS github, p.fullName AS fullName" 2>/dev/null)
 echo "$MEMBERS" | jq -r '.values[][] // empty' 2>/dev/null
 ```
 
-This returns all Person nodes in the org. Use this list for recipient matching in Step 1.
+**Local mode:** Read team members from `memory/people/` directory:
+```bash
+ls memory/people/*.md 2>/dev/null | xargs -I{} basename {} .md
+```
+Parse each file's frontmatter for `name`, `github`, `fullName` fields if available. Use filenames as fallback names.
+
+Use this list for recipient matching in Step 1.
 Match recipient names case-insensitively against `name`, `github`, or `fullName`.
 
 ## Step 0.5: Triage mode (no arguments + open handoffs)
 
 **Trigger:** `$ARGUMENTS` is empty (user ran bare `/handoff`).
 
-Before creating a new handoff, check for open handoffs directed at the current user:
+Before creating a new handoff, check for open handoffs directed at the current user.
 
+**Connected mode:** Query the graph:
 ```cypher
 MATCH (s:Session)-[:HANDED_TO]->(p:Person {name: $me})
 WHERE coalesce(s.handoffStatus, 'pending') IN ['pending', 'read']
@@ -78,6 +98,8 @@ ORDER BY
   s.date DESC
 LIMIT 8
 ```
+
+**Local mode:** Read `memory/handoffs/index.md` and scan recent entries (last 14 days) for handoffs with `to: {current user}`. Read the handoff files to extract topic, date, author. All handoffs are treated as `pending` (no status tracking in local mode). Skip triage entirely if no recent handoffs mention the current user — fall through to Step 1.
 
 **If no open handoffs** → skip triage, fall through to Step 1 (normal handoff flow with no-topic handling).
 
@@ -122,9 +144,9 @@ options:
 
 **3. Handle response:**
 
-- **"Done" or "Not relevant"** → mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. Output: `✓ Resolved: {topic} from {author}`
-- **"Still open"** → if currently `pending`, mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. Output: `◐ Kept open: {topic} from {author}`
-- **Freeform text (user typed something)** → mark `done` AND capture: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done', s.handoffResponse = '$response' RETURN s.id"`. Output: `✓ Resolved: {topic} from {author}` + `  Captured: "{first 60 chars}..."`
+- **"Done" or "Not relevant"** → **Connected mode:** mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}`
+- **"Still open"** → **Connected mode:** if currently `pending`, mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call. Output: `◐ Kept open: {topic} from {author}`
+- **Freeform text (user typed something)** → **Connected mode:** mark `done` AND capture: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done', s.handoffResponse = '$response' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}` + `  Captured: "{first 60 chars}..."`
 
 **4. Continue to next handoff**, or if all done:
 
@@ -155,8 +177,8 @@ If more than 4 handoffs, show the top 4 (pending first, then oldest read) and no
 
 **After selection:**
 
-- Each selected handoff → mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`
-- Unselected handoffs that are `pending` → mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`
+- Each selected handoff → **Connected mode:** mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. **Local mode:** skip the graph call.
+- Unselected handoffs that are `pending` → **Connected mode:** mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call.
 - Output: `✓ Resolved N handoffs` (and `◐ Kept N open` if any unselected)
 
 Then:
@@ -398,7 +420,9 @@ Show progress:
 [2/5] ✓ Index updated
 ```
 
-## Step 5: Index to Neo4j + query artifacts
+## Step 5: Index to Neo4j + query artifacts — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run `bin/index-handoff.sh` or the artifact query. Omit the Session Artifacts section from the handoff file. Do not show any graph-related progress.
 
 ### Session indexing
 
@@ -454,7 +478,9 @@ Show progress:
 [4/5] ✓ Pushed + PR created
 ```
 
-## Step 7: Notify recipient
+## Step 7: Notify recipient — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run `bin/notify.sh`. Do not show notification progress.
 
 **Only if a recipient was specified.**
 
@@ -629,7 +655,9 @@ In `/activity`, handoffs directed at the current user use the three-icon status 
 
 When the user selects a numbered item, display the receiver view above by reading the handoff file from the path in the Session node's `filePath` property.
 
-## Step 9: Reflection prompt
+## Step 9: Reflection prompt — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run the artifact count query.
 
 After displaying the TUI confirmation, check if today's sessions produced no non-tutorial artifacts. Query:
 
@@ -652,11 +680,12 @@ If artifacts exist, skip this step silently.
 
 | Scenario | Handling |
 |----------|----------|
-| Neo4j unavailable | Still create handoff file and index. Show warning: "Graph offline — file saved, will sync on next /save". Skip artifact query. |
+| Neo4j unavailable (connected mode) | Still create handoff file and index. Show warning: "Graph offline — file saved, will sync on next /save". Skip artifact query. |
+| Local mode | Skip all graph/notify calls silently — no warnings, no "graph offline" messaging. File creation + index update + auto-save work normally. TUI shows `✓ Saved · pushed`. No notification. |
 | No artifacts today | Omit Session Artifacts sub-box from TUI and Telegram message |
 | Notification fails | Show warning but don't fail the handoff: "Notification failed — [recipient] can see this on /activity" |
 | Memory symlink missing | Error: "Run /setup first — memory not linked" |
-| Recipient not a known Person | Warn: "[name] not found in graph — handoff saved but not directed. Create them with /invite?" |
+| Recipient not a known Person | **Connected mode:** Warn: "[name] not found in graph — handoff saved but not directed. Create them with /invite?" **Local mode:** Warn: "[name] not found in memory/people/ — handoff saved but not directed. Add them with /invite?" |
 | No topic in $ARGUMENTS | If open handoffs exist → triage mode (Step 0.5). Otherwise, summarize the session and generate a topic from conversation context |
 | Empty session (nothing happened) | Ask: "Nothing to hand off yet. Want to leave a note instead?" |
 | Scoped briefing is very short | Fine — focused handoffs are better than muddled ones |

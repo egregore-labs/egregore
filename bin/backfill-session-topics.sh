@@ -11,6 +11,19 @@ set -euo pipefail
 #   3. Remaining → skip (no data to derive from)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: backfill-session-topics.sh [--dry-run]"
+  echo ""
+  echo "Fill in topics for sessions that never got one."
+  echo "  Pass 1: Derive topic from branch name (dev/author/slug)"
+  echo "  Pass 2: Match to nearby topic'd session by author + date"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run  Show what would change without modifying the graph"
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 
 DRY_RUN=false
@@ -52,7 +65,7 @@ if [ "$COUNT" -gt 0 ]; then
       printf "  [dry-run] %s → \"%s\" (from branch)\n" "$SID" "$TOPIC"
     else
       bash "$GS" query "MATCH (s:Session {id: \$sid}) SET s.topic = \$topic RETURN s.id" \
-        "{\"sid\":\"$SID\",\"topic\":\"$TOPIC\"}" >/dev/null 2>&1 && {
+        "$(jq -n --arg sid "$SID" --arg topic "$TOPIC" '{sid: $sid, topic: $topic}')" >/dev/null 2>&1 && {
         printf "  ✓ %s → \"%s\"\n" "$SID" "$TOPIC"
         UPDATED=$((UPDATED + 1))
       } || {
@@ -105,7 +118,7 @@ if [ "$COUNT" -gt 0 ]; then
       printf "  [dry-run] %s (%s) → \"%s\" (from same-day session)\n" "$SID" "$AUTHOR" "$TOPIC"
     else
       bash "$GS" query "MATCH (s:Session {id: \$sid}) SET s.topic = \$topic RETURN s.id" \
-        "{\"sid\":\"$SID\",\"topic\":\"$TOPIC\"}" >/dev/null 2>&1 && {
+        "$(jq -n --arg sid "$SID" --arg topic "$TOPIC" '{sid: $sid, topic: $topic}')" >/dev/null 2>&1 && {
         printf "  ✓ %s (%s) → \"%s\"\n" "$SID" "$AUTHOR" "$TOPIC"
         UPDATED=$((UPDATED + 1))
       } || {

@@ -6,6 +6,22 @@ set -euo pipefail
 # Returns: {"topics_backfilled":N,"types_backfilled":N,"timestamps_normalized":N,"ghosts_resolved":N,"edges_created":N}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: enrich-graph.sh [--dry-run]"
+  echo ""
+  echo "Enrich the knowledge graph by backfilling missing data:"
+  echo "  1. Topics on Artifact nodes (from frontmatter or title)"
+  echo "  2. Type labels on Artifact nodes"
+  echo "  3. Timestamps on Artifact nodes"
+  echo "  4. Ghost artifact resolution (missing filePaths)"
+  echo "  5. RELATES_TO edges between artifacts with shared topics"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run  Show what would change without modifying the graph"
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 MEMORY="$SCRIPT_DIR/memory"
@@ -22,9 +38,22 @@ GHOSTS_RESOLVED=0
 EDGES_CREATED=0
 
 # --- Helper: parse YAML front matter value ---
+# Handles quoted values with colons, preserves whitespace
 yaml_val() {
   local file="$1" key="$2"
-  sed -n '/^---$/,/^---$/p' "$file" 2>/dev/null | grep -m1 "^${key}:" 2>/dev/null | sed "s/^${key}:[[:space:]]*//" | sed 's/^"//' | sed 's/"$//' | xargs 2>/dev/null || true
+  awk -v k="$key" '
+    /^---$/ { fm++; next }
+    fm == 1 && $0 ~ "^"k":" {
+      val = $0
+      sub("^"k":[ \t]*", "", val)
+      # Strip surrounding quotes (single or double)
+      if (val ~ /^".*"$/) { val = substr(val, 2, length(val)-2) }
+      else if (val ~ /^'"'"'.*'"'"'$/) { val = substr(val, 2, length(val)-2) }
+      print val
+      exit
+    }
+    fm >= 2 { exit }
+  ' "$file" 2>/dev/null || true
 }
 
 # --- Helper: parse YAML list (topics: [a, b] or topics:\n- a\n- b) ---
@@ -33,15 +62,28 @@ yaml_list() {
   local raw
   raw="$(yaml_val "$file" "$key")"
   if [ -n "$raw" ] && [[ "$raw" == \[* ]]; then
-    # Inline format: [a, b, c]
+    # Inline format: [a, b, c] — parse with jq
     echo "$raw" | jq -R 'gsub("^\\[|\\]$"; "") | split(",") | map(gsub("^\\s+|\\s+$"; "") | gsub("^\"|\"$"; ""))' 2>/dev/null || echo "[]"
     return
   fi
-  # Try dash-list format
+  # Try dash-list format — use awk to extract items between frontmatter delimiters
   local items
-  items=$(sed -n "/^${key}:/,/^[^ -]/p" "$file" 2>/dev/null | grep '^ *- ' | sed 's/^ *- //' | sed 's/^"//' | sed 's/"$//' | xargs -I{} echo '"{}"' 2>/dev/null | paste -sd',' - 2>/dev/null || true)
+  items=$(awk -v k="$key" '
+    /^---$/ { fm++; next }
+    fm == 1 && $0 ~ "^"k":" { capture=1; next }
+    fm == 1 && capture && /^ *- / {
+      val = $0; sub("^ *- *", "", val)
+      # Strip quotes
+      if (val ~ /^".*"$/) val = substr(val, 2, length(val)-2)
+      else if (val ~ /^'"'"'.*'"'"'$/) val = substr(val, 2, length(val)-2)
+      print val
+      next
+    }
+    fm == 1 && capture && /^[^ -]/ { exit }
+    fm >= 2 { exit }
+  ' "$file" 2>/dev/null)
   if [ -n "$items" ]; then
-    echo "[$items]"
+    echo "$items" | jq -R . | jq -s '.' 2>/dev/null || echo "[]"
   else
     echo "[]"
   fi
@@ -425,4 +467,6 @@ if [ "$DRY_RUN" = true ]; then
   echo "Dry run complete."
 fi
 
-echo "{\"topics_backfilled\":${TOPICS_BACKFILLED},\"types_backfilled\":${TYPES_BACKFILLED},\"timestamps_normalized\":${TIMESTAMPS_NORMALIZED},\"ghosts_resolved\":${GHOSTS_RESOLVED},\"edges_created\":${EDGES_CREATED}}"
+jq -n --argjson tb "$TOPICS_BACKFILLED" --argjson tyb "$TYPES_BACKFILLED" \
+  --argjson tn "$TIMESTAMPS_NORMALIZED" --argjson gr "$GHOSTS_RESOLVED" --argjson ec "$EDGES_CREATED" \
+  '{topics_backfilled: $tb, types_backfilled: $tyb, timestamps_normalized: $tn, ghosts_resolved: $gr, edges_created: $ec}'

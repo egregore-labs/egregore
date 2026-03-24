@@ -67,7 +67,10 @@ if [[ "$PROFILE" == *"/fish/"* ]]; then
   IS_FISH=true
 fi
 
-ALIAS_CMD="cd \"$SCRIPT_DIR\" && claude \"start\""
+# Build alias command — escape SCRIPT_DIR for safe embedding in shell alias
+# printf %q handles paths with spaces, quotes, backticks, $ etc.
+ESCAPED_DIR=$(printf '%q' "$SCRIPT_DIR")
+ALIAS_CMD="cd ${ESCAPED_DIR} && claude start"
 
 # --- Check if this directory already has an alias ---
 get_existing_alias() {
@@ -75,6 +78,15 @@ get_existing_alias() {
     return
   fi
   if $IS_FISH; then
+    # Fish: detect both legacy alias lines and function blocks
+    # Function format: function <name>\n  cd "...SCRIPT_DIR..."\nend
+    local func_name
+    func_name=$(grep -B1 "$SCRIPT_DIR" "$PROFILE" 2>/dev/null | sed -n 's/^function \([^ ]*\)$/\1/p' | head -1)
+    if [ -n "$func_name" ]; then
+      echo "$func_name"
+      return
+    fi
+    # Legacy alias format
     grep "$SCRIPT_DIR" "$PROFILE" | head -1 | sed -n "s/^alias \([^ ]*\) .*/\1/p" 2>/dev/null || true
   else
     grep "$SCRIPT_DIR" "$PROFILE" | head -1 | sed -n "s/^alias \([^=]*\)=.*/\1/p" 2>/dev/null || true
@@ -91,9 +103,10 @@ recommend_name() {
     return
   fi
 
-  # First install (no "egregore" alias yet): use "egregore"
+  # First install (no "egregore" alias/function yet): use "egregore"
   if ! grep -q "^alias egregore=" "$PROFILE" 2>/dev/null && \
-     ! grep -q "^alias egregore " "$PROFILE" 2>/dev/null; then
+     ! grep -q "^alias egregore " "$PROFILE" 2>/dev/null && \
+     ! grep -q "^function egregore$" "$PROFILE" 2>/dev/null; then
     echo "egregore"
     return
   fi
@@ -115,17 +128,32 @@ recommend_name() {
 write_alias() {
   local name="$1"
 
-  # Remove existing alias for this directory (if reinstalling)
-  if grep -q "$SCRIPT_DIR" "$PROFILE" 2>/dev/null; then
-    grep -v "$SCRIPT_DIR" "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
-  fi
-
-  # Remove existing alias with this name (if reusing a name)
+  # Remove existing entries for this directory (if reinstalling)
   if $IS_FISH; then
-    if grep -q "^alias ${name} " "$PROFILE" 2>/dev/null; then
-      grep -v "^alias ${name} " "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
+    # Fish: remove function blocks containing SCRIPT_DIR (multi-line)
+    # Also remove legacy alias lines
+    if grep -q "$SCRIPT_DIR" "$PROFILE" 2>/dev/null; then
+      awk -v dir="$SCRIPT_DIR" '
+        /^function / { buf=$0; in_func=1; next }
+        in_func && /^end$/ { buf=buf"\n"$0; if (buf !~ dir) print buf; in_func=0; buf=""; next }
+        in_func { buf=buf"\n"$0; next }
+        $0 !~ dir { print }
+      ' "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
+    fi
+    # Remove existing function with this name
+    if grep -q "^function ${name}$" "$PROFILE" 2>/dev/null; then
+      awk -v fname="^function ${name}$" '
+        $0 ~ fname { skip=1; next }
+        skip && /^end$/ { skip=0; next }
+        skip { next }
+        { print }
+      ' "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
     fi
   else
+    # Bash/Zsh: remove single-line alias entries
+    if grep -q "$SCRIPT_DIR" "$PROFILE" 2>/dev/null; then
+      grep -v "$SCRIPT_DIR" "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
+    fi
     if grep -q "^alias ${name}=" "$PROFILE" 2>/dev/null; then
       grep -v "^alias ${name}=" "$PROFILE" > "$PROFILE.tmp" && mv "$PROFILE.tmp" "$PROFILE"
     fi
@@ -134,8 +162,10 @@ write_alias() {
   mkdir -p "$(dirname "$PROFILE")"
   echo "" >> "$PROFILE"
   if $IS_FISH; then
-    echo "alias ${name} '${ALIAS_CMD}'" >> "$PROFILE"
+    # Fish: use a function for robust path handling
+    printf '\nfunction %s\n  cd "%s"; and claude start\nend\n' "$name" "$SCRIPT_DIR" >> "$PROFILE"
   else
+    # Bash/Zsh: printf %q already escaped the path
     echo "alias ${name}='${ALIAS_CMD}'" >> "$PROFILE"
   fi
 }

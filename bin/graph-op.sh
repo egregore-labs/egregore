@@ -27,6 +27,33 @@ set -euo pipefail
 #                               Mark harvest complete and link synthesis artifact
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: graph-op.sh <operation> [args...]"
+  echo ""
+  echo "Named graph operations — clean interface over raw Cypher."
+  echo ""
+  echo "Operations:"
+  echo "  mark-read <sid>          Mark handoff as read"
+  echo "  mark-done <sid>          Mark handoff as done"
+  echo "  answer-question <qid>    Mark question set as answered"
+  echo "  resolve-handoffs <user>  Auto-resolve read handoffs"
+  echo "  set-topic <sid> <topic>  Set topic on a Session node"
+  echo "  merge-person <keep> <rm> Merge two Person nodes"
+  echo "  claim-handoff <sid> <ho> Link implementing session to handoff"
+  echo "  create-pr <sid> <num> <repo> <author> [title]"
+  echo "  create-harvest / complete-harvest / record-harvest-turn"
+  echo "  wal-status               Show WAL pending count"
+  exit 0
+fi
+
+# --- Local mode gate: bail immediately ---
+_MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  echo '{"results":[]}'
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 
 OP="${1:-}"
@@ -40,7 +67,7 @@ case "$OP" in
       MATCH (s:Session {id: \$sid})
       SET s.handoffStatus = 'read', s.handoffReadDate = date()
       RETURN s.id AS id, s.topic AS topic
-    " "{\"sid\":\"$SID\"}"
+    " "$(jq -n --arg sid "$SID" '{sid: $sid}')"
     ;;
 
   mark-done)
@@ -49,7 +76,7 @@ case "$OP" in
       MATCH (s:Session {id: \$sid})
       SET s.handoffStatus = 'done'
       RETURN s.id AS id, s.topic AS topic
-    " "{\"sid\":\"$SID\"}"
+    " "$(jq -n --arg sid "$SID" '{sid: $sid}')"
     ;;
 
   answer-question)
@@ -58,7 +85,7 @@ case "$OP" in
       MATCH (qs:QuestionSet {id: \$qid})
       SET qs.status = 'answered'
       RETURN qs.id AS id, qs.topic AS topic
-    " "{\"qid\":\"$QID\"}"
+    " "$(jq -n --arg qid "$QID" '{qid: $qid}')"
     ;;
 
   resolve-handoffs)
@@ -72,7 +99,7 @@ case "$OP" in
       WITH s, count(later) AS laterSessions WHERE laterSessions > 0
       SET s.handoffStatus = 'done'
       RETURN s.id AS resolved
-    " "{\"user\":\"$USER\"}"
+    " "$(jq -n --arg user "$USER" '{user: $user}')"
     ;;
 
   set-topic)
@@ -84,13 +111,13 @@ case "$OP" in
         MATCH (s:Session {id: \$sid})
         SET s.topic = \$topic, s.branch = \$branch
         RETURN s.id AS id, s.topic AS topic, s.branch AS branch
-      " "{\"sid\":\"$SID\",\"topic\":\"$TOPIC\",\"branch\":\"$BRANCH\"}"
+      " "$(jq -n --arg sid "$SID" --arg topic "$TOPIC" --arg branch "$BRANCH" '{sid: $sid, topic: $topic, branch: $branch}')"
     else
       bash "$GS" query "
         MATCH (s:Session {id: \$sid})
         SET s.topic = \$topic
         RETURN s.id AS id, s.topic AS topic
-      " "{\"sid\":\"$SID\",\"topic\":\"$TOPIC\"}"
+      " "$(jq -n --arg sid "$SID" --arg topic "$TOPIC" '{sid: $sid, topic: $topic}')"
     fi
     ;;
 
@@ -105,7 +132,7 @@ case "$OP" in
           s.focusSelected = \$selected,
           s.focusDismissed = \$dismissed
       RETURN s.id AS id
-    " "{\"sid\":\"$SID\",\"shown\":$SHOWN,\"selected\":\"$SELECTED\",\"dismissed\":$DISMISSED}"
+    " "$(jq -n --arg sid "$SID" --argjson shown "$SHOWN" --arg selected "$SELECTED" --argjson dismissed "$DISMISSED" '{sid: $sid, shown: $shown, selected: $selected, dismissed: $dismissed}')"
     ;;
 
   merge-person)
@@ -137,7 +164,7 @@ case "$OP" in
       WITH keep, remove
       DETACH DELETE remove
       RETURN keep.name AS name, keep.github AS github, keep.previousNames AS aliases
-    " "{\"keep\":\"$KEEP\",\"remove\":\"$REMOVE\"}"
+    " "$(jq -n --arg keep "$KEEP" --arg remove "$REMOVE" '{keep: $keep, remove: $remove}')"
     ;;
 
   claim-handoff)
@@ -149,7 +176,7 @@ case "$OP" in
       MERGE (impl)-[:IMPLEMENTS]->(ho)
       RETURN impl.id AS implementor, ho.id AS handoff, ho.topic AS topic
     "
-    PARAMS="{\"implSid\":\"$IMPL_SID\",\"hoSid\":\"$HO_SID\"}"
+    PARAMS="$(jq -n --arg implSid "$IMPL_SID" --arg hoSid "$HO_SID" '{implSid: $implSid, hoSid: $hoSid}')"
     bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
     bash "$GS" query "$CYPHER" "$PARAMS"
     ;;
@@ -170,7 +197,7 @@ case "$OP" in
         MERGE (s)-[:PRODUCED]->(pr))
       RETURN pr.number AS number, pr.repo AS repo
     "
-    PARAMS="{\"sid\":\"$SID\",\"num\":$PR_NUM,\"repo\":\"$REPO\",\"author\":\"$AUTHOR_GH\",\"title\":\"$TITLE\"}"
+    PARAMS="$(jq -n --arg sid "$SID" --argjson num "$PR_NUM" --arg repo "$REPO" --arg author "$AUTHOR_GH" --arg title "$TITLE" '{sid: $sid, num: $num, repo: $repo, author: $author, title: $title}')"
     bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
     bash "$GS" query "$CYPHER" "$PARAMS"
     ;;
@@ -181,7 +208,7 @@ case "$OP" in
       MATCH (impl:Session {id: \$sid})-[:IMPLEMENTS]->(ho:Session)-[:BY]->(author:Person)
       RETURN ho.id AS handoffId, ho.topic AS topic, author.name AS author,
              author.github AS authorGithub
-    " "{\"sid\":\"$SID\"}"
+    " "$(jq -n --arg sid "$SID" '{sid: $sid}')"
     ;;
 
   update-pr)
@@ -194,13 +221,13 @@ case "$OP" in
         MATCH (pr:PR {number: toInteger(\$num), repo: \$repo})
         SET pr.status = \$status, pr.mergedAt = datetime(\$mergedAt)
         RETURN pr.number AS number, pr.status AS status
-      " "{\"num\":$PR_NUM,\"repo\":\"$REPO\",\"status\":\"$STATUS\",\"mergedAt\":\"$MERGED_AT\"}"
+      " "$(jq -n --argjson num "$PR_NUM" --arg repo "$REPO" --arg status "$STATUS" --arg mergedAt "$MERGED_AT" '{num: $num, repo: $repo, status: $status, mergedAt: $mergedAt}')"
     else
       bash "$GS" query "
         MATCH (pr:PR {number: toInteger(\$num), repo: \$repo})
         SET pr.status = \$status
         RETURN pr.number AS number, pr.status AS status
-      " "{\"num\":$PR_NUM,\"repo\":\"$REPO\",\"status\":\"$STATUS\"}"
+      " "$(jq -n --argjson num "$PR_NUM" --arg repo "$REPO" --arg status "$STATUS" '{num: $num, repo: $repo, status: $status}')"
     fi
     ;;
 
@@ -214,7 +241,7 @@ case "$OP" in
         RETURN pr.number AS number, pr.repo AS repo, pr.title AS title,
                toString(pr.mergedAt) AS mergedAt
         ORDER BY pr.mergedAt DESC LIMIT 10
-      " "{\"author\":\"$AUTHOR_GH\",\"since\":\"${SINCE}T00:00:00Z\"}"
+      " "$(jq -n --arg author "$AUTHOR_GH" --arg since "${SINCE}T00:00:00Z" '{author: $author, since: $since}')"
     else
       bash "$GS" query "
         MATCH (pr:PR {author: \$author})
@@ -222,7 +249,7 @@ case "$OP" in
         RETURN pr.number AS number, pr.repo AS repo, pr.title AS title,
                toString(pr.mergedAt) AS mergedAt
         ORDER BY pr.mergedAt DESC LIMIT 5
-      " "{\"author\":\"$AUTHOR_GH\"}"
+      " "$(jq -n --arg author "$AUTHOR_GH" '{author: $author}')"
     fi
     ;;
 
@@ -238,7 +265,7 @@ case "$OP" in
         RETURN ho.topic AS handoffTopic, implementor.name AS implementedBy,
                toString(impl.wrappedAt) AS completedAt, impl.summary AS summary
         ORDER BY impl.wrappedAt DESC LIMIT 10
-      " "{\"author\":\"$AUTHOR_NAME\",\"since\":\"${SINCE}T00:00:00Z\"}"
+      " "$(jq -n --arg author "$AUTHOR_NAME" --arg since "${SINCE}T00:00:00Z" '{author: $author, since: $since}')"
     else
       bash "$GS" query "
         MATCH (impl:Session)-[:IMPLEMENTS]->(ho:Session)-[:BY]->(author:Person)
@@ -247,7 +274,7 @@ case "$OP" in
         RETURN ho.topic AS handoffTopic, implementor.name AS implementedBy,
                toString(impl.wrappedAt) AS completedAt, impl.summary AS summary
         ORDER BY impl.wrappedAt DESC LIMIT 5
-      " "{\"author\":\"$AUTHOR_NAME\"}"
+      " "$(jq -n --arg author "$AUTHOR_NAME" '{author: $author}')"
     fi
     ;;
 
@@ -269,7 +296,7 @@ case "$OP" in
       MERGE (h)-[:INITIATED_BY]->(p)
       RETURN h.id AS id, h.topic AS topic, h.status AS status
     "
-    PARAMS="{\"hid\":\"$HID\",\"topic\":\"$TOPIC\",\"intent\":\"$INTENT\",\"initiator\":\"$INITIATOR\"}"
+    PARAMS="$(jq -n --arg hid "$HID" --arg topic "$TOPIC" --arg intent "$INTENT" --arg initiator "$INITIATOR" '{hid: $hid, topic: $topic, intent: $intent, initiator: $initiator}')"
     bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
     bash "$GS" query "$CYPHER" "$PARAMS"
     ;;
@@ -287,7 +314,7 @@ case "$OP" in
       MATCH (p:Person) WHERE toLower(p.name) = toLower(\$person) OR p.github = \$person
       MERGE (hs)-[:WITH]->(p)
       RETURN hs.id AS id, hs.status AS status
-    " "{\"hid\":\"$HID\",\"hsid\":\"$HSID\",\"person\":\"$PERSON\"}"
+    " "$(jq -n --arg hid "$HID" --arg hsid "$HSID" --arg person "$PERSON" '{hid: $hid, hsid: $hsid, person: $person}')"
     ;;
 
   record-harvest-turn)
@@ -342,7 +369,7 @@ case "$OP" in
         a.created = datetime(), a.topics = coalesce([h.topic], [])
       MERGE (h)-[:PRODUCED]->(a)
       RETURN h.id AS id, h.status AS status, a.id AS artifact
-    " "{\"hid\":\"$HID\",\"path\":\"$ARTIFACT_PATH\"}"
+    " "$(jq -n --arg hid "$HID" --arg path "$ARTIFACT_PATH" '{hid: $hid, path: $path}')"
     ;;
 
   *)
