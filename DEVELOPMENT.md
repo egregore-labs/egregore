@@ -581,7 +581,7 @@ Three flows bring users into Egregore. Each is documented end-to-end with every 
 | 2 | **Detect orgs** | `GET /api/org/setup/orgs` — API calls GitHub to list user's orgs, checks each for existing Egregore instances | GitHub API (`/user/orgs`, `/repos`) | Org list with `has_egregore` flags | REPLACEABLE — `gh api /user/orgs` locally |
 | 3 | **Repo picker** | `GET /api/org/setup/repos?org=X` — lists org repos for managed repo selection | GitHub API (`/orgs/{org}/repos`) | User's repo selection | REPLACEABLE — `gh repo list {org}` locally |
 | 4 | **Create instance** | `POST /api/org/setup` with `{github_org, org_name, repos[], instance_name, transcript_sharing}` | — | — | — |
-| 4a | ↳ Generate from template | `gh.generate_from_template()` — creates `{org}/egregore-core` from `Curve-Labs/egregore-core` template | GitHub API (POST `/repos/{template}/generate`) | New repo `{org}/egregore-core` | ESSENTIAL — `gh repo create --template` |
+| 4a | ↳ Generate from template | `gh.generate_from_template()` — creates `{org}/egregore` from `egregore-labs/egregore` template | GitHub API (POST `/repos/{template}/generate`) | New repo `{org}/egregore` | ESSENTIAL — `gh repo create --template` |
 | 4b | ↳ Create memory repo | `gh.create_repo()` — creates `{org}/{org}-memory` | GitHub API (POST `/orgs/{org}/repos`) | New repo `{org}/{org}-memory` | ESSENTIAL — `gh repo create` |
 | 4c | ↳ Init memory structure | `gh.init_memory_structure()` — commits initial directory structure via GitHub Contents API | GitHub API (PUT `/repos/{org}/{repo}/contents/`) | `people/`, `handoffs/`, `knowledge/`, `quests/` dirs + README | ESSENTIAL — `git init` + push |
 | 4d | ↳ Generate API key | `generate_api_key(slug)` → format `ek_{slug}_{random}` | — | Key in memory | SKIPPABLE — no API gateway needed |
@@ -712,7 +712,7 @@ packages/create-egregore/
 
 ## 9. Memory Repository Structure
 
-`memory/` is a **symlink** to a separate git repository (e.g., `../curve-labs-memory/`). This repo is shared across all team members and synced on every session by `session-start.sh` (git fetch + pull on main).
+`memory/` is a **symlink** to a separate git repository (e.g., `../{org}-memory/`). This repo is shared across all team members and synced on every session by `session-start.sh` (git fetch + pull on main).
 
 ### Directory Layout
 

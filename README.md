@@ -79,6 +79,4 @@ Everything runs locally. No servers, no accounts, no API keys.
 
 Want the knowledge graph, real-time dashboard, and Telegram notifications? Visit [egregore.xyz](https://egregore.xyz).
 
-## Built by
 
-[Curve Labs](https://curvelabs.eu)

@@ -513,7 +513,7 @@ bash bin/graph.sh query \
   '{"github":"...","org":"...","name":"...","fullName":"...","role":"...","focus":"...","workStyle":"...","sessionTracking":true,"transcriptSharing":true,"telemetry":true,"contactPreference":"all"}'
 ```
 
-Read `org_slug` from `egregore.json` → `github_org` field, lowercased and hyphenated (e.g., "Curve-Labs" → use the slug from the API key prefix, or derive from `jq -r '.github_org' egregore.json | tr '[:upper:]' '[:lower:]'`). Fill all parameter values from state — do NOT leave `"..."` placeholders.
+Read `org_slug` from `egregore.json` → `github_org` field, lowercased and hyphenated (e.g., "Acme-Corp" → use the slug from the API key prefix, or derive from `jq -r '.github_org' egregore.json | tr '[:upper:]' '[:lower:]'`). Fill all parameter values from state — do NOT leave `"..."` placeholders.
 
 ### 4. Sync to Supabase
 
