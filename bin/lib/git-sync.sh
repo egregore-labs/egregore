@@ -29,7 +29,7 @@ git fetch origin --quiet 2>/dev/null &
 # Default: official egregore-core repo. Set upstream_url in egregore.json to override,
 # or set it to "none" to disable (e.g., in the dev repo where this IS the source).
 _UPSTREAM_URL=$(jq -r '.upstream_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-[ -z "$_UPSTREAM_URL" ] && _UPSTREAM_URL="https://github.com/Curve-Labs/egregore-core.git"
+[ -z "$_UPSTREAM_URL" ] && _UPSTREAM_URL="https://github.com/egregore-labs/egregore.git"
 if [ "$_UPSTREAM_URL" != "none" ]; then
   git remote add upstream "$_UPSTREAM_URL" 2>/dev/null || true
   git fetch upstream main --quiet 2>/dev/null &

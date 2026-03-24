@@ -309,7 +309,7 @@ gh auth status 2>/dev/null
 If `gh` is authenticated, AskUserQuestion:
 ```
 header: "GitHub"
-question: "Also create a GitHub issue on Curve-Labs/egregore-core?"
+question: "Also create a GitHub issue on egregore-labs/egregore?"
 options:
   - label: "Yes, create issue"
     description: "Public issue with sanitized content — helps us track and prioritize"
@@ -333,7 +333,7 @@ Show progress: `✓ Report shared`
 Apply sanitization rules (same as `/issue` Step 4 — replace org name, person names, token patterns):
 
 ```bash
-gh issue create --repo Curve-Labs/egregore-core \
+gh issue create --repo egregore-labs/egregore \
   --title "Session report: $TOPIC" \
   --body "$SANITIZED_BODY"
 ```
