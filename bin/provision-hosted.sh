@@ -14,4 +14,5 @@ echo "API: $API_URL"
 curl -s -X POST "$API_URL/api/hosting/provision" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"org_slug\":\"$SLUG\",\"org_name\":\"$ORG_NAME\",\"github_org\":\"$GITHUB_ORG\",\"repo_name\":\"$REPO_NAME\"}" | jq .
+  -d "$(jq -n --arg slug "$SLUG" --arg org "$ORG_NAME" --arg gh "$GITHUB_ORG" --arg repo "$REPO_NAME" \
+    '{org_slug: $slug, org_name: $org, github_org: $gh, repo_name: $repo}')" | jq .

@@ -31,7 +31,18 @@ Topic: $ARGUMENTS
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls silently. No context gathering from graph, no Artifact node creation, no "Graph offline — file saved, will sync" messaging. Create the reflection file in memory from conversation context only. Commit and push.
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode flow:
+- **Step 0**: Get user via `git config user.name`. Skip ALL context queries (Q1-Q6) entirely — do not run them.
+- **Step 1** (Deep/Focused): Ask opening question based on conversation context only (no graph-aware opening, no opportunity detection from queries). Use what you know from the current session.
+- **Step 2**: Same deepening flow, based on conversation context.
+- **Step 3**: Same auto-classification.
+- **Step 4**: Skip relation detection entirely — do not run quest/artifact queries.
+- **Step 5**: Create files — same as connected mode.
+- **Step 6**: Skip entirely — no Neo4j Artifact creation.
+- **Step 7**: Auto-save — same as connected mode.
+- **Step 8**: TUI — use `✓ Saved · pushed` (not "graphed"). Use `Visible in /activity.` as footer.
 
 **Connected mode**: Full behavior as specified below.
 
@@ -57,7 +68,9 @@ git config user.name
 
 Derive handle: lowercase first word of git user.name (e.g. "Alice Smith" → "alice").
 
-### Context queries (run ALL in parallel)
+### Context queries (run ALL in parallel) — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run any of these queries.
 
 Execute each with `bash bin/graph.sh query "..." '{"param": "value"}'`.
 
@@ -231,7 +244,9 @@ Wait for user response:
 - **edit** → user modifies, then proceed
 - **skip** → abort without saving
 
-## Step 4: Relation Detection
+## Step 4: Relation Detection — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run any relation queries.
 
 For each artifact, run targeted Cypher queries in parallel to find:
 
@@ -302,7 +317,9 @@ Show progress:
   [1/3] ✓ Writing knowledge/{category}s/{date}-{slug}.md
 ```
 
-## Step 6: Neo4j Artifact creation
+## Step 6: Neo4j Artifact creation — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run any graph queries.
 
 For each artifact, run via `bash bin/graph.sh query "..." '{"param": "value"}'`:
 
@@ -444,7 +461,7 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 
 When arguments are provided (not starting with "about "):
 
-1. **Step 0**: Run identity + 2 parallel Neo4j queries (Q2 for quests, Q5 for recent decisions) — lighter context
+1. **Step 0**: Run identity + 2 parallel Neo4j queries (Q2 for quests, Q5 for recent decisions) — lighter context. **In local mode: skip the queries, use conversation context only.**
 2. **Auto-classify**: Apply classification signals to the provided content. If arguments match `[category]: [content]`, use category override
 3. **Step 4**: Run relation detection queries
 4. **Present proposal**: Same format as Step 3 — show proposed artifact(s) with `y/edit/skip`
@@ -465,7 +482,8 @@ Quick mode should complete with 0-1 AskUserQuestion calls total.
 
 | Scenario | Handling |
 |----------|----------|
-| Neo4j unavailable | Skip context gathering and relation linking. Still create file. Show warning: "Graph offline — file saved, will sync on next /save" |
+| Neo4j unavailable (connected mode) | Skip context gathering and relation linking. Still create file. Show warning: "Graph offline — file saved, will sync on next /save" |
+| Local mode | Skip all graph calls silently — no warnings, no "graph offline" messaging. File creation + auto-save work normally. TUI shows `✓ Saved · pushed` |
 | No quests/projects | Skip relation step silently |
 | All context queries empty | Fall back to: "What's on your mind? I'll capture it." (simple prompt, no graph-aware opening) |
 | Quick mode, genuinely ambiguous | Ask 1 clarifying AskUserQuestion max |

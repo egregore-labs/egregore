@@ -9,6 +9,17 @@ set -euo pipefail
 #
 # Usage: bash bin/pulse.sh <session-id> <author-github> <branch> <obs-buffer-path> <transcript-path>
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: pulse.sh <session-id> <author-github> <branch> <obs-buffer> <transcript>"
+  echo ""
+  echo "Post-session synthesis spirit. Reads transcript + observation buffer"
+  echo "+ graph context, calls Sonnet for synthesis, writes CONTINUES/INVOLVES"
+  echo "edges and personal brief back to the graph."
+  echo ""
+  echo "Normally run in background by transcript-archive.sh at session exit."
+  exit 0
+fi
+
 # Suppress stdout, log errors to .pulse/errors.log
 mkdir -p "$(cd "$(dirname "$0")/.." && pwd)/.pulse" 2>/dev/null
 exec 2>> "$(cd "$(dirname "$0")/.." && pwd)/.pulse/errors.log"

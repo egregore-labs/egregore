@@ -9,8 +9,10 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
 if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a; source "$SCRIPT_DIR/.env"; set +a
+  EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+  EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
 API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
@@ -58,6 +60,12 @@ _parse_artifacts() {
 
 _resolve_path() {
   local file_path="$1"
+
+  # Reject path traversal attempts
+  case "$file_path" in
+    ../*|*/../*|/*) return 1 ;;
+  esac
+
   if [[ "$file_path" == memory/* ]]; then
     echo "$SCRIPT_DIR/$file_path"
   else

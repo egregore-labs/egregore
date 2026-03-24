@@ -4,16 +4,34 @@ set -euo pipefail
 # Pulse Weekly Report — sends the full week's runs to Sonnet for deep synthesis,
 # then delivers the narrative assessment via Telegram.
 #
-# Usage: bash bin/pulse-report.sh [days=7] [recipient=cemfd]
+# Usage: bash bin/pulse-report.sh [days=7] [recipient]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: pulse-report.sh [days] [recipient]"
+  echo ""
+  echo "Generate a weekly pulse report. Collects recent pulse runs,"
+  echo "sends them to Sonnet for deep synthesis, and delivers the"
+  echo "narrative assessment via Telegram."
+  echo ""
+  echo "Arguments:"
+  echo "  days       Lookback period (default: 7)"
+  echo "  recipient  Telegram recipient (default: pulse.report_recipient in config)"
+  exit 0
+fi
+
 CONFIG="$SCRIPT_DIR/egregore.json"
 NOTIFY="$SCRIPT_DIR/bin/notify.sh"
 TELEMETRY="$SCRIPT_DIR/bin/telemetry.sh"
 PULSE_LOG="$SCRIPT_DIR/.pulse/runs.jsonl"
 DAYS="${1:-7}"
-# Recipient: arg > config > default (cem for testing)
-RECIPIENT="${2:-$(jq -r '.pulse.report_recipient // "cem"' "$CONFIG" 2>/dev/null || echo "cem")}"
+# Recipient: arg > config > error
+RECIPIENT="${2:-$(jq -r '.pulse.report_recipient // empty' "$CONFIG" 2>/dev/null || true)}"
+if [ -z "$RECIPIENT" ]; then
+  echo "Error: No recipient. Set pulse.report_recipient in egregore.json or pass as arg." >&2
+  exit 1
+fi
 
 if [ ! -f "$PULSE_LOG" ] || [ ! -s "$PULSE_LOG" ]; then
   echo "No pulse data yet."

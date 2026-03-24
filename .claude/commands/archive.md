@@ -22,15 +22,34 @@ Topic: $ARGUMENTS
 - No arguments → Interactive mode
 - Any arguments → Quick mode
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode flow:
+- **Step 0**: Get user via `git config user.name`. Skip ALL context queries (Q1-Q4) — do not run them.
+- **Step 1**: Extract moves from session context only (no graph-aware suggestions).
+- **Step 3**: Skip relation detection entirely — do not run quest/artifact queries.
+- **Step 4**: Create pattern file — same as connected mode.
+- **Step 5**: Skip entirely — no Neo4j Artifact creation.
+- **Step 6**: Auto-save — same as connected mode.
+- **Step 7**: TUI — use `✓ Saved · pushed` (not "graphed"). Use `/activity to see it.` as footer.
+
+**Connected mode**: Full behavior as specified below.
+
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines.
 
 - 1 Bash call: `git config user.name`
-- 4 Neo4j queries for context gathering (run in parallel)
+- 4 Neo4j queries for context gathering (run in parallel) — **connected mode only**
 - 0-2 AskUserQuestion calls depending on mode
-- 1-2 Neo4j queries for Artifact creation + relation detection
+- 1-2 Neo4j queries for Artifact creation + relation detection — **connected mode only**
 - Auto-save via `/save` flow
 - Progress shown incrementally
 
@@ -44,7 +63,9 @@ git config user.name
 
 Map to Person node: "Alice Smith" -> alice, "Bob Jones" -> bob, "Carol" -> carol
 
-### Context queries (run ALL in parallel)
+### Context queries (run ALL in parallel) — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run any of these queries.
 
 Execute each with `bash bin/graph.sh query "..." '{"param": "value"}'`.
 
@@ -158,7 +179,9 @@ Wait for user response:
 
 For chains with 1-2 moves, skip this step — go straight to Step 3.
 
-## Step 3: Relation Detection
+## Step 3: Relation Detection — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run any relation queries.
 
 Run targeted Cypher queries in parallel to find links:
 
@@ -261,7 +284,9 @@ Show progress:
   [1/3] ✓ Writing knowledge/patterns/{date}-{slug}.md
 ```
 
-## Step 5: Neo4j Artifact Creation
+## Step 5: Neo4j Artifact Creation — CONNECTED MODE ONLY
+
+**Skip this entire step in local mode.** Do not run any graph queries.
 
 Run via `bash bin/graph.sh query "..." '{"param": "value"}'`:
 
@@ -432,7 +457,8 @@ These are starting vocabulary, not a fixed schema. Name new types when these don
 
 | Scenario | Handling |
 |----------|----------|
-| Neo4j unavailable | Create file, show "Graph offline — will sync on /save" |
+| Neo4j unavailable (connected mode) | Create file, show "Graph offline — will sync on /save" |
+| Local mode | Skip all graph calls silently — no warnings, no "graph offline" messaging. File creation + auto-save work normally. TUI shows `✓ Saved · pushed` |
 | No chain found in session | Switch to Quick mode: "Describe a pattern to archive" |
 | Session too short (<4 turns) | Suggest Quick mode |
 | Similar pattern exists | AskUserQuestion: update existing or create new? |

@@ -245,7 +245,7 @@ options:
   - label: "Just memory"
     description: "Tracked in the knowledge graph, visible on /activity"
   - label: "egregore"
-    description: "(coming soon — Phase B)" OR "Sent to Egregore maintainers (sanitized)" if bin/issue.sh exists
+    description: "Sent to Egregore maintainers (sanitized)"
   - label: "{github_org}/egregore-core"
     description: "Filed on the org's fork"
   - (for each repo in .repos[]):
@@ -336,19 +336,6 @@ No external action. Issue lives in the graph and memory. Skip to Step 5.
 
 ### "egregore" → Sanitize + Send Upstream
 
-**Phase B gate**: Check if `bin/issue.sh` exists.
-
-If `bin/issue.sh` does NOT exist:
-```
-Egregore upstream reporting is coming in Phase B.
-
-For now, your issue is saved locally. If urgent, you can share it
-manually — here's the sanitized body:
-```
-Then show the sanitized description (with replacements below applied) in a code block the user can copy. Skip to Step 5.
-
-If `bin/issue.sh` exists:
-
 **Sanitize** — replace before sending:
 
 | Pattern | Replacement |
@@ -362,15 +349,41 @@ If `bin/issue.sh` exists:
 
 **Show sanitized body to user.** They review and confirm or cancel.
 
-If confirmed:
+If confirmed, construct a report payload and submit via `bin/session-report.sh`:
 ```bash
-echo '$PAYLOAD_JSON' | bash bin/issue.sh report
+echo '{"report_type":"issue","topic":"$TITLE","summary":"$SANITIZED_DESCRIPTION","description":"$USER_DESCRIPTION","system_info":{"mode":"...","platform":"...","shell":"..."}}' \
+  | bash bin/session-report.sh submit 2>/dev/null
 ```
 
-Update local Neo4j node with `upstreamRef`:
+**Gate**: Check if `report_url` is configured in `egregore.json`. If not, show the sanitized body in a code block for manual sharing:
+```
+Report URL not configured. Here's the sanitized body you can share manually:
+```
+
+**GitHub issue (ask each time)**:
+
+If `gh auth status` succeeds, AskUserQuestion:
+```
+header: "GitHub"
+question: "Also create a GitHub issue on Curve-Labs/egregore-core?"
+options:
+  - label: "Yes, create issue"
+    description: "Public issue with sanitized content"
+  - label: "No"
+    description: "Report submitted to Supabase only"
+```
+
+If yes:
+```bash
+gh issue create --repo Curve-Labs/egregore-core \
+  --title "$TITLE" \
+  --body "$SANITIZED_BODY"
+```
+
+Capture the returned URL. Update local Neo4j node:
 ```cypher
 MATCH (i:Issue {id: $id})
-SET i.upstreamRef = $ref
+SET i.github_url = $url, i.upstreamRef = $url
 RETURN i.id
 ```
 
@@ -487,9 +500,10 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Title: {title}                                                      │
-│  For: egregore maintainers · triage #{ref}                           │
+│  For: egregore maintainers                                           │
 │                                                                      │
 │  ✓ Sent upstream (sanitized) · saved to memory · graphed             │
+│  ✓ GitHub #N (if created)                                            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -580,13 +594,10 @@ This looks like an egregore-core issue. File it on acme-org/egregore-core?
 ```
 > /issue egregore: /save fails silently when graph is offline
 
-  [1/2] ✓ Issue saved to memory + graph
+  [1/4] ✓ Issue saved to memory + graph
         → memory/knowledge/issues/2026-02-09-save-fails-silently.md
 
-Egregore upstream reporting is coming in Phase B.
-
-For now, your issue is saved locally. If urgent, you can share it
-manually — here's the sanitized body:
+Here's the sanitized version that will be sent:
 
     Title: /save fails silently when graph is offline
     Description: /save fails silently when [github-org] graph is offline.
@@ -594,16 +605,31 @@ manually — here's the sanitized body:
     Branch: dev/[person-1]/2026-02-09-session
     Graph: connected
 
-  [2/2] ✓ Auto-saved
+Send this to Egregore maintainers?
+  1. Yes, send it
+  2. Cancel
+
+> 1
+
+  [2/4] ✓ Sent upstream (sanitized)
+
+Also create a GitHub issue on Curve-Labs/egregore-core?
+  1. Yes, create issue
+  2. No
+
+> 2
+
+  [3/4] ✓ Team notified
+  [4/4] ✓ Auto-saved
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ✱ ISSUE CAPTURED                                bob · Feb 09       │
+│  ✱ ISSUE REPORTED                                bob · Feb 09       │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  Title: /save fails silently when graph is offline                   │
-│  For: egregore (local — upstream coming soon)                        │
+│  For: egregore maintainers                                           │
 │                                                                      │
-│  ✓ Saved to memory · graphed                                         │
+│  ✓ Sent upstream (sanitized) · saved to memory · graphed             │
 │  → memory/knowledge/issues/2026-02-09-save-fails-silently.md         │
 └──────────────────────────────────────────────────────────────────────┘
 ```

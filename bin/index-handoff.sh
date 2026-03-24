@@ -10,6 +10,25 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: index-handoff.sh <handoff-file-path>"
+  echo ""
+  echo "Index a single handoff file into the Neo4j graph."
+  echo "Parses metadata (author, date, topic, recipients) from"
+  echo "markdown headers or YAML front matter, creates Session"
+  echo "and relationship nodes, and auto-resolves old handoffs."
+  echo ""
+  echo "Returns: {\"sessionId\":\"...\",\"resolved\":N}"
+  exit 0
+fi
+
+# --- Local mode gate: bail immediately ---
+_MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+if [ "$_MODE" = "local" ]; then
+  echo '{"sessionId":"","resolved":0,"mode":"local"}'
+  exit 0
+fi
+
 # --- Validate input ---
 FILE_ARG="${1:?Usage: index-handoff.sh <handoff-file-path>}"
 
@@ -120,7 +139,7 @@ SUMMARY="$(echo "$CONTENT" | awk '/^## Session Summary/{found=1; next} found && 
 
 # Q1: MERGE Session + relationships
 HANDED_TO_CYPHER=""
-RECIPIENT_PARAMS=""
+_RECIP_ARGS=()
 if [ -n "$RECIPIENTS_RAW" ]; then
   IFS=',' read -ra RECIPS <<< "$RECIPIENTS_RAW"
   for i in "${!RECIPS[@]}"; do
@@ -132,12 +151,12 @@ OPTIONAL MATCH (r${i}:Person) WHERE toLower(r${i}.name) = \$recipient${i} OR r${
 FOREACH (_ IN CASE WHEN r${i} IS NOT NULL THEN [1] ELSE [] END |
   MERGE (s)-[:HANDED_TO]->(r${i})
 )"
-    RECIPIENT_PARAMS="${RECIPIENT_PARAMS}, \"recipient${i}\": \"${R}\""
+    _RECIP_ARGS+=("--arg" "recipient${i}" "$R")
   done
 fi
 
 PROJECT_CYPHER=""
-PROJECT_PARAM=""
+_PROJECT_ARGS=()
 if [ -n "$PROJECT" ]; then
   PROJECT_CYPHER="
 WITH s
@@ -145,7 +164,7 @@ OPTIONAL MATCH (proj:Project) WHERE toLower(proj.name) = toLower(\$project)
 FOREACH (_ IN CASE WHEN proj IS NOT NULL THEN [1] ELSE [] END |
   MERGE (s)-[:ABOUT]->(proj)
 )"
-  PROJECT_PARAM=", \"project\": \"${PROJECT}\""
+  _PROJECT_ARGS=("--arg" "project" "$PROJECT")
 fi
 
 Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
@@ -155,7 +174,16 @@ ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath
 MERGE (s)-[:BY]->(p)${PROJECT_CYPHER}${HANDED_TO_CYPHER}
 RETURN s.id AS sessionId"
 
-Q1_PARAMS="{\"sessionId\": \"${SESSION_ID}\", \"author\": \"${AUTHOR_HANDLE}\", \"date\": \"${DATE}\", \"topic\": $(printf '%s' "$TOPIC" | jq -Rs .), \"summary\": $(printf '%s' "$SUMMARY" | jq -Rs .), \"filePath\": \"${REL_PATH}\"${PROJECT_PARAM}${RECIPIENT_PARAMS}}"
+Q1_PARAMS=$(jq -n \
+  --arg sessionId "$SESSION_ID" \
+  --arg author "$AUTHOR_HANDLE" \
+  --arg date "$DATE" \
+  --arg topic "$TOPIC" \
+  --arg summary "$SUMMARY" \
+  --arg filePath "$REL_PATH" \
+  "${_PROJECT_ARGS[@]}" \
+  "${_RECIP_ARGS[@]}" \
+  '$ARGS.named')
 
 # Q2: Auto-resolve old read handoffs from this author
 Q2_CYPHER="MATCH (s:Session)-[:HANDED_TO]->(p:Person) WHERE (toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author) AND s.handoffStatus = 'read' AND s.id <> \$sessionId
@@ -166,7 +194,8 @@ WITH s, count(later) AS laterSessions WHERE laterSessions > 0
 SET s.handoffStatus = 'done'
 RETURN count(s) AS resolved"
 
-Q2_PARAMS="{\"author\": \"${AUTHOR_HANDLE}\", \"sessionId\": \"${SESSION_ID}\"}"
+Q2_PARAMS=$(jq -n --arg author "$AUTHOR_HANDLE" --arg sessionId "$SESSION_ID" \
+  '{author: $author, sessionId: $sessionId}')
 
 # --- Build batch request ---
 BATCH_JSON=$(jq -n \
@@ -188,10 +217,11 @@ CURRENT_SID=$(cat "$HOME/.egregore/session-${PROJ_HASH}.id" 2>/dev/null || echo 
 if [ -n "$CURRENT_SID" ]; then
   bash "$SCRIPT_DIR/bin/graph.sh" query \
     "MATCH (s:Session {id: \$sid}) SET s.status = 'handed_off' RETURN s.id" \
-    "{\"sid\":\"$CURRENT_SID\"}" 2>/dev/null || true
+    "$(jq -n --arg sid "$CURRENT_SID" '{sid: $sid}')" 2>/dev/null || true
 fi
 
 # --- Parse response ---
 RESOLVED=$(echo "$RESPONSE" | jq -r '.results[1].values[0][0] // 0' 2>/dev/null || echo "0")
 
-echo "{\"sessionId\":\"${SESSION_ID}\",\"resolved\":${RESOLVED}}"
+jq -n --arg sessionId "$SESSION_ID" --argjson resolved "$RESOLVED" \
+  '{sessionId: $sessionId, resolved: $resolved}'

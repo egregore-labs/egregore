@@ -5,10 +5,25 @@
 # Usage:
 #   bash bin/worktree.sh setup <worktree-path> <main-project-dir>
 #   bash bin/worktree.sh cleanup <worktree-path>
-#   bash bin/worktree.sh cleanup-orphans <main-project-dir>
+#   bash bin/worktree.sh cleanup-stale <main-project-dir>
+#   bash bin/worktree.sh health [path]
 #   bash bin/worktree.sh list
 
 set -o pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: worktree.sh <command> [args...]"
+  echo ""
+  echo "Worktree lifecycle management for Egregore sessions."
+  echo ""
+  echo "Commands:"
+  echo "  setup <path> <main-dir>         Set up symlinks for a new worktree"
+  echo "  cleanup <path>                  Remove a worktree"
+  echo "  cleanup-stale <main-dir>        List stale worktrees (manual review)"
+  echo "  health [path]                   Check worktree + branch health"
+  echo "  list                            List all git worktrees"
+  exit 0
+fi
 
 CMD="${1:-}"
 shift 2>/dev/null || true
@@ -16,81 +31,49 @@ shift 2>/dev/null || true
 case "$CMD" in
 
   setup)
-    # Setup symlinks so worktree shares state with main project
+    # Setup symlinks so worktree shares state with main project.
     # Args: <worktree-path> <main-project-dir>
     WT_PATH="${1:?Usage: worktree.sh setup <worktree-path> <main-project-dir>}"
     MAIN_DIR="${2:?Usage: worktree.sh setup <worktree-path> <main-project-dir>}"
 
-    # Resolve main project's memory symlink target (absolute path)
-    if [ -L "$MAIN_DIR/memory" ]; then
-      MEMORY_TARGET=$(realpath "$MAIN_DIR/memory" 2>/dev/null)
-      if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
-        ln -sfn "$MEMORY_TARGET" "$WT_PATH/memory"
+    # Symlink shared files from main project
+    for FILE in memory .env .egregore-state.json .egregore-session-id; do
+      SRC="$MAIN_DIR/$FILE"
+      DST="$WT_PATH/$FILE"
+      if [ "$FILE" = "memory" ]; then
+        # Follow the symlink to get absolute path
+        [ -L "$SRC" ] || continue
+        SRC=$(realpath "$SRC" 2>/dev/null) || continue
+        [ -d "$SRC" ] || continue
+      else
+        [ -f "$SRC" ] || continue
       fi
-    fi
+      ln -sfn "$SRC" "$DST"
+    done
 
-    # Symlink .env
-    if [ -f "$MAIN_DIR/.env" ]; then
-      ln -sfn "$MAIN_DIR/.env" "$WT_PATH/.env"
-    fi
-
-    # Symlink .egregore-state.json
-    if [ -f "$MAIN_DIR/.egregore-state.json" ]; then
-      ln -sfn "$MAIN_DIR/.egregore-state.json" "$WT_PATH/.egregore-state.json"
-    fi
-
-    # Symlink .egregore-session-id
-    if [ -f "$MAIN_DIR/.egregore-session-id" ]; then
-      ln -sfn "$MAIN_DIR/.egregore-session-id" "$WT_PATH/.egregore-session-id"
-    fi
-
-    # Symlink egregore.json (needed by bin/ scripts)
+    # Symlink egregore.json if not already present (committed file)
     if [ -f "$MAIN_DIR/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ]; then
       ln -sfn "$MAIN_DIR/egregore.json" "$WT_PATH/egregore.json"
     fi
 
-    # Walk up process tree to find:
-    #   1. Claude Code PID (long-lived) for orphan detection
-    #   2. Terminal TTY (unique per tab) for statusline matching
-    #
-    # BUG FIX: $$ is this script's PID — dies immediately when setup
-    # finishes. cleanup-orphans then sees it as dead and deletes the
-    # worktree from under a live session. We need the Claude Code
-    # process PID (node), which lives as long as the session does.
+    # Find terminal TTY for statusline matching
     _pid=$$
-    _cc_pid=""
     _tty=""
     while [ "$_pid" -gt 1 ] 2>/dev/null; do
-      # Check if this ancestor is Claude Code (node process)
-      if [ -z "$_cc_pid" ]; then
-        _cmd=$(ps -o comm= -p "$_pid" 2>/dev/null | tr -d ' ')
-        case "$_cmd" in
-          node|claude) _cc_pid="$_pid" ;;
-        esac
+      _ptty=$(ps -o tty= -p "$_pid" 2>/dev/null | tr -d ' ')
+      if [ -n "$_ptty" ] && [ "$_ptty" != "??" ]; then
+        _tty="$_ptty"
+        break
       fi
-      # Find first ancestor with a real TTY
-      if [ -z "$_tty" ]; then
-        _ptty=$(ps -o tty= -p "$_pid" 2>/dev/null | tr -d ' ')
-        if [ -n "$_ptty" ] && [ "$_ptty" != "??" ]; then
-          _tty="$_ptty"
-        fi
-      fi
-      # Stop if we have both
-      [ -n "$_cc_pid" ] && [ -n "$_tty" ] && break
       _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
     done
-
-    # Write PID marker for orphan detection (Claude Code PID, not script PID)
-    echo "${_cc_pid:-$$}" > "$WT_PATH/.egregore-worktree-pid"
-
-    # Write TTY marker so statusline can match session → worktree
     [ -n "$_tty" ] && echo "$_tty" > "$WT_PATH/.egregore-worktree-tty"
 
     echo "Worktree setup complete: $WT_PATH"
     ;;
 
   cleanup)
-    # Remove a worktree
+    # Remove a worktree. Only called explicitly (ExitWorktree or manual).
     # Args: <worktree-path>
     WT_PATH="${1:?Usage: worktree.sh cleanup <worktree-path>}"
 
@@ -104,121 +87,76 @@ case "$CMD" in
       fi
     fi
 
-    # Remove the worktree
     git worktree remove "$WT_PATH" --force 2>/dev/null || true
     git worktree prune 2>/dev/null || true
 
     echo "Worktree cleaned up: $WT_PATH"
     ;;
 
-  cleanup-orphans)
-    # Find and clean worktrees with dead PIDs — CONSERVATIVE.
-    # Only deletes worktrees that are:
-    #   1. Older than 1 hour (prevents race with newly-created worktrees)
-    #   2. Have a dead stored PID
-    #   3. Have no active claude/node process with CWD inside the worktree
+  cleanup-stale)
+    # List stale worktrees for manual review. Does NOT auto-delete.
+    # Run interactively or from a cleanup command — never from session-start.
     # Args: <main-project-dir>
-    MAIN_DIR="${1:?Usage: worktree.sh cleanup-orphans <main-project-dir>}"
+    MAIN_DIR="${1:?Usage: worktree.sh cleanup-stale <main-project-dir>}"
     WT_BASE="$MAIN_DIR/.claude/worktrees"
 
     if [ ! -d "$WT_BASE" ]; then
+      echo "No worktrees directory."
       exit 0
     fi
 
-    # Lock: prevent concurrent cleanup runs (race between parallel sessions)
-    LOCK_FILE="/tmp/egregore-cleanup-$(echo -n "$MAIN_DIR" | md5 2>/dev/null || echo -n "$MAIN_DIR" | md5sum 2>/dev/null | cut -d' ' -f1).lock"
-    if [ -f "$LOCK_FILE" ]; then
-      # Check if lock is stale (>10 min old)
-      LOCK_AGE=0
-      LOCK_MTIME=$(stat -f %m "$LOCK_FILE" 2>/dev/null || stat -c %Y "$LOCK_FILE" 2>/dev/null || echo "0")
-      NOW_TS=$(date +%s)
-      LOCK_AGE=$((NOW_TS - LOCK_MTIME))
-      if [ "$LOCK_AGE" -lt 600 ] 2>/dev/null; then
-        exit 0  # Another cleanup is running
-      fi
-    fi
-    echo $$ > "$LOCK_FILE" 2>/dev/null || true
-    trap 'rm -f "$LOCK_FILE" 2>/dev/null' EXIT
-
-    # Helper: check if any claude/node process has CWD inside a directory
-    has_active_session() {
-      local dir="$1"
-      # macOS: use lsof to find processes with CWD in this dir
-      # Linux: check /proc/*/cwd
-      if command -v lsof &>/dev/null; then
-        lsof +d "$dir" 2>/dev/null | grep -qE 'node|claude' && return 0
-      fi
-      # Fallback: check if any node/claude process lists this dir in its environment
-      for pid in $(pgrep -x "node\|claude" 2>/dev/null); do
-        local cwd
-        cwd=$(lsof -p "$pid" -Fn 2>/dev/null | grep '^n.*'"$dir" | head -1) || true
-        if [ -n "$cwd" ]; then
-          return 0
-        fi
-      done
-      return 1
-    }
-
     NOW_TS=$(date +%s)
-    MIN_AGE=3600  # 1 hour
+    FOUND=0
 
-    CLEANED=0
     for WT_DIR in "$WT_BASE"/*/; do
       [ -d "$WT_DIR" ] || continue
 
-      # Safety: skip worktrees younger than MIN_AGE
-      WT_MTIME=$(stat -f %m "$WT_DIR" 2>/dev/null || stat -c %Y "$WT_DIR" 2>/dev/null || echo "$NOW_TS")
-      WT_AGE=$((NOW_TS - WT_MTIME))
-      if [ "$WT_AGE" -lt "$MIN_AGE" ] 2>/dev/null; then
-        continue
+      WT_NAME=$(basename "$WT_DIR")
+      WT_BRANCH=""
+      STATUS="unknown"
+
+      if [ -f "$WT_DIR/.git" ]; then
+        WT_BRANCH=$(git -C "$WT_DIR" branch --show-current 2>/dev/null || echo "?")
+
+        # Check if merged
+        if [ "$WT_BRANCH" != "?" ] && [ "$WT_BRANCH" != "develop" ] && [ "$WT_BRANCH" != "main" ]; then
+          if git merge-base --is-ancestor "$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null)" \
+               "$(git -C "$MAIN_DIR" rev-parse origin/develop 2>/dev/null)" 2>/dev/null; then
+            STATUS="merged"
+          else
+            STATUS="active"
+          fi
+        fi
+      else
+        STATUS="broken"
       fi
 
-      PID_FILE="$WT_DIR/.egregore-worktree-pid"
+      # Age
+      WT_MTIME=$(stat -f %m "$WT_DIR" 2>/dev/null || stat -c %Y "$WT_DIR" 2>/dev/null || echo "$NOW_TS")
+      WT_AGE_H=$(( (NOW_TS - WT_MTIME) / 3600 ))
 
-      if [ -f "$PID_FILE" ]; then
-        STORED_PID=$(cat "$PID_FILE" 2>/dev/null)
-        if [ -n "$STORED_PID" ] && kill -0 "$STORED_PID" 2>/dev/null; then
-          continue  # PID alive — skip
-        fi
-        # PID is dead — but double-check no active session has CWD here
-        if has_active_session "$WT_DIR"; then
-          continue  # Active session detected — skip
-        fi
-        # Safe to clean
-        bash "$0" cleanup "$WT_DIR" 2>/dev/null || true
-        CLEANED=$((CLEANED + 1))
-      else
-        # No PID file — only clean if truly stale (no .git file AND old)
-        if [ ! -f "$WT_DIR/.git" ]; then
-          rm -rf "$WT_DIR" 2>/dev/null || true
-          CLEANED=$((CLEANED + 1))
-        fi
+      if [ "$STATUS" = "merged" ] || [ "$STATUS" = "broken" ] || [ "$WT_AGE_H" -gt 24 ]; then
+        echo "  $WT_NAME  [$STATUS]  ${WT_AGE_H}h old  branch: ${WT_BRANCH:-none}"
+        FOUND=$((FOUND + 1))
       fi
     done
 
-    # Also clean stale entries from instance registry
-    REGISTRY="$HOME/.egregore/instances.json"
-    if [ -f "$REGISTRY" ]; then
-      jq --arg prefix "$WT_BASE" \
-        '[.[] | select((.path | startswith($prefix)) | not)]' \
-        "$REGISTRY" > "$REGISTRY.tmp" 2>/dev/null && mv "$REGISTRY.tmp" "$REGISTRY"
+    if [ "$FOUND" -eq 0 ]; then
+      echo "No stale worktrees found."
+    else
+      echo ""
+      echo "To remove: bash bin/worktree.sh cleanup <path>"
     fi
 
-    # Prune git's worktree list
+    # Prune git's internal worktree list
     git -C "$MAIN_DIR" worktree prune 2>/dev/null || true
-
-    if [ "$CLEANED" -gt 0 ]; then
-      echo "Cleaned $CLEANED orphaned worktree(s)"
-    fi
     ;;
 
   health)
     # Check worktree + branch health
-    # Args: [worktree-path-or-cwd]
     # Exit codes: 0=healthy, 1=not_worktree, 2=branch_gone, 3=protected_branch
     WT_PATH="${1:-$(pwd)}"
 
-    # Not a worktree?
     if [ ! -f "$WT_PATH/.git" ]; then
       echo '{"status":"not_worktree"}'
       exit 1
@@ -226,10 +164,9 @@ case "$CMD" in
 
     BRANCH=$(git -C "$WT_PATH" branch --show-current 2>/dev/null || echo "")
 
-    # On a protected branch?
     case "$BRANCH" in
       develop|main|master)
-        echo "{\"status\":\"protected_branch\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "protected_branch", branch: $branch}'
         exit 3
         ;;
     esac
@@ -237,16 +174,15 @@ case "$CMD" in
     # Check if remote branch still exists
     git -C "$WT_PATH" fetch origin --prune --quiet 2>/dev/null || true
     if ! git -C "$WT_PATH" ls-remote --heads origin "$BRANCH" 2>/dev/null | grep -q "$BRANCH"; then
-      # Was it merged into develop?
       if git -C "$WT_PATH" branch -r --merged origin/develop 2>/dev/null | grep -q "origin/$BRANCH" 2>/dev/null; then
-        echo "{\"status\":\"merged\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "merged", branch: $branch}'
       else
-        echo "{\"status\":\"remote_deleted\",\"branch\":\"$BRANCH\"}"
+        jq -n --arg branch "$BRANCH" '{status: "remote_deleted", branch: $branch}'
       fi
       exit 2
     fi
 
-    echo "{\"status\":\"healthy\",\"branch\":\"$BRANCH\"}"
+    jq -n --arg branch "$BRANCH" '{status: "healthy", branch: $branch}'
     exit 0
     ;;
 
@@ -255,7 +191,7 @@ case "$CMD" in
     ;;
 
   *)
-    echo "Usage: worktree.sh {setup|cleanup|cleanup-orphans|health|list}" >&2
+    echo "Usage: worktree.sh {setup|cleanup|cleanup-stale|health|list}" >&2
     exit 1
     ;;
 esac

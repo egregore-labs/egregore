@@ -13,6 +13,20 @@ set -euo pipefail
 #   delta     Compare current metrics against saved baseline.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: graph-witness.sh [mode]"
+  echo ""
+  echo "Read-only quality evaluator for the knowledge graph."
+  echo "Measures structural health without modifying anything."
+  echo ""
+  echo "Modes:"
+  echo "  report    Full quality report as JSON (default)"
+  echo "  baseline  Save current metrics for delta comparison"
+  echo "  delta     Compare current metrics against saved baseline"
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 BASELINE_FILE="$SCRIPT_DIR/.witness-baseline.json"

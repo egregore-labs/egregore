@@ -183,7 +183,9 @@ Generate 2-4 options by reasoning over ALL available data. There is no fixed pri
 - Handoffs with status `done` are excluded from options entirely.
 - Handoffs with status `read` are lower priority than `pending` but not excluded — the user may want to revisit.
 
-### Recording the selection
+### Recording the selection — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run `bin/graph-op.sh` or show "Remembering..." indicator. Proceed directly to the action.
 
 After the user selects, record what happened for future sessions:
 
@@ -204,7 +206,7 @@ This runs silently — do not show output. Proceed immediately to the action.
 
 | Selection | Action |
 |-----------|--------|
-| Handoff | Read filePath from data. Display content + entry points. **Immediately** mark as read: output `  ✦ Remembering...` then run `bash bin/graph-op.sh mark-read $sessionId`. Then proceed — no follow-up question. Resolution happens automatically at next dashboard load (Q_resolve) or via `/activity done N`. |
+| Handoff | Read filePath from data. Display content + entry points. **Connected mode only:** mark as read: output `  ✦ Remembering...` then run `bash bin/graph-op.sh mark-read $sessionId`. **In local mode:** skip the mark-read call and the indicator — just display the content. Then proceed — no follow-up question. |
 | Questions | Load QuestionSet, present via AskUserQuestion. |
 | Work stream | Read most recent handoff from cluster. Show Open Threads / Next Steps. Mention relevant knowledge artifacts. |
 | PR | `gh pr view #N --json title,body,additions,deletions,files`. Summarize. |
@@ -214,13 +216,14 @@ This runs silently — do not show output. Proceed immediately to the action.
 
 - `/activity quests` — expand quests, show all with full counts
 - `/activity @name` — filter to that person's sessions
-- `/activity done [N]` — resolve handoff N. Fetch activity data, map Nth ●/◐ handoff to sessionId. Output `  ✦ Resolving...` then run `bash bin/graph-op.sh mark-done $sessionId`. Output: `✓ Resolved: {topic} from {author}`
+- `/activity done [N]` — resolve handoff N. Fetch activity data, map Nth ●/◐ handoff to sessionId. **Connected mode:** Output `  ✦ Resolving...` then run `bash bin/graph-op.sh mark-done $sessionId`. Output: `✓ Resolved: {topic} from {author}`. **Local mode:** Show `Handoff resolution requires connected mode — handoffs are tracked in memory/handoffs/`.
 - `/activity analytics` — Run `bash bin/analytics-data.sh` instead of the normal data script. Render full org health using all 10 metrics (cadence, resolution, quest velocity, collaboration density, todo health, throughput, capture ratio, question response, check-in frequency, issue lifecycle). Same TUI box, 72-char frame. Model decides layout — no rigid template. Group metrics by theme (velocity, collaboration, health). Highlight notable patterns, comparisons between people, and week-over-week changes.
 
 ## Rules
 
 - `bash bin/activity-data.sh` for ALL data — never call graph.sh directly for reads
-- Use `bash bin/graph-op.sh <operation>` for all graph writes (mark-read, mark-done, etc.) — never raw Cypher
-- Before any graph write, output a thinking indicator: `  ✦ Remembering...` or `  ✦ Resolving...`
+- Use `bash bin/graph-op.sh <operation>` for all graph writes (mark-read, mark-done, etc.) — never raw Cypher — **connected mode only**
+- Before any graph write, output a thinking indicator: `  ✦ Remembering...` or `  ✦ Resolving...` — **connected mode only**
+- **In local mode:** do NOT run any `bin/graph-op.sh` calls or show thinking indicators. All graph write operations are skipped silently.
 - No sub-boxes — only outer frame `│` and `├────┤` separators
 - DO NOT output reasoning, character counting, or analysis — render directly

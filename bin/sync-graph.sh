@@ -6,6 +6,19 @@ set -euo pipefail
 # Returns: {"sessions":N,"artifacts":N,"quests":N,"resolved":N}
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: sync-graph.sh"
+  echo ""
+  echo "Sync all missing nodes from memory files into Neo4j."
+  echo "Scans handoffs, wraps, knowledge files, and quests,"
+  echo "then creates any nodes not already in the graph."
+  echo "Also auto-resolves read handoffs."
+  echo ""
+  echo "Returns: {\"sessions\":N,\"artifacts\":N,\"quests\":N,\"resolved\":N}"
+  exit 0
+fi
+
 MEMORY="$SCRIPT_DIR/memory"
 
 if [ ! -d "$MEMORY" ] && [ ! -L "$MEMORY" ]; then
@@ -20,8 +33,10 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
 if [ -f "$SCRIPT_DIR/.env" ]; then
-  set -a; source "$SCRIPT_DIR/.env"; set +a
+  EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+  EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
 API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
@@ -60,9 +75,22 @@ id_exists() {
 }
 
 # Helper: parse YAML front matter value
+# Handles quoted values with colons, preserves whitespace
 yaml_val() {
   local file="$1" key="$2"
-  sed -n '/^---$/,/^---$/p' "$file" 2>/dev/null | grep -m1 "^${key}:" 2>/dev/null | sed "s/^${key}:[[:space:]]*//" | sed 's/^"//' | sed 's/"$//' | xargs 2>/dev/null || true
+  awk -v k="$key" '
+    /^---$/ { fm++; next }
+    fm == 1 && $0 ~ "^"k":" {
+      val = $0
+      sub("^"k":[ \t]*", "", val)
+      # Strip surrounding quotes (single or double)
+      if (val ~ /^".*"$/) { val = substr(val, 2, length(val)-2) }
+      else if (val ~ /^'"'"'.*'"'"'$/) { val = substr(val, 2, length(val)-2) }
+      print val
+      exit
+    }
+    fm >= 2 { exit }
+  ' "$file" 2>/dev/null || true
 }
 
 # Helper: parse markdown header value (e.g. **Key**: Value)
@@ -299,7 +327,7 @@ RESOLVE_RESULT=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
    WITH s, count(later) AS laterSessions WHERE laterSessions > 0
    SET s.handoffStatus = 'done'
    RETURN count(s) AS resolved" \
-  "{\"me\": \"$ME\"}" 2>/dev/null) || true
+  "$(jq -n --arg me "$ME" '{me: $me}')" 2>/dev/null) || true
 
 EXTRA_RESOLVED=$(echo "$RESOLVE_RESULT" | jq -r '.values[0][0] // 0' 2>/dev/null || echo "0")
 RESOLVED=$((RESOLVED + EXTRA_RESOLVED))
@@ -316,4 +344,6 @@ bash "$SCRIPT_DIR/bin/graph.sh" query \
   '{}' >/dev/null 2>&1 || true
 
 # --- Output ---
-echo "{\"sessions\":${SESSIONS},\"artifacts\":${ARTIFACTS},\"quests\":${QUESTS},\"resolved\":${RESOLVED}}"
+jq -n --argjson sessions "$SESSIONS" --argjson artifacts "$ARTIFACTS" \
+  --argjson quests "$QUESTS" --argjson resolved "$RESOLVED" \
+  '{sessions: $sessions, artifacts: $artifacts, quests: $quests, resolved: $resolved}'

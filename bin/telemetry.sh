@@ -27,6 +27,32 @@ CONFIG="$SCRIPT_DIR/egregore.json"
 ENV_FILE="$SCRIPT_DIR/.env"
 MAX_BUFFER_BYTES=1048576  # 1MB
 MAX_EVENTS_AFTER_TRUNCATE=500
+LOCK_DIR="$BUFFER_DIR/telemetry.lock"
+
+# --- Cross-platform file locking via mkdir (atomic on all POSIX systems) ---
+_lock() {
+  local attempts=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -gt 50 ]; then
+      local holder_pid
+      holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+      if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
+        rm -rf "$LOCK_DIR" 2>/dev/null
+        continue
+      fi
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo $$ > "$LOCK_DIR/pid" 2>/dev/null
+}
+
+_unlock() {
+  rm -rf "$LOCK_DIR" 2>/dev/null
+}
+
+trap '_unlock' EXIT
 
 # --- Consent check (fast path) ---
 _check_consent() {
@@ -110,12 +136,16 @@ cmd_emit() {
   # Ensure buffer directory exists
   mkdir -p "$BUFFER_DIR"
 
-  # Build event JSON and append (single printf, O(1) append, no network)
+  # Build event line (outside lock for minimal hold time)
   local ts
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}\n' \
-    "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$data" \
-    >> "$BUFFER_FILE"
+  local line
+  line=$(printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}' \
+    "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$data")
+
+  # Append under lock
+  _lock || { echo "$line" >> "$BUFFER_FILE" 2>/dev/null; return 0; }
+  echo "$line" >> "$BUFFER_FILE"
 
   # Buffer guard: if file exceeds max size, truncate to last N events
   if [ -f "$BUFFER_FILE" ]; then
@@ -128,6 +158,7 @@ cmd_emit() {
         || rm -f "$tmp"
     fi
   fi
+  _unlock
 }
 
 # --- flush: send buffered events to API ---
@@ -150,9 +181,11 @@ cmd_flush() {
     return 0
   fi
 
-  # Atomic rotate: move buffer to temp file so new events can keep writing
+  # Atomic rotate under lock: move buffer so new events can keep writing
+  _lock || return 0
   local flush_file="$BUFFER_FILE.flush.$$"
-  mv "$BUFFER_FILE" "$flush_file" 2>/dev/null || return 0
+  mv "$BUFFER_FILE" "$flush_file" 2>/dev/null || { _unlock; return 0; }
+  _unlock
 
   # POST to API
   local response
@@ -168,7 +201,8 @@ cmd_flush() {
     # Success — remove flush file
     rm -f "$flush_file"
   else
-    # Failure — move events back so they aren't lost
+    # Failure — move events back so they aren't lost (under lock to prevent races)
+    _lock || { mv "$flush_file" "$BUFFER_FILE" 2>/dev/null || true; return 1; }
     if [ -f "$BUFFER_FILE" ]; then
       # New events were written while we were flushing; prepend old events
       cat "$flush_file" "$BUFFER_FILE" > "$BUFFER_FILE.merge.$$" 2>/dev/null \
@@ -178,6 +212,7 @@ cmd_flush() {
     else
       mv "$flush_file" "$BUFFER_FILE" 2>/dev/null || true
     fi
+    _unlock
   fi
 }
 

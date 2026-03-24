@@ -46,11 +46,20 @@ Priority values: `0` (none/default), `1` (low), `2` (medium), `3` (high). Used b
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls. Create quest file in `memory/quests/`, update `memory/quests/index.md`, commit, push. No graph node creation, no notifications. Quest management works entirely from filesystem.
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "Recording in knowledge graph", Neo4j, etc.). Create quest file in `memory/quests/`, update `memory/quests/index.md`, commit, push. No graph node creation, no notifications. Quest management works entirely from filesystem.
+
+Specifically in local mode:
+- `/quest new`: Skip the Neo4j Quest creation section below. Show `✓ Quest saved to memory/quests/{slug}.md` (not "Quest node created").
+- `/quest pause`/`complete`: Skip the Neo4j status update. Only update the quest markdown frontmatter.
+- `/quest prioritize`: Skip the Neo4j priority update. Only update the quest markdown frontmatter.
+- `/quest [name]` detail view: Skip the linked Todos graph query. Show quest details from the markdown file only. Omit the Todos section.
+- Notifications: Skip entirely — do not mention notifications.
 
 **Connected mode**: Full behavior including graph nodes and notifications as specified below.
 
-## Neo4j Quest creation (via bin/graph.sh, on `/quest new`)
+## Neo4j Quest creation (via bin/graph.sh, on `/quest new`) — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run these queries.
 
 Run with `bash bin/graph.sh query "..." '{"param": "value"}'`
 
@@ -73,7 +82,9 @@ CREATE (q)-[:RELATES_TO]->(proj)
 RETURN q.id
 ```
 
-## Neo4j status update (via bin/graph.sh, on `/quest pause` or `/quest complete`)
+## Neo4j status update (via bin/graph.sh, on `/quest pause` or `/quest complete`) — CONNECTED MODE ONLY
+
+**Skip this query in local mode.** Only update the quest markdown frontmatter.
 
 ```cypher
 MATCH (q:Quest {id: $slug})
@@ -81,7 +92,9 @@ SET q.status = $status, q.completed = CASE WHEN $status = 'completed' THEN date(
 RETURN q.id, q.status
 ```
 
-## Neo4j priority update (via bin/graph.sh, on `/quest prioritize`)
+## Neo4j priority update (via bin/graph.sh, on `/quest prioritize`) — CONNECTED MODE ONLY
+
+**Skip this query in local mode.** Only update the quest markdown frontmatter.
 
 Maps: high=3, medium=2, low=1, none=0.
 
@@ -208,7 +221,9 @@ This applies to: `/quest new`, `/quest contribute`, `/quest pause`, `/quest comp
 
 If the push fails, warn the user: `Quest saved locally but push failed — run /save to retry.`
 
-## Notifications
+## Notifications — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run `bin/notify.sh` or mention notifications.
 
 When creating a quest that involves specific people, notify them:
 
@@ -226,7 +241,9 @@ Hey Bob, alice started a quest you're involved in: {title}
 "{question}"
 ```
 
-## Linked Todos (in detail view)
+## Linked Todos (in detail view) — CONNECTED MODE ONLY
+
+**Skip this entire section in local mode.** Do not run the linked todos query. Omit the Todos section from the detail view.
 
 When showing quest details (`/quest [name]`), query linked todos (all active statuses):
 

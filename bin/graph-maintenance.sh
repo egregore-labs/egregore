@@ -12,6 +12,22 @@ set -euo pipefail
 # Note: All queries use labeled node patterns (API requires org isolation).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  echo "Usage: graph-maintenance.sh <mode> [args...]"
+  echo ""
+  echo "Graph maintenance — scan for issues, fix safe ones, report health."
+  echo ""
+  echo "Modes:"
+  echo "  scan                  Detect issues (read-only, default)"
+  echo "  fix <pattern> [args]  Run auto-fixable repairs"
+  echo "  summary               Health metrics only (node/edge counts)"
+  echo ""
+  echo "Fix patterns: stale-handoffs, quest-decay, date-type-mix,"
+  echo "  disconnected-artifacts, duplicate-persons"
+  exit 0
+fi
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 GO="$SCRIPT_DIR/bin/graph-op.sh"
@@ -85,7 +101,8 @@ case "$MODE" in
         # Fix both Session.date and Artifact.created
         S_RESULT=$(bash "$GO" migrate-dates "Session" "date" 2>/dev/null || echo '{"error":"session migration failed"}')
         A_RESULT=$(bash "$GO" migrate-dates "Artifact" "created" 2>/dev/null || echo '{"error":"artifact migration failed"}')
-        echo "{\"sessions\": $S_RESULT, \"artifacts\": $A_RESULT}"
+        jq -n --argjson sessions "$S_RESULT" --argjson artifacts "$A_RESULT" \
+          '{sessions: $sessions, artifacts: $artifacts}'
         ;;
       disconnected-artifacts)
         AID="${1:?missing artifact-id}"

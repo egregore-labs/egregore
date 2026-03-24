@@ -35,10 +35,10 @@ if [ -n "$SESSION_ID" ]; then
     OBS_COUNT=$(wc -l < "$OBS_BUFFER" 2>/dev/null | tr -d ' ') || OBS_COUNT=0
 
     # Unique tools
-    OBS_UNIQUE_TOOLS=$(awk -F'"tool":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort -u | paste -sd', ' -) || true
+    OBS_UNIQUE_TOOLS=$(jq -r '.tool // empty' "$OBS_BUFFER" 2>/dev/null | sort -u | paste -sd', ' -) || true
 
     # Top 10 most-touched files (by frequency)
-    OBS_TOP_FILES=$(awk -F'"path":"' '{print $2}' "$OBS_BUFFER" | cut -d'"' -f1 | sort | uniq -c | sort -rn | head -10) || true
+    OBS_TOP_FILES=$(jq -r '.path // empty' "$OBS_BUFFER" 2>/dev/null | sort | uniq -c | sort -rn | head -10) || true
     OBS_UNIQUE_FILES=$(echo "$OBS_TOP_FILES" | grep -c '[^ ]' 2>/dev/null || echo "0")
   fi
 
