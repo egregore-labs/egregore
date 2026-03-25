@@ -2,7 +2,7 @@ Update local Egregore environment — sync framework from upstream and pull repo
 
 ## What to do
 
-1. **Sync framework from upstream** (Curve-Labs/egregore-core)
+1. **Sync framework from upstream** (egregore-labs/egregore)
 2. **Run `/pull`** (sync develop + memory)
 3. Show what changed
 
@@ -12,7 +12,7 @@ Egregore is a framework — updates come from upstream, not from your own repo's
 
 ```bash
 # Ensure upstream remote exists (no-op if already there)
-git remote add upstream https://github.com/Curve-Labs/egregore-core.git 2>/dev/null || true
+git remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/null || true
 
 # Fetch latest upstream
 git fetch upstream main --quiet

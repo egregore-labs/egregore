@@ -1,86 +1,78 @@
 Welcome a new user to this Egregore.
 
-Deterministic joiner state machine. Every state has explicit entry conditions, actions, exit conditions, and API calls. Execute states literally — no improvisation, no skipping, no reordering.
+Deterministic state machine: VERIFY → ORIENT → FIRST_TODO → FIRST_HANDOFF. Orient first, collect later — show what Egregore is before asking questions. Profile data collected progressively during real work.
 
 ## Output discipline — CRITICAL
 
-This is a conversation with a new user, not a CI pipeline. The user should see a smooth, friendly flow — not a stream of tool calls and logs.
+This is a conversation with a new user, not a CI pipeline.
 
 **Rules:**
-- **Batch all reads at once.** Before each state, read ALL files you'll need in a single parallel tool call. Never read files one at a time between user-facing messages.
-- **Batch all writes at once.** State file update + API call + any other writes = one parallel tool call group. Never interleave writes with user text.
-- **Suppress all command output.** Every bash call must use `2>/dev/null` or capture output to a variable. The user should NEVER see raw JSON, curl output, or git logs.
-- **No narration of internal steps.** Never say "Let me read the config file" or "Saving to state" or "Calling the API." Just do it silently between user-facing messages.
-- **Minimize visible tool calls.** The user sees each tool call as a UI element. Fewer calls = smoother experience. Combine bash commands with `&&`. Read multiple files in one parallel call.
-- **VERIFY should be invisible.** Do all 3 checks in one bash call. If everything passes, say nothing — go straight to WELCOME. Only speak if something fails.
-- **COMPLETE should feel instant.** Run all 7 sub-steps (egregore.md update, memory commit, graph MERGE, Supabase sync, state update, shell alias, telemetry) in 1-2 parallel bash calls. The user should see one message: "You're in."
+- **Batch all reads at once.** Before each state, read ALL files you'll need in a single parallel tool call.
+- **Batch all writes at once.** State file update + API call = one parallel tool call group.
+- **Suppress all command output.** Every bash call must use `2>/dev/null` or capture output.
+- **No narration of internal steps.** Never say "Let me read the config" or "Saving to state."
+- **VERIFY should be invisible.** All checks in one bash call. If everything passes, say nothing.
 
 **What the user should experience:**
-1. Welcome message (2-3 sentences)
-2. Name + role question
-3. Interest + style question
-4. Privacy choices
-5. Activity summary + "how do you want to start?"
+1. A framing of what Egregore is (2-3 sentences from egregore.md)
+2. "What are you working on?" → creates first todo + branch
+3. Name question (one AskUserQuestion)
+4. User works normally
+5. On session end: first handoff + role question
 6. "You're in."
 
-Six moments. Everything else is invisible plumbing.
+## Local mode gate (applies to ALL states)
 
-**State machine:**
-```
-VERIFY → WELCOME → HARVEST_IDENTITY → HARVEST_CONNECTION → CONSENT → ORIENT → COMPLETE
-```
+During VERIFY, check `api_url` from `egregore.json`. Store for entire flow.
 
-## Local mode gate (applies to ALL states below)
-
-During VERIFY, you will check `api_url` from `egregore.json`. Store the result for the entire flow.
-
-**If `api_url` is empty — this is local mode. For the ENTIRE onboarding flow:**
-- **DO NOT call `bin/graph.sh` under any circumstances.**
-- **DO NOT call `curl` or any HTTP endpoint.**
-- **DO NOT run any code block that contacts an API, Neo4j, or Supabase.**
-- The ONLY external calls allowed are `git` operations (push memory).
+**If `api_url` is empty — local mode:**
+- DO NOT call `bin/graph.sh` under any circumstances.
+- DO NOT call `curl` or any HTTP endpoint.
+- ONLY `git` operations are allowed.
 
 **If `api_url` is set — connected mode.** All API calls proceed normally.
-
-This is non-negotiable. Graph calls in local mode confuse the user and serve no purpose — `graph.sh` returns empty results anyway.
 
 ---
 
 ## Resumption
 
-Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY — jump directly to the saved phase and use any data already in state.
+Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY.
 
-If `onboarding_complete` is true, validate the people file before accepting it:
+**Migration from old 7-state machine:** If phase is `welcome`, `harvest_identity`, `harvest_connection`, or `consent`:
+```bash
+PHASE=$(jq -r '.onboarding.phase // empty' .egregore-state.json 2>/dev/null)
+case "$PHASE" in
+  welcome|harvest_identity|harvest_connection|consent)
+    # Migrate: preserve existing data, reset to new flow
+    jq '.onboarding.phase = "orient"' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+    # Build profile_fields_collected from existing state
+    FIELDS="[]"
+    [ "$(jq -r '.display_name // empty' .egregore-state.json)" ] && FIELDS=$(echo "$FIELDS" | jq '. + ["name"]')
+    jq --argjson f "$FIELDS" '.profile_fields_collected = $f' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+    ;;
+esac
+```
+Preserved from state: `display_name`, `name`, `github_username`, `github_name` — never re-asked.
 
+**If `onboarding_complete` is true:** Validate the people file:
 ```bash
 USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
 PEOPLE_FILE="memory/people/${USERNAME}.md"
-if [ -f "$PEOPLE_FILE" ]; then
-  # Check if file has real content (Role/Focus/Work style) vs invite stub
-  HAS_ROLE=$(grep -c '^Role:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
-  HAS_FOCUS=$(grep -c '^Focus:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
-  echo "valid:$(( HAS_ROLE > 0 && HAS_FOCUS > 0 ? 1 : 0 ))"
-else
-  echo "valid:0"
-fi
+HAS_ROLE=$(grep -c '^Role:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
 ```
+- `HAS_ROLE > 0` → "You're already set up. Run `/me` to update your profile." Stop.
+- `HAS_ROLE = 0` → reset `onboarding.phase = "first_todo"`, resume.
 
-- IF `valid:1` → say: "You're already set up. Run `/me` to update your profile, or just start working." Then stop.
-- IF `valid:0` → the people file is missing or still an invite stub. Reset state and resume:
-  ```bash
-  jq '.onboarding_complete = false | .onboarding.phase = "orient"' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
-  ```
-  Say: "Looks like setup didn't fully land last time — picking up where we left off." Then resume from ORIENT (harvest data is preserved in state).
+**If phase = `first_todo` (returning from dropped session):**
+Say: "Welcome back! Last time you were working on {context from git log/branch}. Before we continue — let's capture what you did last session." Then run FIRST_HANDOFF for the previous session's work.
 
 ---
 
 ## State: VERIFY
 
-**Entry:** `onboarding_complete` is false (or missing) in `.egregore-state.json`
+**Entry:** `onboarding_complete` is false (or missing)
 
-**Actions:**
-
-Run all checks in a single bash call — the user should see nothing if everything passes:
+**Actions:** Run all checks in a single bash call — invisible if everything passes:
 ```bash
 TOKEN=$(grep '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d'=' -f2-) && \
 APIKEY=$(grep '^EGREGORE_API_KEY=' .env 2>/dev/null | cut -d'=' -f2-) && \
@@ -90,352 +82,216 @@ ORG=$(jq -r '.org_name' egregore.json 2>/dev/null) && \
 echo "token:${TOKEN:+ok} apikey:${APIKEY:+ok} apiurl:${API_URL:+ok} memory:${SYMLINK} org:${ORG}"
 ```
 
-Read `egregore.json`, `egregore.md`, and `.egregore-state.json` in parallel (needed for WELCOME) — batch this with the check above so VERIFY and WELCOME file reads happen together.
+Also read `egregore.md` and `.egregore-state.json` in parallel (needed for ORIENT).
 
 **Exit conditions:**
-- IF all three checks pass → WELCOME
-- IF `GITHUB_TOKEN` missing → run `bash bin/github-auth.sh`, re-check. IF still missing → HALT: "GitHub auth failed. Run `bash bin/github-auth.sh` manually."
-- IF `EGREGORE_API_KEY` missing AND `api_url` is set → HALT: "Missing API key. Ask your team admin for it, then add `EGREGORE_API_KEY=ek_...` to `.env`."
-- IF `EGREGORE_API_KEY` missing AND `api_url` is empty → skip (local mode — no API needed)
-- IF `memory/` missing → run workspace setup:
-  ```bash
-  MEMORY_REPO="$(jq -r '.memory_repo' egregore.json)"
-  MEMORY_DIR="$(basename "$MEMORY_REPO" .git)"
-  ```
-  Clone if `../$MEMORY_DIR` doesn't exist: `git clone "$MEMORY_REPO" "../$MEMORY_DIR"`
-  Create symlink: `ln -s "../$MEMORY_DIR" memory`
-  IF clone fails → HALT with git error.
-
-**API calls:** None (local checks only)
-
----
-
-## State: WELCOME
-
-**Entry:** VERIFY passed
-
-**Actions:**
-
-Files needed: `egregore.md` and `.egregore-state.json`. These should ALREADY be loaded from VERIFY (batch file reads). Do NOT re-read them.
-
-1. Extract `## Identity` and `## Culture` sections from egregore.md (already in context)
-2. Use `github_username`, `github_name` from state (already in context)
-3. Display welcome message:
-
-```
-Welcome to {org_name}.
-
-{First 2 sentences of Identity section from egregore.md}
-
-{First sentence of Culture section from egregore.md}
-
-Let's get you set up — a few quick questions.
-```
-
-4. Save to state: `onboarding.phase = "welcome"`, `onboarding.started_at = {ISO timestamp}`. **Do NOT set `onboarding.type` or `usage_type`** — the installer already set `usage_type` correctly (`founder_group` or `joiner_group`). Preserve whatever is already in state.
-
-**Exit:** → HARVEST_IDENTITY (always, unconditional)
-
-**API calls:** None
-
----
-
-## State: HARVEST_IDENTITY
-
-**Entry:** WELCOME completed
-
-**Actions:**
-
-Build AskUserQuestion call. Questions depend on what's already known:
-
-**IF `github_name` exists in state (install script set it):**
-
-```
-questions:
-  Q1:
-    question: "What should we call you here? Your GitHub name is {github_name}."
-    header: "Name"
-    options:
-      - label: "{github_name}"
-        description: "Use my GitHub name"
-      - label: "Something else"
-        description: "I go by a different name"
-  Q2:
-    question: "What do you do?"
-    header: "Role"
-    options:
-      - label: "Engineering"
-        description: "I write code"
-      - label: "Design"
-        description: "I design products or experiences"
-      - label: "Research"
-        description: "I explore ideas and synthesize knowledge"
-      - label: "Operations"
-        description: "I keep things running and organized"
-```
-
-**IF `github_name` NOT in state:**
-
-```
-questions:
-  Q1:
-    question: "What's your name?"
-    header: "Name"
-    options:
-      - label: "{github_username}"
-        description: "Use my GitHub username"
-      - label: "Something else"
-        description: "I go by a different name"
-  Q2:
-    question: "What do you do?"
-    header: "Role"
-    options:
-      - label: "Engineering"
-        description: "I write code"
-      - label: "Design"
-        description: "I design products or experiences"
-      - label: "Research"
-        description: "I explore ideas and synthesize knowledge"
-      - label: "Operations"
-        description: "I keep things running and organized"
-```
-
-**Post-processing:**
-- IF Q1 = first option → `display_name = github_name` (or `github_username` if no `github_name`)
-- IF Q1 = freeform → `display_name = freeform text` (validate: 1-30 chars, alphanumeric + spaces + hyphens)
-- `role = Q2 answer` (map to: `engineering` | `design` | `research` | `operations` | `other`)
-
-**Save to state:**
-```json
-{
-  "display_name": "...",
-  "name": "...",
-  "onboarding": {
-    "phase": "harvest_identity",
-    "harvest_rounds": [{
-      "round": 1,
-      "focus": "identity",
-      "questions": ["name", "role"],
-      "answers": {"name": "...", "role": "..."}
-    }]
-  }
-}
-```
-
-**API calls:**
-
-Save state AND call the API in parallel — do NOT do these sequentially.
-
-**Skip this call if `api_url` is empty (local mode).** Only run when connected:
-```bash
-API_URL="$(jq -r '.api_url // empty' egregore.json)"
-if [ -n "$API_URL" ]; then
-  API_KEY="$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)"
-  curl -sf "${API_URL}/api/user/ensure" \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"github_username":"...","github_name":"...","display_name":"..."}' 2>/dev/null
-fi
-```
-
-**Exit:** → HARVEST_CONNECTION (always). Transition immediately — do NOT output anything between states except the next AskUserQuestion.
-
----
-
-## State: HARVEST_CONNECTION
-
-**Entry:** HARVEST_IDENTITY completed
-
-**Actions:**
-
-Extract `## Collaboration` section from `egregore.md` — this should ALREADY be in context from WELCOME. Do NOT re-read the file.
-
-**Deriving Q1 options from egregore.md:** Read the `## Collaboration` section. The first 3 bullet points or comma-separated items become option labels. If fewer than 2 items found, use these defaults: "Building / Exploring / Participating."
-
-For egregore-0, the Collaboration section yields:
-- "Building Egregore" — Contributing to the product — commands, graph, infra
-- "Exploring the idea" — Curious about shared intelligence, want to see how it works
-- "Using it for my team" — Evaluating Egregore for my own organization
-
-AskUserQuestion:
-
-```
-questions:
-  Q1:
-    question: "What brings you to {org_name}?"
-    header: "Interest"
-    options:
-      - label: "{work_area_1}"
-        description: "{description derived from Collaboration section}"
-      - label: "{work_area_2}"
-        description: "{description derived from Collaboration section}"
-      - label: "{work_area_3}"
-        description: "{description derived from Collaboration section}"
-  Q2:
-    question: "How do you like to work?"
-    header: "Style"
-    options:
-      - label: "Async"
-        description: "Handoffs and artifacts — I work on my own schedule"
-      - label: "Collaborative"
-        description: "Pairing, discussions, real-time coordination"
-      - label: "Both"
-        description: "Depends on the task"
-```
-
-**Post-processing:**
-- `focus = Q1 answer` (map to slug: `building` | `exploring` | `evaluating` | `other`)
-- `work_style = Q2 answer` (map to: `async` | `collaborative` | `both`)
-
-**Save to state:**
-```json
-{
-  "onboarding": {
-    "harvest_rounds": [
-      "...(existing round 1)...",
-      {
-        "round": 2,
-        "focus": "connection",
-        "questions": ["interest", "style"],
-        "answers": {"interest": "...", "style": "..."}
-      }
-    ]
-  }
-}
-```
-
-**API calls:** None yet (batched at COMPLETE)
-
-**Exit:** → CONSENT (always). Transition immediately — do NOT output anything between states except the next AskUserQuestion.
-
----
-
-## State: CONSENT
-
-**Entry:** HARVEST_CONNECTION completed
-
-**Actions:**
-
-AskUserQuestion with multiSelect.
-
-**Local mode:** Check `api_url` from `egregore.json`. If empty, omit the "Notifications" option (no Telegram without API). Only show Session tracking and Anonymous telemetry.
-
-**Connected mode:** Show all three options.
-
-```
-questions:
-  Q1:
-    question: "A few privacy choices. These are yours to change anytime via /telemetry and /env."
-    header: "Privacy"
-    multiSelect: true
-    options:
-      - label: "Session tracking"
-        description: "Powers /dashboard and /handoff. Your sessions appear in /activity."
-      - label: "Anonymous telemetry"
-        description: "Command names, session durations, error codes. Never code or content."
-      - label: "Notifications"              ← ONLY in connected mode (api_url set)
-        description: "Receive Telegram DMs when someone hands off to you or @mentions you."
-```
-
-**Post-processing:**
-- Default: ALL selected (if user doesn't deselect)
-- Map selections to boolean flags:
-  - "Session tracking" selected → `session_tracking: true`
-  - "Anonymous telemetry" selected → `telemetry: true` (absence → `telemetry: false`)
-  - "Notifications" selected → `contact_preference: "all"` (absence → `contact_preference: "none"`)
-- Note: `transcript_sharing` is set during website setup, not here. Inherit from egregore.json or default to the org setting.
-
-**Save to state (nested + flat keys for backward compat):**
-```json
-{
-  "onboarding": {
-    "phase": "consent",
-    "consent": {
-      "session_tracking": true,
-      "transcript_sharing": true,
-      "telemetry": true,
-      "contact_preference": "all"
-    }
-  },
-  "session_tracking": true,
-  "transcript_sharing": true,
-  "telemetry": true,
-  "contact_preference": "all"
-}
-```
-
-Flat keys are required for backward compatibility — `bin/telemetry.sh` and `bin/transcript-archive.sh` read them directly.
-
-**API calls:** None yet (batched at COMPLETE)
-
-**Exit:** → ORIENT (always). Save state silently, then transition immediately — do NOT output anything between the user's consent answers and the ORIENT activity summary.
+- All checks pass → ORIENT
+- `GITHUB_TOKEN` missing → run `bash bin/github-auth.sh`, re-check. Still missing → HALT.
+- `EGREGORE_API_KEY` missing AND `api_url` set → HALT: "Missing API key."
+- `EGREGORE_API_KEY` missing AND `api_url` empty → skip (local mode)
+- `memory/` missing → clone from `egregore.json → memory_repo`, create symlink. Clone fails → HALT.
 
 ---
 
 ## State: ORIENT
 
-**Entry:** CONSENT completed
+**Entry:** VERIFY passed
 
 **Actions:**
 
-1. **If local mode (`api_url` empty): DO NOT run the graph query below.** Go straight to displaying "It's early — you're one of the first here." and the AskUserQuestion in step 3.
+Read `egregore.md` Identity and Culture sections (already loaded from VERIFY).
 
-   **If connected mode (`api_url` set):** Query graph for active quests AND recent handoffs in a single bash call — do NOT make two separate graph queries:
-```bash
-QUESTS=$(bash bin/graph.sh query "MATCH (q:Quest {status: 'active'}) OPTIONAL MATCH (a:Artifact)-[:PART_OF]->(q) RETURN q.id AS quest, q.title AS title, count(a) AS artifacts ORDER BY count(a) DESC LIMIT 3" 2>/dev/null) && \
-HANDOFFS=$(bash bin/graph.sh query "MATCH (s:Session) WHERE s.date IS NOT NULL MATCH (s)-[:BY]->(author:Person) RETURN s.topic AS topic, author.name AS author ORDER BY s.date DESC LIMIT 3" 2>/dev/null) && \
-echo "QUESTS:$QUESTS|||HANDOFFS:$HANDOFFS"
+Display:
+
+```
+An organization should be able to think across sessions, across
+people, across time. Egregore is how {org_name} does that.
+
+{First 2 sentences from Identity section}
+
+The way it works: you declare what you're working on (/todo),
+do the work, then capture what you learned (/handoff).
+That's the core loop — everything else builds on it.
+
+What are you working on right now?
 ```
 
-2. Display activity summary:
-   - IF local mode (no `api_url`): "It's early — you're one of the first here."
-   - IF quests exist: "Here's what's active:" followed by quest list with artifact counts
-   - IF handoffs exist: "Recent sessions:" followed by 2-3 recent sessions with authors
-   - IF connected but empty results: "It's early — you're one of the first here."
+No questions. No choices. Context, then action.
 
-3. AskUserQuestion:
-```
-questions:
-  Q1:
-    question: "How do you want to start?"
-    header: "Start"
-    options:
-      - label: "Jump in"
-        description: "I'll explore on my own. Help me as I go."
-      - label: "Show me around"
-        description: "5-minute walkthrough of the core commands"
-```
+**State update:** `onboarding.phase = "orient"`, `onboarding.started_at = {ISO timestamp}`
 
-4. IF "Jump in":
-   Show 1-2 specific suggestions based on harvest answers:
-   - IF local mode: "Just tell me what you're working on and I'll set up a branch."
-   - IF focus = `building` AND quests exist: "Check out the {quest_title} quest — `/quest {slug}`"
-   - IF focus = `exploring`: "Try `/activity` to see what's happening, or `/reflect` to capture your first thought."
-   - IF focus = `evaluating`: "Run `/dashboard` to see the system from your perspective."
-   → COMPLETE
-
-5. IF "Show me around":
-   Invoke `/tutorial` — it will read `domain`, `stage`, `usage_type` from state (already set by session-start.sh + harvest) and skip redundant identity/role questions.
-   → COMPLETE (after tutorial finishes)
-
-**API calls:** Graph queries via `bin/graph.sh` (routes through API gateway)
-
-**Exit:** → COMPLETE (always)
+**Exit:** → FIRST_TODO (user describes their work)
 
 ---
 
-## State: COMPLETE
+## State: FIRST_TODO
 
-**Entry:** ORIENT completed
+**Entry:** User described their work in response to ORIENT
 
-**Actions (steps 1-2 always execute; steps 3-4 are connected mode only):**
+**Actions:**
 
-**Local mode: DO NOT run steps 3 or 4. DO NOT call `bin/graph.sh` or `curl`.** The person file in memory (step 2) is sufficient. Only run steps 1, 2, 5, 6, 7.
+1. **Create the todo** — use `/todo` flow if graph is connected, local note if not. The todo is the vehicle — what matters is the user declared work.
 
-**Batching:** In connected mode, run steps 1-4 in parallel (egregore.md update + memory commit + graph MERGE + Supabase sync). In local mode, run steps 1-2 in parallel (egregore.md update + memory commit).
+2. **Ask name** via AskUserQuestion:
+```
+header: "Name"
+question: "What should we call you here? Your GitHub name is {github_name}."
+options:
+  - label: "{github_name}"
+    description: "Use my GitHub name"
+  - label: "Something else"
+    description: "I go by a different name"
+```
+If "Something else" → user provides name via freeform. Validate: 1-30 chars, alphanumeric + spaces + hyphens.
 
-**CRITICAL — gate step 5 on steps 1-2:** After steps 1-2 complete, verify the people file was actually written before proceeding to step 5:
+3. **Create working branch:** `dev/{name}/{topic-slug}`
 
+4. **Show technical orientation** (onboarding only — dotted frame, real paths):
+```
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+  What just happened:
+
+  main ← stable releases
+    └─ develop ← where work integrates
+         └─ dev/{name}/{slug} ← your branch
+
+  Your changes live on your branch. When you /save,
+  it creates a PR to develop.
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+```
+
+5. **Set consent defaults** in `.egregore-state.json`:
+```json
+{
+  "session_tracking": true,
+  "transcript_sharing": false,
+  "telemetry": true,
+  "contact_preference": "all",
+  "consent_collected": false
+}
+```
+Note: `transcript_sharing` defaults to `false` (opt-in). Other flags default on. `consent_collected: false` signals these are defaults — explicit consent collected in a later session.
+
+**State update:** `display_name`, `name`, `onboarding.phase = "first_todo"`, `profile_fields_collected: ["name"]`
+
+**API calls (connected mode only):** `POST /api/user/ensure` with github_username, display_name
+
+**Exit:** → User works normally. Claude assists as usual. FIRST_HANDOFF triggers when the user ends the session.
+
+---
+
+## State: FIRST_HANDOFF
+
+**Entry:** User signals session-end intent while `onboarding_complete` is false and `phase` is `first_todo`.
+
+**Trigger detection:**
+1. User runs `/wrap`, `/handoff`, or `/save` — always triggers
+2. Session-end phrases: "I'm done", "wrapping up", "gotta go", "signing off"
+3. **Disambiguation:** "I'm done with this file" = subtask, NOT session end. Only trigger on clear session-end intent. When ambiguous, ask: "Done for the session, or just this task?"
+4. `/save` during onboarding runs normal save flow AND triggers FIRST_HANDOFF
+
+**If terminal closes without triggering:** State stays at `phase = "first_todo"`. Next session detects this in Resumption and runs FIRST_HANDOFF for previous session's work.
+
+**Actions:**
+
+1. Intercept with context:
+> Before you close out — this is the part that makes the system work. A handoff captures what you did so the organization remembers it. Not a summary for a manager — a briefing for the next session, or the next person.
+
+2. Run the handoff flow (same as `/handoff`).
+
+3. During the handoff, collect role:
+```
+header: "Role"
+question: "One thing that helps route handoffs — what's your role?"
+options:
+  - label: "Engineering"
+    description: "I write code"
+  - label: "Design"
+    description: "I design products or experiences"
+  - label: "Research"
+    description: "I explore ideas and synthesize knowledge"
+  - label: "Operations"
+    description: "I keep things running and organized"
+```
+
+4. Show technical orientation:
+```
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+  What just happened:
+
+  memory/handoffs/
+    └─ {date}-{slug}.md      ← your handoff
+
+  memory/people/
+    └─ {username}.md          ← your profile
+
+  This lives in the shared memory repo. Anyone who
+  starts a session sees your handoff in /activity.
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+```
+
+**Completion actions (steps 1-5 in parallel, gate on verification before 6-8):**
+
+### 1. Create person file in memory
+```bash
+cat > "memory/people/{github_username}.md" << EOF
+# {display_name}
+GitHub: {github_username}
+Role: {role}
+Focus: (not yet collected)
+Work style: (not yet collected)
+Joined: {YYYY-MM-DD}
+EOF
+```
+
+### 2. Update egregore.md Members section
+Append after `## Members`:
+```markdown
+### {display_name}
+{role_label}. Joined {YYYY-MM-DD}.
+```
+
+### 3. Commit + push memory
+```bash
+cd memory && git add -A && git commit -m "Add {github_username}" && git push origin main && cd -
+```
+
+### 4. MERGE Person node (connected mode only)
+
+Two-step to handle name uniqueness across orgs:
+```bash
+# Step 1: Check if name is taken by a different person
+bash bin/graph.sh query \
+  "OPTIONAL MATCH (existing:Person {name: \$name})
+   WHERE existing.github <> \$github
+   RETURN existing IS NOT NULL AS taken" \
+  '{"name":"...","github":"..."}'
+```
+If `taken` → append github username: `"{display_name} ({github_username})"`
+
+```bash
+# Step 2: MERGE the person node
+bash bin/graph.sh query \
+  "MERGE (p:Person {github: \$github})
+   ON CREATE SET p.name = \$name, p.fullName = \$fullName, p.role = \$role, p.joined = date()
+   ON MATCH SET p.name = \$name, p.role = \$role
+   WITH p MATCH (o:Org {id: \$_org}) MERGE (p)-[:MEMBER_OF]->(o)
+   RETURN p.name" \
+  '{"github":"...","name":"...","fullName":"...","role":"..."}'
+```
+Note: `$_org` is auto-injected by the API from the API key — do NOT pass it as a parameter.
+
+### 5. Sync to Supabase (connected mode only)
+```bash
+API_URL="$(jq -r '.api_url // empty' egregore.json)"
+API_KEY="$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)"
+curl -sf "${API_URL}/api/user/ensure" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"github_username":"...","display_name":"...","member_role":"..."}' 2>/dev/null
+```
+
+**Verification gate (after steps 1-3):**
 ```bash
 USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
 PEOPLE_FILE="memory/people/${USERNAME}.md"
@@ -445,93 +301,10 @@ else
   echo "people_file:missing"
 fi
 ```
+- `people_file:ok` → proceed to steps 6-8
+- `people_file:missing` → set `phase = "first_todo"`. Tell user: "Almost done, but your profile didn't save. Try `/handoff` again next session."
 
-- IF `people_file:ok` → proceed to steps 5-7 (state update + shell alias + telemetry)
-- IF `people_file:missing` → do NOT set `onboarding_complete: true`. Instead:
-  - Set `onboarding.phase = "orient"` in state (so next session resumes from ORIENT)
-  - Tell the user: "Almost done, but your profile didn't save to memory. This can happen if there's a git conflict. Try `/onboarding` again — your answers are saved, so you won't need to re-answer questions."
-  - Stop. Do NOT proceed to steps 5-7.
-
-Then run steps 5-7 in one parallel call (state update + shell alias + telemetry). The user should see ONE message at the end: "You're in." — not a play-by-play of each step. Suppress ALL output with `2>/dev/null` or variable capture.
-
-### 1. Update `egregore.md` Members section
-
-Read `egregore.md`. Find the `## Members` heading. Append a new member entry after the heading (or after existing member entries):
-
-```markdown
-### {display_name}
-{role_label}. {focus_label}. Joined {YYYY-MM-DD}.
-```
-
-Where `role_label` is the human-readable role (e.g., "Engineering") and `focus_label` is the human-readable focus (e.g., "Building Egregore").
-
-### 2. Create person file in memory
-
-```bash
-cat > "memory/people/{github_username}.md" << EOF
-# {display_name}
-GitHub: {github_username}
-Role: {role}
-Focus: {focus}
-Work style: {work_style}
-Joined: {YYYY-MM-DD}
-EOF
-cd memory && git add -A && git commit -m "Add {github_username}" && git push && cd -
-```
-
-### 3. Create/update Person node in Neo4j
-
-**Skip this step entirely if `api_url` is empty (local mode).** The person file in memory (step 2) is sufficient.
-
-**Important:** The graph has a uniqueness constraint on `(Person.name, Person.org)`. The MERGE must match on `github` to find existing nodes, but must handle the case where another Person already has the same display name. Use a two-step approach:
-
-```bash
-# Step 1: Check if name is already taken by a different person
-bash bin/graph.sh query \
-  "OPTIONAL MATCH (existing:Person {name: \$name, org: \$org})
-   WHERE existing.github <> \$github
-   RETURN existing IS NOT NULL AS taken" \
-  '{"name":"...","org":"...","github":"..."}'
-```
-
-- IF `taken` is true → append github username to make name unique: `"{display_name} ({github_username})"`
-- IF `taken` is false → use display_name as-is
-
-```bash
-# Step 2: MERGE the person node
-bash bin/graph.sh query \
-  "MERGE (p:Person {github: \$github, org: \$org})
-   ON CREATE SET p.name = \$name, p.fullName = \$fullName, p.role = \$role,
-     p.focus = \$focus, p.workStyle = \$workStyle, p.joined = date(),
-     p.sessionTracking = \$sessionTracking, p.transcriptSharing = \$transcriptSharing,
-     p.telemetry = \$telemetry, p.contactPreference = \$contactPreference
-   ON MATCH SET p.name = \$name, p.role = \$role, p.focus = \$focus,
-     p.workStyle = \$workStyle, p.sessionTracking = \$sessionTracking,
-     p.transcriptSharing = \$transcriptSharing, p.telemetry = \$telemetry,
-     p.contactPreference = \$contactPreference
-   RETURN p.name" \
-  '{"github":"...","org":"...","name":"...","fullName":"...","role":"...","focus":"...","workStyle":"...","sessionTracking":true,"transcriptSharing":true,"telemetry":true,"contactPreference":"all"}'
-```
-
-Read `org_slug` from `egregore.json` → `github_org` field, lowercased and hyphenated (e.g., "Curve-Labs" → use the slug from the API key prefix, or derive from `jq -r '.github_org' egregore.json | tr '[:upper:]' '[:lower:]'`). Fill all parameter values from state — do NOT leave `"..."` placeholders.
-
-### 4. Sync to Supabase
-
-**Skip this step entirely if `api_url` is empty (local mode).**
-
-```bash
-API_URL="$(jq -r '.api_url // empty' egregore.json)"
-API_KEY="$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)"
-curl -sf "${API_URL}/api/user/ensure" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"github_username":"...","github_name":"...","display_name":"...","member_role":"...","focus":"...","work_style":"...","consent_session_tracking":true,"consent_transcript_sharing":true,"consent_telemetry":true,"contact_preference":"all"}'
-```
-
-Fill all values from state. `member_role` maps to the harvest role answer, `focus` and `work_style` from harvest round 2, consent booleans from the CONSENT state.
-
-### 5. Update state
-
+### 6. Update state
 ```json
 {
   "onboarding_complete": true,
@@ -539,29 +312,60 @@ Fill all values from state. `member_role` maps to the harvest role answer, `focu
     "phase": "complete",
     "completed_at": "{ISO timestamp}"
   },
-  "display_name": "..."
+  "profile_fields_collected": ["name", "role"]
 }
 ```
+Do NOT set `usage_type` — already set by installer.
 
-**Do NOT set `usage_type` here.** It was already set by the installer. Preserve the existing value.
-
-### 6. Shell alias
-
+### 7. Shell alias
 ```bash
 ALIAS_NAME=$(bash bin/ensure-shell-function.sh)
 ```
 
-Tell the user: "From now on, just type **`{ALIAS_NAME}`** in any terminal to launch."
-
-### 7. Emit telemetry
-
-Read `usage_type` from `.egregore-state.json` and use it:
+### 8. Telemetry
 ```bash
 TYPE=$(jq -r '.usage_type // "joiner_group"' .egregore-state.json 2>/dev/null)
-bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\",\"rounds\":2}" 2>/dev/null &
+bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\"}" 2>/dev/null &
 ```
 
-### 8. Done
+Display: **"You're in. From now on, just type `{ALIAS_NAME}` in any terminal to launch."**
 
-- **Local mode**: Display: **"You're in. Just tell me what you're working on."**
-- **Connected mode**: Display: **"You're in. Type `/activity` to see what's happening, or just start working."**
+---
+
+## Progressive Profile Collection (follow-up sessions)
+
+Everything beyond name and role is collected inline during the first few sessions:
+
+| Data | Collected when | How |
+|------|---------------|-----|
+| **Name** | FIRST_TODO | AskUserQuestion |
+| **Role** | FIRST_HANDOFF | AskUserQuestion |
+| **Focus** | First `/quest` or `/activity` (2nd+ session) | Derive from egregore.md Collaboration section |
+| **Work style** | First `/ask` (2nd+ session) | Async / Collaborative / Both |
+| **Consent** | Second session startup | "Egregore tracks sessions by default. Change via `/telemetry`. All good?" |
+
+Track in `.egregore-state.json`:
+```json
+{ "profile_fields_collected": ["name", "role"] }
+```
+
+Commands check before asking:
+```bash
+COLLECTED=$(jq -r '.profile_fields_collected // [] | join(",")' .egregore-state.json 2>/dev/null)
+```
+If field not in list → ask inline. After collecting → append to array, update people file.
+
+**Rule:** Never more than one profile question per session.
+
+---
+
+## Edge cases
+
+| Scenario | Handling |
+|----------|----------|
+| Neo4j unavailable (connected mode) | Create person file in memory. Show: "Graph offline — profile saved locally." |
+| Local mode | Skip all graph/API silently. Memory files are the canonical record. |
+| Terminal closes mid-onboarding | Resume from saved phase on next session. Collected data preserved. |
+| `egregore.md` missing | Use generic text: "Welcome to {org_name}." Skip narration. |
+| People file already exists (invite stub) | Overwrite with full profile. Preserve `Joined` date from stub if earlier. |
+| `/save` during FIRST_TODO | Run normal save, then check if session-end → trigger FIRST_HANDOFF. If continuing → stay in FIRST_TODO. |

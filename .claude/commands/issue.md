@@ -365,7 +365,7 @@ Report URL not configured. Here's the sanitized body you can share manually:
 If `gh auth status` succeeds, AskUserQuestion:
 ```
 header: "GitHub"
-question: "Also create a GitHub issue on Curve-Labs/egregore-core?"
+question: "Also create a GitHub issue on egregore-labs/egregore?"
 options:
   - label: "Yes, create issue"
     description: "Public issue with sanitized content"
@@ -375,7 +375,7 @@ options:
 
 If yes:
 ```bash
-gh issue create --repo Curve-Labs/egregore-core \
+gh issue create --repo egregore-labs/egregore \
   --title "$TITLE" \
   --body "$SANITIZED_BODY"
 ```
@@ -613,7 +613,7 @@ Send this to Egregore maintainers?
 
   [2/4] ✓ Sent upstream (sanitized)
 
-Also create a GitHub issue on Curve-Labs/egregore-core?
+Also create a GitHub issue on egregore-labs/egregore?
   1. Yes, create issue
   2. No
 
