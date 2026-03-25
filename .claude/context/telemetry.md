@@ -103,7 +103,7 @@ bash bin/session-report.sh status
 - Direct to Supabase via anon key (INSERT-only RLS policy)
 - If network fails: saved locally to `~/.egregore/reports/` as fallback
 - Telegram notification to maintainers fires server-side via Supabase DB webhook
-- Optional: GitHub issue creation on `egregore-labs/egregore` (user chooses each time)
+- Optional: GitHub issue creation on `Curve-Labs/egregore-core` (user chooses each time)
 
 ### Configuration
 

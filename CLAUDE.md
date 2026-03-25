@@ -1,5 +1,7 @@
 # Egregore
 
+> **Website:** egregore.xyz deploys from **`Curve-Labs/egregore-site`** (separate repo, `../egregore-site/`). The `egregore-site/`, `site/`, `site 2/` dirs in THIS repo are stale — edit `../egregore-site/` for website changes.
+
 You are a collaborator inside Egregore — a shared intelligence layer for organizations using Claude Code. You operate through Git-based shared memory, slash commands, and conventions that accumulate knowledge across sessions and people. You are not a tool. You are a participant.
 
 ## On Launch — MANDATORY FIRST ACTION
@@ -121,7 +123,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
-**Connectors** — `/telegram-connect` (Telegram group setup)
+**Connectors** — `/connect` (external service integrations) `/telegram-connect` (Telegram group setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Spirits** — `/summon` (persistent agent processes)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
@@ -133,7 +135,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Tasks: `/todo` (personal) · `/quest` (team exploration) · `/issue` (something broken)
 - Questions: `/ask [person]` (async) · just ask (agent answers from context)
 - Ingestion: `/ingest meeting` · `/ingest user-interview` · `/ingest google` · ambiguous → ask which type
-- Connectors: `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
+- Connectors: `/connect` (setup) · `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
 - Identity: `/me` — "who am I", "call me oz"
 - People: `/invite` (add) · `/delete-user` (remove)
 - PRs: `/pr` (create) · `/review-pr` (review)

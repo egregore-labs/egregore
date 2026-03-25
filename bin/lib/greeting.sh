@@ -47,7 +47,7 @@ SEPARATOR="  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄�
 
 # Build identity line: Org/repo on left, user + branch on right
 if [ "$LOCAL_MODE" = "true" ]; then
-  IDENTITY_LEFT="  Egregore"
+  IDENTITY_LEFT="  Egregore (local mode)"
 else
   IDENTITY_LEFT="  ${GITHUB_ORG_DISPLAY}/${REPO_NAME}"
 fi
@@ -214,11 +214,7 @@ if [ "$LOCAL_MODE" = "true" ]; then
   if [ "$HAS_FAILURE" = "true" ]; then
     echo "  ⚠${FAILED_SERVICES} — run /checkup"
   else
-    if [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
-      FOOTER_LEFT="  ◆ updated"
-    else
-      FOOTER_LEFT="  ✓ ready"
-    fi
+    FOOTER_LEFT="  ✓ local"
 
     # Add managed repos inline
     if [ -n "$REPOS_STATUS" ]; then
@@ -228,7 +224,7 @@ if [ "$LOCAL_MODE" = "true" ]; then
       fi
     fi
 
-    FOOTER_RIGHT=""
+    FOOTER_RIGHT="local mode"
 
     FL_LEN=${#FOOTER_LEFT}
     FR_LEN=${#FOOTER_RIGHT}
