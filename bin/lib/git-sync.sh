@@ -13,7 +13,10 @@
 # Inputs:  SCRIPT_DIR, IS_WORKTREE, MAIN_PROJECT_DIR, STATE_FILE, ENV_FILE,
 #          HEALTH_GIT, MANAGED_REPOS (not yet set — read from config here)
 # Outputs: HEALTH_GIT, DEVELOP_SYNCED, COMMITS_AHEAD, ACTION, SAVED_BRANCH,
-#          BRANCH, MEMORY_SYNCED, REPOS_STATUS, MANAGED_REPOS, CURRENT_BRANCH
+#          BRANCH, MEMORY_SYNCED, REPOS_STATUS, MANAGED_REPOS, CURRENT_BRANCH,
+#          FRAMEWORK_UPDATED
+
+FRAMEWORK_UPDATED="false"
 
 # --- Ensure pull.rebase is set (prevents "divergent branches" errors) ---
 git config pull.rebase true 2>/dev/null || true
@@ -29,7 +32,7 @@ git fetch origin --quiet 2>/dev/null &
 # Default: official egregore-core repo. Set upstream_url in egregore.json to override,
 # or set it to "none" to disable (e.g., in the dev repo where this IS the source).
 _UPSTREAM_URL=$(jq -r '.upstream_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-[ -z "$_UPSTREAM_URL" ] && _UPSTREAM_URL="https://github.com/Curve-Labs/egregore-core.git"
+[ -z "$_UPSTREAM_URL" ] && _UPSTREAM_URL="https://github.com/egregore-labs/egregore.git"
 if [ "$_UPSTREAM_URL" != "none" ]; then
   git remote add upstream "$_UPSTREAM_URL" 2>/dev/null || true
   git fetch upstream main --quiet 2>/dev/null &
@@ -51,6 +54,29 @@ done
 
 # Wait for all fetches
 wait 2>/dev/null || true
+
+# --- Auto-update framework from upstream (if enabled) ---
+# Applies bin/, .claude/commands/, CLAUDE.md, skills/ from upstream on every session start.
+# Disable with "auto_update": false in egregore.json.
+# Dev repos (upstream_url: "none") skip this entirely.
+_AUTO_UPDATE=$(jq -r '.auto_update // true' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+if [ "$_UPSTREAM_URL" != "none" ] && [ "$_AUTO_UPDATE" != "false" ]; then
+  if git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
+    # Check if upstream has changes we don't have
+    _LOCAL_HASH=$(git rev-parse HEAD:bin 2>/dev/null || echo "")
+    _UPSTREAM_HASH=$(git rev-parse upstream/main:bin 2>/dev/null || echo "")
+    if [ -n "$_LOCAL_HASH" ] && [ -n "$_UPSTREAM_HASH" ] && [ "$_LOCAL_HASH" != "$_UPSTREAM_HASH" ]; then
+      # Apply upstream changes (same as /update)
+      git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true
+      # Only commit if there are actual changes
+      if [ -n "$(git status --porcelain bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null | head -1)" ]; then
+        git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
+        git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+        FRAMEWORK_UPDATED="true"
+      fi
+    fi
+  fi
+fi
 
 # --- Worktree prune (just clean git's internal list, don't delete anything) ---
 git worktree prune 2>/dev/null || true

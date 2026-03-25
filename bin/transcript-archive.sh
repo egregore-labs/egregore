@@ -47,13 +47,17 @@ case "$TRANSCRIPT_PATH" in
   *) exit 0 ;;          # reject anything outside ~/.claude/
 esac
 
-# --- Check user opt-out ---
+# --- Check user consent ---
+# Transcript sharing is OFF by default (opt-in). Users must explicitly
+# set transcript_sharing: true in .egregore-state.json to enable.
 STATE_FILE="$SCRIPT_DIR/.egregore-state.json"
 if [ -f "$STATE_FILE" ]; then
-  USER_CONSENT=$(jq -r '.transcript_sharing // "true"' "$STATE_FILE" 2>/dev/null || echo "true")
-  if [ "$USER_CONSENT" = "false" ]; then
+  USER_CONSENT=$(jq -r '.transcript_sharing // "false"' "$STATE_FILE" 2>/dev/null || echo "false")
+  if [ "$USER_CONSENT" != "true" ]; then
     exit 0
   fi
+else
+  exit 0
 fi
 
 # --- Read config ---
