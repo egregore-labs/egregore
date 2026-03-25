@@ -517,7 +517,7 @@ Session included 2 artifacts:
   - Decision: Defensibility architecture framework
   - Finding: Harvest flywheel as training surface
 
-Entry point: https://github.com/{org}/{org}-memory/blob/main/handoffs/2026-02/07-bob-defensibility-architecture.md
+Entry point: https://github.com/Curve-Labs/Curve-Labs-memory/blob/main/handoffs/2026-02/07-bob-defensibility-architecture.md
 ```
 
 Show progress:

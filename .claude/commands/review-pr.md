@@ -19,14 +19,14 @@ Not this: "/pr" (create a PR), "/test" (validate local changes)
 
 Parse `$ARGUMENTS`:
 - **PR number** (e.g. `123`, `#123`) → review that single PR
-- **Author** (e.g. `alice`, `bob`) → list all open PRs from that author
+- **Author** (e.g. `cem`, `cemf`, `fcdagdelen`) → list all open PRs from that author
 - **`--all`** → list all open PRs
 - **Empty** → list all open PRs targeting develop
 
 Get org/repo:
 ```bash
 GITHUB_ORG=$(jq -r '.github_org' egregore.json)
-REPO_NAME=$(jq -r '.repo_name // "egregore"' egregore.json)
+REPO_NAME=$(jq -r '.repo_name // "curve-labs-core"' egregore.json)
 ```
 
 ## Step 1: Fetch PR metadata

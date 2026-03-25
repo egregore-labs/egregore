@@ -75,36 +75,10 @@ Egregore gives your team a shared brain that persists across Claude Code session
 
 Everything runs locally. No servers, no accounts, no API keys.
 
-## What runs on your machine
-
-Egregore uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) to automate session management. These run automatically when you start Claude Code in an Egregore directory:
-
-| Hook | Purpose |
-|------|---------|
-| **SessionStart** | Syncs memory, resolves identity, renders greeting |
-| **PreToolUse** | Boundary isolation (prevents accessing other projects) + branch protection |
-| **PostToolUse** | Activity tracking (local file, not sent anywhere) |
-| **WorktreeCreate/Remove** | Isolated git worktrees per session |
-| **PreCompact** | Saves context before memory compression |
-| **Stop** | Reminds you to save unsaved work |
-| **SessionEnd** | Archives session transcript (local mode: local only, opt-in to share) |
-
-All hooks are shell scripts in `bin/` and `.claude/hooks/` — read them directly.
-
-## Telemetry
-
-Egregore collects anonymous usage data (command names and timestamps only — never code, file contents, or conversation). Opt out anytime:
-
-```bash
-# In your .env
-EGREGORE_NO_TELEMETRY=1
-
-# Or the standard flag
-DO_NOT_TRACK=1
-```
-
-Full details: `.claude/context/telemetry.md`
-
 ## Managed hosting
 
 Want the knowledge graph, real-time dashboard, and Telegram notifications? Visit [egregore.xyz](https://egregore.xyz).
+
+## Built by
+
+[Curve Labs](https://curvelabs.eu)
