@@ -1,0 +1,88 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  oss-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check — all shell scripts
+        run: |
+          FAIL=0
+          for f in bin/*.sh bin/lib/*.sh; do
+            if ! bash -n "$f" 2>/dev/null; then
+              echo "FAIL: $f"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: No hardcoded internal references
+        run: |
+          # Check bin/ scripts for Curve-Labs references (should be parameterized)
+          FOUND=$(grep -rn "Curve-Labs\|curve-labs\|curvelabs" bin/ --include='*.sh' | grep -v 'test-' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found internal references in bin/ scripts:"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: No unsafe .env sourcing
+        run: |
+          FOUND=$(grep -rn 'source.*\.env' bin/ --include='*.sh' | grep -v 'test-' | grep -v '#' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found unsafe 'source .env':"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: No manual JSON construction
+        run: |
+          FOUND=$(grep -rn '"{\\\"' bin/ --include='*.sh' | grep -v 'test-' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found manual JSON construction (use jq -n):"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: Local mode graceful degradation
+        run: |
+          FAIL=0
+          for script in bin/graph.sh bin/notify.sh bin/graph-op.sh; do
+            if [ -f "$script" ] && ! grep -q '"local"' "$script" 2>/dev/null; then
+              echo "FAIL: $script missing local mode handling"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: Commands have valid structure
+        run: |
+          FAIL=0
+          for cmd in .claude/commands/*.md; do
+            # Every command should have content (not empty)
+            LINES=$(wc -l < "$cmd" | tr -d ' ')
+            if [ "$LINES" -lt 3 ]; then
+              echo "FAIL: $cmd is too short ($LINES lines)"
+              FAIL=1
+            fi
+          done
+          echo "Checked $(ls .claude/commands/*.md | wc -l | tr -d ' ') commands"
+          exit $FAIL
+
+  worktree-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Run worktree tests
+        run: bash tests/test-worktree.sh
