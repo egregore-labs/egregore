@@ -121,7 +121,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
-**Connectors** — `/connect` (external service integrations) `/telegram-connect` (Telegram group setup)
+**Connectors** — `/telegram-connect` (Telegram group setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr`
 **Spirits** — `/summon` (persistent agent processes)
 **Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
@@ -133,7 +133,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Tasks: `/todo` (personal) · `/quest` (team exploration) · `/issue` (something broken)
 - Questions: `/ask [person]` (async) · just ask (agent answers from context)
 - Ingestion: `/ingest meeting` · `/ingest user-interview` · `/ingest google` · ambiguous → ask which type
-- Connectors: `/connect` (setup) · `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
+- Connectors: `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
 - Identity: `/me` — "who am I", "call me oz"
 - People: `/invite` (add) · `/delete-user` (remove)
 - PRs: `/pr` (create) · `/review-pr` (review)

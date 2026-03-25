@@ -131,9 +131,6 @@ You may need org admin permissions. Add them manually:
 
 **After local invite, STOP.** Do not proceed to Steps 3-5 (they require the API).
 
-Graph node creation and Telegram notification require a connected Egregore. Show:
-> "Run `/connect` to enable the knowledge graph and team notifications."
-
 ---
 
 ## Step 2: Send invite (single call — credentials stay hidden)
