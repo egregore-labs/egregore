@@ -42,7 +42,20 @@ source "$SCRIPT_DIR/bin/lib/time.sh"
 source "$SCRIPT_DIR/bin/lib/identity.sh"
 
 # ============================================================
-# 2. Check onboarding state
+# 2. Ensure develop branch exists (needed before onboarding creates working branches)
+# ============================================================
+if ! git show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
+  if git show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
+    git checkout -b develop origin/develop --quiet 2>/dev/null
+    git checkout - --quiet 2>/dev/null
+  else
+    git branch develop --quiet 2>/dev/null
+    git push -u origin develop --quiet 2>/dev/null &
+  fi
+fi
+
+# ============================================================
+# 3. Check onboarding state
 # ============================================================
 ONBOARDING_COMPLETE="true"
 if [ -f "$STATE_FILE" ]; then
@@ -50,7 +63,8 @@ if [ -f "$STATE_FILE" ]; then
 fi
 
 if [ "$ONBOARDING_COMPLETE" != "true" ]; then
-  jq -n --arg author "$AUTHOR" '{onboarding_complete: false, author: $author}'
+  # Output as a single compact line — Claude reads it, user doesn't need to see it
+  echo "onboarding_needed author=$AUTHOR"
   exit 0
 fi
 

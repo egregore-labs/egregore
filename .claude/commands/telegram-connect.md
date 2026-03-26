@@ -39,7 +39,8 @@ To set up Telegram notifications:
 
   1. Create a Telegram group for your team
   2. Add the bot: https://t.me/Egregore_clbot?startgroup=true
-  3. Paste the group invite link below
+  3. Get the invite link: group name → Edit → Invite Links → Copy
+  4. Paste the invite link below
 ```
 
 Then use AskUserQuestion to ask for the group invite link:

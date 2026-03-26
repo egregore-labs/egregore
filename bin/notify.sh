@@ -9,12 +9,12 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-# --- Local mode gate: bail immediately ---
+# --- Mode detection ---
 _MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
-if [ "$_MODE" = "local" ]; then
-  echo '{"status":"offline","reason":"local_mode"}'
-  exit 0
-fi
+
+# Public relay for local mode group messages.
+# No API key needed — rate-limited, group messages only.
+RELAY_URL="https://egregore-production-55f2.up.railway.app"
 
 # Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -98,8 +98,60 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     fi
   }
 
+elif [ "$_MODE" = "local" ]; then
+  # === LOCAL MODE: Group messages via public relay, DMs not available ===
+  send_to_person() {
+    echo "DMs require managed hosting. Group message sent instead."
+    send_to_group "@${1}: ${2}"
+  }
+
+  send_to_group() {
+    local message="$1"
+    local group_link
+    group_link=$(jq -r '.telegram_group_link // empty' "$CONFIG" 2>/dev/null)
+
+    if [ -z "$group_link" ]; then
+      echo '{"status":"offline","reason":"no_telegram_group"}'
+      return
+    fi
+
+    local slug
+    slug=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
+    local org_name
+    org_name=$(jq -r '.org_name // empty' "$CONFIG" 2>/dev/null)
+
+    local response
+    response=$(curl -s -X POST "${RELAY_URL}/api/notify/relay" \
+      -H "Content-Type: application/json" \
+      -d "$(jq -n \
+        --arg group_link "$group_link" \
+        --arg message "$message" \
+        --arg slug "$slug" \
+        --arg org_name "$org_name" \
+        '{group_link: $group_link, message: $message, slug: $slug, org_name: $org_name}')" \
+      --max-time 10 2>/dev/null)
+
+    if echo "$response" | jq -e '.status == "sent"' >/dev/null 2>&1; then
+      echo "Sent"
+    else
+      local detail
+      detail=$(echo "$response" | jq -r '.detail // .status // "relay unavailable"' 2>/dev/null)
+      echo "Failed: $detail"
+    fi
+  }
+
+  test_connection() {
+    local group_link
+    group_link=$(jq -r '.telegram_group_link // empty' "$CONFIG" 2>/dev/null)
+    if [ -n "$group_link" ]; then
+      echo "Telegram group configured (local mode — group messages via relay)"
+    else
+      echo "No Telegram group configured. Run /telegram-connect."
+    fi
+  }
+
 else
-  # === OFFLINE MODE: No API key — skip notifications (OSS/local) ===
+  # === OFFLINE MODE: No API key, not local — skip notifications ===
   send_to_person() { echo '{"status":"offline","reason":"no_api_key"}'; }
   send_to_group() { echo '{"status":"offline","reason":"no_api_key"}'; }
   test_connection() { echo '{"status":"offline","reason":"no_api_key"}'; }

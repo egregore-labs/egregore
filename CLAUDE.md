@@ -42,7 +42,7 @@ If on develop after two messages, create a branch immediately from whatever cont
 
 ### Onboarding exception
 
-If hook output contains `"onboarding_complete": false`, invoke `/onboarding` instead of the greeting.
+If hook output contains `onboarding_needed`, invoke `/onboarding` instead of the greeting.
 
 ---
 
