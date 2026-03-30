@@ -52,6 +52,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/bin/session-log.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/bin/transcript-archive.sh"
           }
         ]

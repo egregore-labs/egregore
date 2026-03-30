@@ -12,7 +12,7 @@ trap "rm -rf $TMPDIR" EXIT
 
 # --- Read config ---
 API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
 ORG=$(jq -r '.org_name // "Egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "Egregore")
 DATE=$(date '+%b %d')
 
@@ -87,12 +87,61 @@ API_PID=$!
 ) &
 GIT_PID=$!
 
-# --- Wait for both ---
-wait $API_PID $GIT_PID
+# Local sessions: parse memory files when graph is offline (parallel)
+(
+  GH_LC=$(echo "$GH_USER" | tr '[:upper:]' '[:lower:]')
+  DISPLAY_LC=""
+  if [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
+    DISPLAY_LC=$(jq -r '.display_name // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+  fi
+
+  # Compute cutoff date from time range
+  case "$TIME_RANGE" in
+    P1D)   CUTOFF=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d 2>/dev/null || echo "2000-01-01") ;;
+    P7D)   CUTOFF=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "2000-01-01") ;;
+    P30D)  CUTOFF=$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d 2>/dev/null || echo "2000-01-01") ;;
+    P365D) CUTOFF="2000-01-01" ;;
+    *)     CUTOFF=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "2000-01-01") ;;
+  esac
+
+  # Scan sessions, wraps, and handoffs for this user
+  for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps" "$SCRIPT_DIR/memory/handoffs"; do
+    [ -d "$DIR" ] || continue
+    TYPE=$(basename "$DIR")
+    find -L "$DIR" -name '*.md' -not -name 'index*' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -20 | while read -r MFILE; do
+      [ -z "$MFILE" ] && continue
+      M_AUTH=$(head -10 "$MFILE" 2>/dev/null | grep -m1 '^\*\*Author\*\*:' | sed 's/^\*\*Author\*\*:[[:space:]]*//' || true)
+      [ -z "$M_AUTH" ] && continue
+      M_AUTH_LC=$(echo "$M_AUTH" | tr '[:upper:]' '[:lower:]')
+      # Filter to this user only
+      [ "$M_AUTH_LC" != "$GH_LC" ] && { [ -z "$DISPLAY_LC" ] || [ "$M_AUTH_LC" != "$DISPLAY_LC" ]; } && continue
+      M_DATE=$(head -10 "$MFILE" 2>/dev/null | grep -m1 '^\*\*Date\*\*:' | sed 's/^\*\*Date\*\*:[[:space:]]*//' || true)
+      M_DAY="${M_DATE%%T*}"
+      [ -n "$M_DAY" ] && [ "$M_DAY" \< "$CUTOFF" ] && continue
+      M_BRANCH=$(head -10 "$MFILE" 2>/dev/null | grep -m1 '^\*\*Branch\*\*:' | sed 's/^\*\*Branch\*\*:[[:space:]]*//' || true)
+      M_DURATION=$(head -10 "$MFILE" 2>/dev/null | grep -m1 '^\*\*Duration\*\*:' | sed 's/^\*\*Duration\*\*:[[:space:]]*//' || true)
+      M_TOPIC=$(head -3 "$MFILE" 2>/dev/null | grep -m1 '^# ' | sed 's/^# [^:]*:[[:space:]]*//' || true)
+      echo "${M_DATE}|${M_TOPIC}|${M_BRANCH}|${M_DURATION}|${TYPE}"
+    done
+  done | jq -Rn '
+    [inputs | split("|") |
+      {date: .[0], topic: .[1], branch: .[2], duration: .[3], type: .[4]}
+    ] | sort_by(.date) | reverse | {
+      sessions: .,
+      session_count: length
+    }
+  ' 2>/dev/null > "$TMPDIR/local_sessions.json" || echo '{"sessions":[],"session_count":0}' > "$TMPDIR/local_sessions.json"
+) &
+LOCAL_PID=$!
+
+# --- Wait for all ---
+wait $API_PID $GIT_PID $LOCAL_PID 2>/dev/null || true
 
 # --- Read results ---
 GIT_INFO=$(cat "$TMPDIR/git.json" 2>/dev/null || echo '{"branch":"unknown","dirty":false}')
 BRANCH=$(echo "$GIT_INFO" | jq -r '.branch' 2>/dev/null || echo "unknown")
+LOCAL_SESSIONS=$(cat "$TMPDIR/local_sessions.json" 2>/dev/null || echo '{"sessions":[],"session_count":0}')
+echo "$LOCAL_SESSIONS" | jq . >/dev/null 2>&1 || LOCAL_SESSIONS='{"sessions":[],"session_count":0}'
 
 # --- Client-side current session fallback ---
 # If the graph returned no current_session (WAL hasn't drained yet),
@@ -121,4 +170,5 @@ echo "$DASHBOARD" | jq \
   --arg date "$DATE" \
   --arg range_label "$RANGE_LABEL" \
   --argjson git "$GIT_INFO" \
-  '. + {org: $org, date: $date, range_label: $range_label, git: $git}'
+  --argjson local_sessions "$LOCAL_SESSIONS" \
+  '. + {org: $org, date: $date, range_label: $range_label, git: $git, local_sessions: $local_sessions}'

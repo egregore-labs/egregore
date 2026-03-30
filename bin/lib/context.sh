@@ -34,7 +34,7 @@ fi
 (
   JSON="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    FILES=$(ls -t "$SCRIPT_DIR/memory/handoffs/"*.md 2>/dev/null | grep -v index.md | head -3)
+    FILES=$(find -L "$SCRIPT_DIR/memory/handoffs" -name '*.md' -not -name 'index*' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -3)
     JSON="["
     FIRST=true
     for F in $FILES; do
@@ -133,6 +133,34 @@ fi
     ' 2>/dev/null || echo "{}")
   fi
 
+  # --- Local-mode presence: scan session + wrap files for lastSeen ---
+  # When graph has no data, these files provide temporal presence information
+  FILE_PRESENCE="{}"
+  if [ "$GRAPH_DATA" = "[]" ]; then
+    FILE_PRESENCE=$(
+      {
+        # Scan session logs and wraps (both use **Author**: / **Date**: format)
+        for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps"; do
+          [ -d "$DIR" ] || continue
+          find -L "$DIR" -name '*.md' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -20 | while read -r SFILE; do
+            [ -z "$SFILE" ] && continue
+            S_AUTH=$(grep -m1 '^\*\*Author\*\*:' "$SFILE" 2>/dev/null | sed 's/^\*\*Author\*\*:[[:space:]]*//')
+            S_DATE=$(grep -m1 '^\*\*Date\*\*:' "$SFILE" 2>/dev/null | sed 's/^\*\*Date\*\*:[[:space:]]*//')
+            [ -z "$S_AUTH" ] && continue
+            echo "${S_AUTH}|${S_DATE}"
+          done
+        done
+      } | sort -t'|' -k1,1 -k2,2r | sort -t'|' -k1,1 -u | while IFS='|' read -r FP_NAME FP_DATE; do
+        [ -z "$FP_NAME" ] && continue
+        FP_LC=$(echo "$FP_NAME" | tr '[:upper:]' '[:lower:]')
+        echo "${FP_LC}|${FP_DATE}"
+      done | jq -Rn '
+        [inputs | split("|") | {(.[0]): .[1]}]
+        | add // {}
+      ' 2>/dev/null || echo "{}"
+    )
+  fi
+
   # --- Relative time + epoch helpers (cross-platform) ---
   NOW_EPOCH=$(date +%s)
 
@@ -159,11 +187,12 @@ fi
     fi
   }
 
-  # --- Merge graph + branches into presence array ---
+  # --- Merge graph + file presence + branches into presence array ---
   ALL_NAMES=$(echo "$GRAPH_DATA" | jq -r '.[].name' 2>/dev/null || echo "")
+  FILE_NAMES=$(echo "$FILE_PRESENCE" | jq -r 'keys[]' 2>/dev/null || echo "")
   BRANCH_NAMES=$(echo "$BRANCH_MAP" | jq -r 'keys[]' 2>/dev/null || echo "")
 
-  UNION_NAMES=$(printf "%s\n%s" "$ALL_NAMES" "$BRANCH_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
+  UNION_NAMES=$(printf "%s\n%s\n%s" "$ALL_NAMES" "$FILE_NAMES" "$BRANCH_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
 
   if [ -z "$UNION_NAMES" ]; then
     echo "[]" > "$CTX_DIR/team"
@@ -175,6 +204,10 @@ fi
   FIRST=true
   for PNAME in $UNION_NAMES; do
     LAST_SEEN_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
+    # Fallback to file-based presence (session/wrap files)
+    if [ -z "$LAST_SEEN_ISO" ]; then
+      LAST_SEEN_ISO=$(echo "$FILE_PRESENCE" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
+    fi
     if [ -n "$LAST_SEEN_ISO" ]; then
       LAST_SEEN_EPOCH=$(iso_to_epoch "$LAST_SEEN_ISO")
       LAST_SEEN_REL=$(epoch_to_relative "$LAST_SEEN_EPOCH")
