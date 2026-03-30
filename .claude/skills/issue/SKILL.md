@@ -9,6 +9,23 @@ Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after (create mode only).
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode flow:
+- **Create mode**: Steps 0-3 (context capture, description, smart routing, write to memory) work normally. Skip Step 4 graph node creation. Step 5 notifications: skip entirely. Steps 6-7 (auto-save, confirmation TUI) work normally.
+- **List mode**: Read issues from `memory/issues/` directory — parse frontmatter for id, title, status, recipient, created, topics. Render same TUI.
+- **Close mode**: Find issue file in `memory/issues/`, update frontmatter `status: closed` + add `closed: {date}`. Skip graph update.
+- **Search mode**: Grep through `memory/issues/` files for matching text. Render same TUI.
+- **Notifications**: Skip entirely — do not mention notifications.
+
+**Connected mode**: Full behavior including graph nodes and notifications as specified below.
+
 ## Execution rules
 
 **Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.

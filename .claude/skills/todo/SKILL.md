@@ -18,6 +18,55 @@ Arguments: $ARGUMENTS (Optional: text to add, "done N", "cancel N", quest slug, 
 - `/todo [quest-slug]` — Quest-scoped view
 - `/todo all` — Include done/cancelled (14 days)
 
+## Step 0: Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode storage: `memory/todos/{person}.md` — a YAML-frontmatter markdown file per user.
+
+Local-mode flow:
+- **All routes** (add, list, done, cancel, check): same UX and TUI rendering, backed by YAML parse/write instead of Cypher queries.
+- **Quest matching**: check `memory/quests/` directory for active quest files instead of graph query.
+- **Person detection**: check `memory/people/` directory for person files instead of graph query.
+- **CheckIn persistence**: not available in local mode (no graph storage). The check-in flow still works interactively but check-in history is not persisted.
+- **Notifications**: skip entirely — do not mention notifications.
+
+### Local-mode file format
+
+File: `memory/todos/{person}.md`
+
+```yaml
+---
+todos:
+  - id: "2026-03-30-bartu-001"
+    text: "review bugs manually"
+    status: open
+    priority: 0
+    created: "2026-03-30T22:00:00Z"
+    completed: null
+    quest: null
+    source: manual
+    blockedBy: null
+    deferredUntil: null
+    lastNote: null
+    lastTransition: null
+---
+```
+
+### Local-mode route adjustments
+
+- **Add**: Parse text, determine priority, check `memory/quests/` for quest matching (read frontmatter `status: active` from quest files). Append to the YAML `todos` array. Write file.
+- **List**: Read the YAML file, filter by status, sort by priority desc then created desc. Render same TUI.
+- **Done/Cancel**: Read file, find item by position or text match, update status + completed timestamp, write file.
+- **Check**: Read file, filter active items, walk through with AskUserQuestion (same UX). Update statuses in YAML after each item. Skip CheckIn node creation.
+- **Quest view**: Read file, filter todos where `quest` matches the slug. Same TUI with quest header.
+
+**Connected mode**: Full behavior including graph nodes and notifications as specified below.
+
 ## Step 1: Get Current User
 
 ```bash
@@ -553,7 +602,8 @@ Output:
 
 | Scenario | Handling |
 |----------|----------|
-| Neo4j unavailable | "Graph offline — todos need the knowledge graph. Try again when connected." |
+| Neo4j unavailable (connected mode) | Still attempt file-based save. Show warning: "Graph offline — file saved, will sync on next /save" |
+| Local mode | Skip all graph calls silently — no warnings, no "graph offline" messaging. YAML file is the source of truth. TUI renders identically. |
 | No open todos (list) | "No open todos. /todo [text] to add one." |
 | Text matches multiple (done/cancel) | Show matches, AskUserQuestion to pick |
 | Person not in graph (mention) | Save todo without MENTIONS. Warn: "[name] not found in graph." |
