@@ -399,6 +399,18 @@ fi
 bash "$SCRIPT_DIR/bin/graph-wal.sh" drain >/dev/null 2>&1 &
 
 # ============================================================
+# 7b. Session baseline (for session-log.sh delta computation)
+# ============================================================
+BASELINE_FILE="/tmp/egregore-baseline-${EGREGORE_SESSION_ID}.json"
+jq -n \
+  --arg branch "$BRANCH" \
+  --arg commit "$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo '')" \
+  --argjson dirty "$([ -n "$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null | head -1)" ] && echo 'true' || echo 'false')" \
+  --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{branch: $branch, commit: $commit, dirty: $dirty, started_at: $started_at}' \
+  > "$BASELINE_FILE" 2>/dev/null || true
+
+# ============================================================
 # 8. Gather context
 # ============================================================
 source "$SCRIPT_DIR/bin/lib/context.sh"
