@@ -78,9 +78,15 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   if [ -n "$access_token" ]; then
     # Write token to .env
     if [ -f "$ENV_FILE" ] && grep -q '^GITHUB_TOKEN=' "$ENV_FILE"; then
-      # Replace existing token
-      sed -i '' "s|^GITHUB_TOKEN=.*|GITHUB_TOKEN=$access_token|" "$ENV_FILE" 2>/dev/null \
-        || sed -i "s|^GITHUB_TOKEN=.*|GITHUB_TOKEN=$access_token|" "$ENV_FILE"
+      # Replace existing token (portable: write to temp file, then move)
+      tmp="$ENV_FILE.tmp.$$"
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+          GITHUB_TOKEN=*) echo "GITHUB_TOKEN=$access_token" ;;
+          *) echo "$line" ;;
+        esac
+      done < "$ENV_FILE" > "$tmp"
+      mv "$tmp" "$ENV_FILE"
     else
       echo "GITHUB_TOKEN=$access_token" >> "$ENV_FILE"
     fi

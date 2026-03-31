@@ -39,19 +39,20 @@ Render a TUI box showing all registered services, grouped by `type`:
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  NETLIFY                                                             │
-│  My Site · mysite.example.com                                        │
-│    preview: preview--my-site.netlify.app                             │
-│    repo: my-org/my-site                                              │
+│  Egregore Site · egregore.xyz                                        │
+│    preview: preview--egregore-core.netlify.app                       │
+│    repo: Curve-Labs/egregore-site                                    │
 │                                                                      │
 │  RAILWAY                                                             │
-│  API · my-app.up.railway.app                                         │
-│    repo: my-org/my-app                                               │
+│  Egregore API · egregore-production-55f2.up.railway.app              │
+│    repo: Curve-Labs/egregore                                         │
 │                                                                      │
 │  NEO4J                                                               │
-│  Dev Instance · access via bin/graph.sh                              │
+│  CL Instance · access via bin/graph.sh                               │
+│  Core Instance · access via bin/graph.sh                             │
 │                                                                      │
 │  SUPABASE                                                            │
-│  Telemetry · my-project.supabase.co                                  │
+│  Telemetry/Reports · xgksfrirtdumacvmfkzj.supabase.co               │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │  /infra {name} for details · /infra add to register new             │
@@ -109,19 +110,20 @@ Display matching entries with full detail:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  My Site                                                netlify      │
+│  Egregore Site                                          netlify      │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  URL:         https://mysite.example.com                             │
-│  Dashboard:   https://app.netlify.com/sites/my-site                  │
-│  Repo:        my-org/my-site                                         │
-│  Credentials: Netlify account — team login                           │
+│  URL:         https://egregore.xyz                                   │
+│  Dashboard:   https://app.netlify.com/sites/egregore-core            │
+│  Repo:        Curve-Labs/egregore-site                               │
+│  Credentials: Netlify account — Oz's login                           │
 │                                                                      │
-│  Netlify site name: my-site                                          │
-│  Preview: https://preview--my-site.netlify.app                       │
+│  Netlify site name: egregore-core                                    │
+│  Preview: https://preview--egregore-core.netlify.app                 │
 │  Production auto-deploys from main branch.                           │
+│  Build: Next.js static export, publish dir: out                      │
 │                                                                      │
-│  registered by alice on 2026-01-15                                   │
+│  registered by oz on 2026-03-31                                      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

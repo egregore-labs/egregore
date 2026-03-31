@@ -64,11 +64,15 @@ fi
   for _repo in $_managed_repos; do
     _repo_path="$_parent_dir/$_repo"
     [ -d "$_repo_path/.git" ] || continue
-    git -C "$_repo_path" fetch origin develop --quiet 2>/dev/null || true
-    if ! git -C "$_repo_path" show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
-      if git -C "$_repo_path" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-        git -C "$_repo_path" branch develop origin/develop --quiet 2>/dev/null || true
-      fi
+    # Detect default branch: develop if it exists, otherwise main
+    git -C "$_repo_path" fetch origin --quiet 2>/dev/null || true
+    if git -C "$_repo_path" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
+      _branch="develop"
+    else
+      _branch="main"
+    fi
+    if ! git -C "$_repo_path" show-ref --verify --quiet "refs/heads/$_branch" 2>/dev/null; then
+      git -C "$_repo_path" branch "$_branch" "origin/$_branch" --quiet 2>/dev/null || true
     fi
   done
 ) &
