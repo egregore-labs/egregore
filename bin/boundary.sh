@@ -137,7 +137,7 @@ validate_repos() {
   fi
 
   local repos
-  repos=$(jq -r '.repos[]? // empty' "$config" 2>/dev/null)
+  repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$config" 2>/dev/null)
   local parent_dir
   parent_dir="$(dirname "$SCRIPT_DIR")"
   local exit_code=0
