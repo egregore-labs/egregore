@@ -55,6 +55,25 @@ if ! git show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
 fi
 
 # ============================================================
+# 2.5 Sync managed repos (background, non-blocking)
+# ============================================================
+(
+  _managed_repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  [ -z "$_managed_repos" ] && exit 0
+  _parent_dir="$(dirname "$SCRIPT_DIR")"
+  for _repo in $_managed_repos; do
+    _repo_path="$_parent_dir/$_repo"
+    [ -d "$_repo_path/.git" ] || continue
+    git -C "$_repo_path" fetch origin develop --quiet 2>/dev/null || true
+    if ! git -C "$_repo_path" show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
+      if git -C "$_repo_path" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
+        git -C "$_repo_path" branch develop origin/develop --quiet 2>/dev/null || true
+      fi
+    fi
+  done
+) &
+
+# ============================================================
 # 3. Check onboarding state
 # ============================================================
 ONBOARDING_COMPLETE="true"
@@ -191,7 +210,7 @@ compute_boundary() {
   local parent_dir
   parent_dir="$(dirname "$SCRIPT_DIR")"
   local repos
-  repos=$(jq -r '.repos[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
   if [ -n "$repos" ]; then
     # Validate repos first
     bash "$SCRIPT_DIR/bin/boundary.sh" validate-repos 2>/dev/null || true

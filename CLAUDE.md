@@ -82,6 +82,7 @@ Never repeat it.
 - `handoffs/` — session handoffs + `index.md`
 - `knowledge/decisions/` — org decisions
 - `knowledge/patterns/` — emergent patterns
+- `infrastructure/` — service registry (URLs, names, credential locations)
 
 Always use HTTPS for git operations — `github-auth.sh` handles credential storage.
 
@@ -105,7 +106,7 @@ main ← stable (/release)
 
 ### Managed Repos
 
-Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Same branching strategy. Use `git -C` with absolute paths — never `cd` into repos. `/save` scans all managed repos for uncommitted changes.
+Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Each entry can be a string or `{"name": "...", "description": "..."}`. Match user intent to the right repo using `description`. Same branching strategy. Use `git -C` with absolute paths — never `cd` into repos. `/save` scans all managed repos for uncommitted changes.
 
 ## Working Conventions
 
@@ -124,7 +125,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Connectors** — `/telegram-connect` (Telegram group setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr` `/contribute`
 **Spirits** — `/summon` (persistent agent processes)
-**Infra** — `/setup` `/update` `/pull` `/env` `/sync-repos` `/release` `/checkup`
+**Infra** — `/setup` `/update` `/pull` `/env` `/infra` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation:**
 - Knowledge: `/reflect` (share-ready) · `/note` (half-baked) · `/deep-reflect` (cross-reference) · `/archive` (AI patterns)

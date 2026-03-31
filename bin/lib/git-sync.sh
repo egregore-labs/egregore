@@ -45,7 +45,7 @@ if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory/.git" ]; then
 fi
 
 # Fetch managed repos in parallel
-MANAGED_REPOS=$(jq -r '.repos[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+MANAGED_REPOS=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 for REPO in $MANAGED_REPOS; do
   if [ -d "$SCRIPT_DIR/../$REPO/.git" ]; then
     git -C "$SCRIPT_DIR/../$REPO" fetch origin --quiet 2>/dev/null &

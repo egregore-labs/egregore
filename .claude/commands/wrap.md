@@ -101,6 +101,54 @@ options:
 
 If "Needs adjustment": ask a follow-up AskUserQuestion with a text input to refine. Apply changes.
 
+## Step 2.5: Infrastructure harvest
+
+Scan the session for infrastructure mentions not yet in the registry.
+
+### Detect unregistered infrastructure
+
+1. Read the observation buffer for this session:
+   ```bash
+   SID=$(cat .egregore-session-id 2>/dev/null)
+   cat /tmp/egregore-obs-${SID}.jsonl 2>/dev/null
+   ```
+
+2. Also scan the conversation history for mentions of:
+   - Platform names: netlify, vercel, railway, supabase, heroku, fly.io, render, docker
+   - URL patterns: `*.netlify.app`, `*.railway.app`, `*.vercel.app`, `*.supabase.co`, `*.fly.dev`
+   - CLI commands: `netlify deploy`, `railway up`, `vercel --prod`, `docker push`
+   - Service names that look like infrastructure (site names, project IDs, database instances)
+
+3. Load existing registry:
+   ```bash
+   cat memory/infrastructure/services.yml 2>/dev/null
+   ```
+
+4. Compare: identify any infrastructure mentioned in the session that is NOT already registered.
+
+### Offer to register
+
+If unregistered infrastructure is found, use AskUserQuestion:
+
+```
+header: "Infrastructure"
+question: "I noticed infrastructure not in the service registry:\n\n{list of detected services with URLs if found}\n\nRegister these so other sessions can find them?"
+options:
+  - label: "Yes, register all"
+    description: "Add to memory/infrastructure/services.yml"
+  - label: "Pick which ones"
+    description: "I'll select from the list"
+  - label: "Skip"
+    description: "Don't register now"
+```
+
+If "Yes, register all" or selected items:
+- For each service, derive: name, type, url (from context), credentials ("unknown — ask {author}"), notes (from conversation context)
+- Append entries to `memory/infrastructure/services.yml`
+- Set `added_by` to current author, `added_date` to today
+
+If "Skip" or no infrastructure detected: proceed silently to Step 3.
+
 ## Step 3: Link suggestions (AskUserQuestion, multiSelect)
 
 Based on context from Step 0, suggest connections:
