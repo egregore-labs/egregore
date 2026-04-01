@@ -57,11 +57,22 @@ todos:
 ---
 ```
 
+### Local-mode initialization
+
+On first use, the directory and file may not exist. Before any read or write:
+1. `mkdir -p memory/todos/`
+2. If `memory/todos/{person}.md` does not exist, create it with:
+   ```yaml
+   ---
+   todos: []
+   ---
+   ```
+
 ### Local-mode route adjustments
 
-- **Add**: Parse text, determine priority, check `memory/quests/` for quest matching (read frontmatter `status: active` from quest files). Append to the YAML `todos` array. Write file.
+- **Add**: Ensure directory and file exist (see initialization above). Parse text, determine priority, check `memory/quests/` for quest matching (read frontmatter `status: active` from quest files). Generate todo ID as `YYYY-MM-DD-{person}-{NNN}` where NNN is zero-padded 3 digits: count existing entries in the `todos` array whose `id` starts with today's `YYYY-MM-DD-{person}-` prefix, add 1 (e.g., if 2 exist for today, next is `003`). Append to the YAML `todos` array. Write file.
 - **List**: Read the YAML file, filter by status, sort by priority desc then created desc. Render same TUI.
-- **Done/Cancel**: Read file, find item by position or text match, update status + completed timestamp, write file.
+- **Done/Cancel**: Read file, filter to active items (status `open`, `blocked`, `deferred`), sort by priority desc then created desc (same order as List display). Positional references (e.g., `todo done 2`) resolve against this filtered+sorted list — position 2 means the 2nd displayed item, not the 2nd entry in the raw YAML array. For text match, search the `text` field of filtered items. Update matched item's status + `completed` timestamp in the YAML. Write file.
 - **Check**: Read file, filter active items, walk through with AskUserQuestion (same UX). Update statuses in YAML after each item. Skip CheckIn node creation.
 - **Quest view**: Read file, filter todos where `quest` matches the slug. Same TUI with quest header.
 

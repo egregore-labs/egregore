@@ -18,10 +18,10 @@ MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 **Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
 
 Local-mode flow:
-- **Create mode**: Steps 0-3 (context capture, description, smart routing, write to memory) work normally. Skip Step 4 graph node creation. Step 5 notifications: skip entirely. Steps 6-7 (auto-save, confirmation TUI) work normally.
-- **List mode**: Read issues from `memory/issues/` directory — parse frontmatter for id, title, status, recipient, created, topics. Render same TUI.
-- **Close mode**: Find issue file in `memory/issues/`, update frontmatter `status: closed` + add `closed: {date}`. Skip graph update.
-- **Search mode**: Grep through `memory/issues/` files for matching text. Render same TUI.
+- **Create mode**: Step 0 context capture — run Bash call 1 (git identity + state) normally; skip Bash call 2's `bin/graph.sh test` line (keep the memory-symlink and egregore.json checks); skip the Neo4j recent-session query entirely. Steps 1-2 (description, smart routing) work normally. Step 3 — write the markdown file to `memory/knowledge/issues/` normally, but skip the Neo4j `CREATE (i:Issue)` node and the progress message referencing "graph". Skip Step 4 graph routing updates entirely. Skip Step 5 notifications entirely. Steps 6-7 (auto-save, confirmation TUI) work normally — in the TUI, show `✓ Saved to memory` (omit "graphed" and "team notified").
+- **List mode**: Read issues from `memory/knowledge/issues/` directory — parse frontmatter for id, title, status, recipient, created, topics. Render same TUI.
+- **Close mode**: Find issue file in `memory/knowledge/issues/`, update frontmatter `status: closed` + add `closed: {date}`. Skip graph update.
+- **Search mode**: Grep through `memory/knowledge/issues/` files for matching text. Render same TUI.
 - **Notifications**: Skip entirely — do not mention notifications.
 
 **Connected mode**: Full behavior including graph nodes and notifications as specified below.
