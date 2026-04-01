@@ -86,18 +86,18 @@ echo "{\"core\":\"$CORE\",\"memory\":\"$MEM\",\"username\":\"$USERNAME\",\"org\"
 
 **Create person file in memory:**
 ```bash
-USERNAME="$ARGUMENTS"
+INVITE_USER="$ARGUMENTS"
 INVITER=$(jq -r '.display_name // .github_username' .egregore-state.json 2>/dev/null)
 TODAY=$(date -u +%Y-%m-%d)
-cat > "memory/people/${USERNAME}.md" << EOF
+cat > "memory/people/${INVITE_USER}.md" << EOF
 ---
-name: ${USERNAME}
-github: ${USERNAME}
+name: ${INVITE_USER}
+github: ${INVITE_USER}
 invited_by: ${INVITER}
 joined: ${TODAY}
 ---
 EOF
-cd memory && git add -A && git commit -m "Invite ${USERNAME}" && git push 2>/dev/null && cd -
+cd memory && git add -A && git commit -m "Invite ${INVITE_USER}" && git push 2>/dev/null && cd -
 ```
 
 **Display result:**
