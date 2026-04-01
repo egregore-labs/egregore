@@ -18,11 +18,11 @@ git remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/nul
 git fetch upstream main --quiet
 
 # Check what would change before applying (two-dot diff — works even without shared git history)
-UPSTREAM_DIFF=$(git diff HEAD upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null || true)
+UPSTREAM_DIFF=$(git diff HEAD upstream/main -- bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/ 2>/dev/null || true)
 
 # If there are upstream changes, apply them
 if [ -n "$UPSTREAM_DIFF" ]; then
-  git checkout upstream/main -- bin/ .claude/commands/ CLAUDE.md skills/
+  git checkout upstream/main -- bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/
   # Show what changed
   git diff --stat HEAD
 fi
@@ -33,7 +33,7 @@ fi
 
 If framework files changed, stage and commit them:
 ```bash
-git add bin/ .claude/commands/ CLAUDE.md skills/
+git add bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/
 git commit -m "Update Egregore framework from upstream"
 ```
 
