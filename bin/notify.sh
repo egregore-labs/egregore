@@ -107,10 +107,12 @@ elif [ "$_MODE" = "local" ]; then
 
   send_to_group() {
     local message="$1"
+    local chat_id
+    chat_id=$(jq -r '.telegram_chat_id // empty' "$CONFIG" 2>/dev/null)
     local group_link
     group_link=$(jq -r '.telegram_group_link // empty' "$CONFIG" 2>/dev/null)
 
-    if [ -z "$group_link" ]; then
+    if [ -z "$chat_id" ] && [ -z "$group_link" ]; then
       echo '{"status":"offline","reason":"no_telegram_group"}'
       return
     fi
@@ -124,11 +126,12 @@ elif [ "$_MODE" = "local" ]; then
     response=$(curl -s -X POST "${RELAY_URL}/api/notify/relay" \
       -H "Content-Type: application/json" \
       -d "$(jq -n \
+        --arg chat_id "$chat_id" \
         --arg group_link "$group_link" \
         --arg message "$message" \
         --arg slug "$slug" \
         --arg org_name "$org_name" \
-        '{group_link: $group_link, message: $message, slug: $slug, org_name: $org_name}')" \
+        '{chat_id: $chat_id, group_link: $group_link, message: $message, slug: $slug, org_name: $org_name}')" \
       --max-time 10 2>/dev/null)
 
     if echo "$response" | jq -e '.status == "sent"' >/dev/null 2>&1; then

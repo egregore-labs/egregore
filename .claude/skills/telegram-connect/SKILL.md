@@ -15,19 +15,20 @@ Arguments: $ARGUMENTS (none expected)
 
 ## Step 1: Check current state
 
-Read `egregore.json` and check for existing `telegram_group_link`:
+Read `egregore.json` and check for existing `telegram_chat_id`:
 
 ```bash
-jq -r '.telegram_group_link // empty' egregore.json 2>/dev/null
+jq -r '.telegram_chat_id // empty' egregore.json 2>/dev/null
 ```
 
 If already set, show:
 ```
 Telegram is already connected.
 
-  Group link: {link}
+  Chat ID: {chat_id}
+  Group link: {group_link}
 
-To update it, remove `telegram_group_link` from egregore.json and run `/telegram-connect` again.
+To update it, remove `telegram_chat_id` from egregore.json and run `/telegram-connect` again.
 ```
 And stop.
 
@@ -39,9 +40,17 @@ To set up Telegram notifications:
 
   1. Create a Telegram group for your team
   2. Add the bot: https://t.me/Egregore_clbot?startgroup=true
-  3. Get the invite link: group name → Edit → Invite Links → Copy
-  4. Paste the invite link below
+  3. The bot will respond with your Chat ID — copy it
+  4. Get the invite link: group name → Edit → Invite Links → Copy
+  5. Paste both below
 ```
+
+Then use AskUserQuestion to ask for the chat ID:
+```
+Chat ID (from the bot's message in your group):
+```
+
+Validate: must be a negative number (e.g., `-1001234567890`) — reject anything else with "That doesn't look like a Telegram chat ID. It should be a negative number like -1001234567890."
 
 Then use AskUserQuestion to ask for the group invite link:
 ```
@@ -50,50 +59,27 @@ Group invite link:
 
 Validate: must start with `https://t.me/` — reject anything else with "That doesn't look like a Telegram invite link."
 
-## Step 3: Store the link
+## Step 3: Store and test
 
-Read `egregore.json`, add `telegram_group_link` field with the user's link, write it back.
+Read `egregore.json`, add `telegram_chat_id` and `telegram_group_link` fields, write it back.
 
-Read mode from `egregore.json`:
+Test the connection:
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json)
-API_URL=$(jq -r '.api_url // empty' egregore.json)
+bash bin/notify.sh group "Telegram connected! 🎉" 2>/dev/null
 ```
 
-### Connected mode (mode === "connected" and api_url is set):
-
-1. Store locally in `egregore.json`
-2. Commit and push to remote so joiners get it:
-```bash
-git add egregore.json && git commit -m "Add Telegram group link" && git push 2>/dev/null
+If successful, show:
 ```
-3. Sync to API if available (fire-and-forget):
-```bash
-bash -c '
-API_URL=$(jq -r ".api_url" egregore.json)
-API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
-SLUG=$(jq -r ".slug" egregore.json)
-LINK="$1"
-if [ -n "$API_KEY" ] && [ -n "$API_URL" ]; then
-  curl -sf -X POST "${API_URL}/api/org/telegram/group-link" \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"slug\": \"$SLUG\", \"telegram_group_link\": \"$LINK\"}" \
-    --max-time 5 >/dev/null 2>&1 || true
-fi
-' -- "LINK_VALUE"
+Telegram connected — test message sent to your group.
 ```
-4. Confirm: "Telegram connected. Notifications are live."
 
-### Local mode (mode === "local" or no api_url):
+If failed, show the error and suggest checking the chat ID.
 
-1. Store locally in `egregore.json`
-2. Commit and push to remote so joiners get it:
+### Commit and push
+
 ```bash
-git add egregore.json && git commit -m "Add Telegram group link" && git push 2>/dev/null
+git add egregore.json && git commit -m "Add Telegram group config" && git push 2>/dev/null
 ```
-3. Show: "Telegram group linked. Your team will see the join link when invited."
-4. Show: "Note: Live notifications require a connected Egregore."
 
 ## Step 4: Telemetry
 
@@ -105,5 +91,5 @@ bash bin/telemetry.sh emit "command" '{"command":"telegram-connect"}' 2>/dev/nul
 
 - Never expose credentials in tool output
 - The bot username is `@Egregore_clbot` — NOT `@egregore_bot`
-- Only store the group invite link, not chat IDs or bot tokens (those live on the API server)
+- Only store the group invite link and chat ID, not bot tokens (those live on the API server)
 - Always push to remote after updating egregore.json so joiners see the link
