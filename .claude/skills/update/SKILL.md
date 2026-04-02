@@ -17,23 +17,28 @@ git remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/nul
 # Fetch latest upstream
 git fetch upstream main --quiet
 
-# Check what would change before applying (two-dot diff — works even without shared git history)
-UPSTREAM_DIFF=$(git diff HEAD upstream/main -- bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/ 2>/dev/null || true)
+# Framework paths — checkout only those that exist in upstream
+FW_PATHS="bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/"
 
-# If there are upstream changes, apply them
+# Check what would change before applying
+UPSTREAM_DIFF=$(git diff HEAD upstream/main -- $FW_PATHS 2>/dev/null || true)
+
+# If there are upstream changes, apply them (each path individually — some may not exist)
 if [ -n "$UPSTREAM_DIFF" ]; then
-  git checkout upstream/main -- bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/
+  for p in $FW_PATHS; do
+    git checkout upstream/main -- "$p" 2>/dev/null || true
+  done
   # Show what changed
   git diff --stat HEAD
 fi
 ```
 
-**Framework paths synced:** `bin/`, `.claude/commands/`, `CLAUDE.md`, `skills/`
+**Framework paths synced:** `bin/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
 
 If framework files changed, stage and commit directly to develop (no branch needed — framework updates are upstream pulls, not user work):
 ```bash
-git add bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/
+git add $FW_PATHS 2>/dev/null
 EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
 ```
 The `EGREGORE_FRAMEWORK_UPDATE=1` marker tells the branch guard this is safe on develop.
