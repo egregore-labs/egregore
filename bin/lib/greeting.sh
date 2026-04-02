@@ -93,7 +93,8 @@ if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; th
       DOT="○"
     fi
     # Convert date to relative
-    H_EPOCH=$(date -j -f "%Y-%m-%d" "${H_DATE%%T*}" "+%s" 2>/dev/null || \
+    H_CLEAN="${H_DATE%%T*}T00:00:00"
+    H_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$H_CLEAN" "+%s" 2>/dev/null || \
               date -d "${H_DATE%%T*}" "+%s" 2>/dev/null || echo "0")
     H_DELTA=$(( NOW_RENDER - H_EPOCH ))
     if [ "$H_DELTA" -lt 86400 ] 2>/dev/null; then H_AGO="today"
@@ -116,10 +117,10 @@ if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
     T_AGO="--"
     if [ -n "$T_CREATED" ]; then
       T_CLEAN=$(echo "$T_CREATED" | sed 's/Z$//; s/+00:00$//')
+      # Append midnight if date-only to avoid macOS date -j filling current time
+      [[ "$T_CLEAN" != *T* ]] && T_CLEAN="${T_CLEAN}T00:00:00"
       T_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$T_CLEAN" "+%s" 2>/dev/null || \
-                date -j -f "%Y-%m-%d" "${T_CLEAN%%T*}" "+%s" 2>/dev/null || \
-                date -d "$T_CLEAN" "+%s" 2>/dev/null || \
-                date -d "${T_CLEAN%%T*}" "+%s" 2>/dev/null || echo "0")
+                date -d "$T_CLEAN" "+%s" 2>/dev/null || echo "0")
       if [ "$T_EPOCH" -gt 0 ] 2>/dev/null; then
         T_DELTA=$(( NOW_RENDER - T_EPOCH ))
         if [ "$T_DELTA" -lt 86400 ]; then T_AGO="today"

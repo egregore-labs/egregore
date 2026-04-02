@@ -6,11 +6,12 @@ _iso_to_epoch() {
   local iso="$1"
   local clean
   clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
+  # If date-only (no T), append midnight to avoid macOS date -j filling current time
+  [[ "$clean" != *T* ]] && clean="${clean}T00:00:00"
   if command -v gdate &>/dev/null; then
     gdate -d "$clean" +%s 2>/dev/null || echo "0"
   else
-    date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
-    date -j -f "%Y-%m-%d" "${clean%%T*}" "+%s" 2>/dev/null || echo "0"
+    date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || echo "0"
   fi
 }
 
