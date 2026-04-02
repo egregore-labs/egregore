@@ -165,6 +165,10 @@ case "$TOOL_NAME" in
       if targets_other_repo "$COMMAND"; then
         exit 0
       fi
+      # Allow framework updates from upstream (not user work — safe on develop)
+      if echo "$COMMAND" | grep -qF 'EGREGORE_FRAMEWORK_UPDATE=1' 2>/dev/null; then
+        exit 0
+      fi
       echo "$BLOCK_MSG" >&2
       exit 2
     fi

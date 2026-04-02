@@ -31,11 +31,12 @@ fi
 **Framework paths synced:** `bin/`, `.claude/commands/`, `CLAUDE.md`, `skills/`
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
 
-If framework files changed, stage and commit them:
+If framework files changed, stage and commit directly to develop (no branch needed — framework updates are upstream pulls, not user work):
 ```bash
 git add bin/ .claude/commands/ .claude/skills/ .claude/context/ CLAUDE.md skills/
-git commit -m "Update Egregore framework from upstream"
+EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
 ```
+The `EGREGORE_FRAMEWORK_UPDATE=1` marker tells the branch guard this is safe on develop.
 
 ## Step 2: Pull repos
 
