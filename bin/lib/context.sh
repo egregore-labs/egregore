@@ -250,10 +250,11 @@ fi
   JSON="[]"
   RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    # Match both github username and display name
+    # Match both github username and display name, with or without markdown bold
+    # Handoff files may use "to: name", "**To**: name", or "To: name"
     _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
-    _GREP_PAT="to: $AUTHOR\|to:$AUTHOR"
-    [ -n "$_DISPLAY" ] && [ "$_DISPLAY" != "$AUTHOR" ] && _GREP_PAT="$_GREP_PAT\|to: $_DISPLAY\|to:$_DISPLAY"
+    _GREP_PAT="[Tt]o[*]*: *$AUTHOR\|[Tt]o[*]*:$AUTHOR"
+    [ -n "$_DISPLAY" ] && [ "$_DISPLAY" != "$AUTHOR" ] && _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_DISPLAY\|[Tt]o[*]*:$_DISPLAY"
     ADDRESSED=$(grep -rl "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     JSON="["
     RICH="["
