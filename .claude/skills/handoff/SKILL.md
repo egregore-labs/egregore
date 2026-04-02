@@ -478,17 +478,21 @@ Show progress:
 [4/5] ✓ Pushed + PR created
 ```
 
-## Step 7: Notify recipient — CONNECTED MODE ONLY
-
-**Skip this entire step in local mode.** Do not run `bin/notify.sh`. Do not show notification progress.
+## Step 7: Notify recipient
 
 **Only if a recipient was specified.**
 
-Send via `bash bin/notify.sh send`:
-
+**Connected mode:** Send via DM (falls back to group automatically):
 ```bash
 bash bin/notify.sh send "$RECIPIENT" "$MESSAGE"
 ```
+
+**Local mode:** Send to group (DMs not available without API):
+```bash
+bash bin/notify.sh group "$MESSAGE"
+```
+
+If `telegram_chat_id` is not set in `egregore.json`, skip silently — Telegram isn't configured.
 
 **Telegram message format**:
 
