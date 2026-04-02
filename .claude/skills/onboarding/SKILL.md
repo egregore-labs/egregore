@@ -172,7 +172,18 @@ If "Something else" → user provides name via freeform. Validate: 1-30 chars, a
 ```
 Note: `transcript_sharing` defaults to `false` (opt-in). Other flags default on. `consent_collected: false` signals these are defaults — explicit consent collected in a later session.
 
-**State update:** `display_name`, `name`, `onboarding.phase = "first_todo"`, `profile_fields_collected: ["name"]`
+**State update — MANDATORY**, run immediately after collecting the name:
+```bash
+CHOSEN_NAME="<the name the user chose or typed>"
+jq --arg dn "$CHOSEN_NAME" --arg n "$(echo "$CHOSEN_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" \
+  '.display_name = $dn | .name = $n | .onboarding.phase = "first_todo" | .profile_fields_collected = ["name"]' \
+  .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+```
+**Verification:** Confirm the write:
+```bash
+jq -r '.display_name' .egregore-state.json 2>/dev/null
+```
+Must return the chosen name. If not, retry.
 
 **API calls (connected mode only):** `POST /api/user/ensure` with github_username, display_name
 

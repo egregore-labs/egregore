@@ -69,12 +69,22 @@ echo "$MEMBERS" | jq -r '.values[][] // empty' 2>/dev/null
 
 **Local mode:** Read team members from `memory/people/` directory:
 ```bash
-ls memory/people/*.md 2>/dev/null | xargs -I{} basename {} .md
+for f in memory/people/*.md; do
+  [ -f "$f" ] || continue
+  github=$(basename "$f" .md)
+  display=$(head -1 "$f" | sed 's/^# //')
+  echo "$github|$display"
+done
 ```
-Parse each file's frontmatter for `name`, `github`, `fullName` fields if available. Use filenames as fallback names.
+This gives `github_username|Display Name` pairs. The file format is:
+```
+# Display Name
+GitHub: username
+Role: ...
+```
 
 Use this list for recipient matching in Step 1.
-Match recipient names case-insensitively against `name`, `github`, or `fullName`.
+Match recipient names case-insensitively against display name (from `# ` header), github username (filename), or any partial match. The display name takes priority — if a user chose "oz" during onboarding, `/handoff oz` should resolve to their file even if the filename is their GitHub username.
 
 ## Step 0.5: Triage mode (no arguments + open handoffs)
 
