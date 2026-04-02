@@ -139,8 +139,8 @@ fi
   if [ "$GRAPH_DATA" = "[]" ]; then
     FILE_PRESENCE=$(
       {
-        # Scan session logs and wraps (both use **Author**: / **Date**: format)
-        for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps"; do
+        # Scan session logs, wraps, and handoffs (all use **Author**: / **Date**: format)
+        for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps" "$SCRIPT_DIR/memory/handoffs"; do
           [ -d "$DIR" ] || continue
           find -L "$DIR" -name '*.md' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -20 | while read -r SFILE; do
             [ -z "$SFILE" ] && continue
@@ -250,7 +250,11 @@ fi
   JSON="[]"
   RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    ADDRESSED=$(grep -rl "to: $AUTHOR\|to:$AUTHOR" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
+    # Match both github username and display name
+    _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
+    _GREP_PAT="to: $AUTHOR\|to:$AUTHOR"
+    [ -n "$_DISPLAY" ] && [ "$_DISPLAY" != "$AUTHOR" ] && _GREP_PAT="$_GREP_PAT\|to: $_DISPLAY\|to:$_DISPLAY"
+    ADDRESSED=$(grep -rl "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     JSON="["
     RICH="["
     FIRST=true
