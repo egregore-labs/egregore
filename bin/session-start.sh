@@ -83,6 +83,19 @@ if [ -f "$STATE_FILE" ]; then
   ONBOARDING_COMPLETE=$(jq -r '.onboarding_complete // false' "$STATE_FILE" 2>/dev/null || echo "true")
 fi
 
+# Self-heal: if state says incomplete but person file exists with a Role,
+# onboarding DID complete — the state write was lost. Fix it.
+if [ "$ONBOARDING_COMPLETE" != "true" ] && [ -n "$AUTHOR" ]; then
+  PEOPLE_FILE="$SCRIPT_DIR/memory/people/${AUTHOR}.md"
+  if [ -f "$PEOPLE_FILE" ] && grep -q '^Role:' "$PEOPLE_FILE" 2>/dev/null; then
+    if [ -f "$STATE_FILE" ]; then
+      jq '.onboarding_complete = true | .onboarding.phase = "complete"' "$STATE_FILE" > "$STATE_FILE.tmp" \
+        && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    fi
+    ONBOARDING_COMPLETE="true"
+  fi
+fi
+
 if [ "$ONBOARDING_COMPLETE" != "true" ]; then
   # Output as a single compact line — Claude reads it, user doesn't need to see it
   echo "onboarding_needed author=$AUTHOR"
