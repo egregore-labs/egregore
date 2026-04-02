@@ -169,6 +169,14 @@ case "$TOOL_NAME" in
       if echo "$COMMAND" | grep -qF 'EGREGORE_FRAMEWORK_UPDATE=1' 2>/dev/null; then
         exit 0
       fi
+      # Allow commits that only touch framework paths (bin/, .claude/, CLAUDE.md, skills/)
+      if echo "$COMMAND" | grep -qE 'git\s+commit' 2>/dev/null; then
+        _NON_FW=$(git -C "$PROJECT_DIR" diff --cached --name-only 2>/dev/null | grep -vE '^(bin/|\.claude/|CLAUDE\.md$|skills/)' | head -1)
+        if [ -z "$_NON_FW" ]; then
+          # All staged files are framework paths — allow
+          exit 0
+        fi
+      fi
       echo "$BLOCK_MSG" >&2
       exit 2
     fi
