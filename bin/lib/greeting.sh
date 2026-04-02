@@ -156,8 +156,10 @@ if [ "$TEAM_DATA_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_DATA_COUNT" != "0" ]; th
   STALE_THRESHOLD=$((5 * 86400))
   echo "$TEAM_DATA" | jq -r '.[] | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(.branches | join(", "))"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
     [ -z "$P_NAME" ] && continue
-    # Skip if last seen >5 days ago (or never seen)
-    if [ "$P_EPOCH" -le 0 ] 2>/dev/null || [ $(( NOW_RENDER - P_EPOCH )) -ge $STALE_THRESHOLD ] 2>/dev/null; then
+    # Skip if last seen >5 days ago — but keep if epoch 0 with branches (active but no date)
+    if [ "$P_EPOCH" -le 0 ] 2>/dev/null; then
+      [ -z "$P_BRANCHES" ] && continue
+    elif [ $(( NOW_RENDER - P_EPOCH )) -ge $STALE_THRESHOLD ] 2>/dev/null; then
       continue
     fi
     if [ ${#P_NAME} -gt 8 ]; then P_NAME="${P_NAME:0:8}"; fi
