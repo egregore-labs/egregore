@@ -55,7 +55,7 @@ if ! git show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
 fi
 
 # ============================================================
-# 2.5 Sync managed repos (background, non-blocking)
+# 2.5 Sync managed repos — fetch and ensure base branch tracking (background)
 # ============================================================
 (
   _managed_repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
@@ -64,15 +64,13 @@ fi
   for _repo in $_managed_repos; do
     _repo_path="$_parent_dir/$_repo"
     [ -d "$_repo_path/.git" ] || continue
-    # Detect default branch: develop if it exists, otherwise main
     git -C "$_repo_path" fetch origin --quiet 2>/dev/null || true
-    if git -C "$_repo_path" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-      _branch="develop"
-    else
-      _branch="main"
-    fi
-    if ! git -C "$_repo_path" show-ref --verify --quiet "refs/heads/$_branch" 2>/dev/null; then
-      git -C "$_repo_path" branch "$_branch" "origin/$_branch" --quiet 2>/dev/null || true
+    # Ensure local tracking branch for repo's base branch
+    _base=$(_get_base_branch "$_repo")
+    if ! git -C "$_repo_path" show-ref --verify --quiet "refs/heads/$_base" 2>/dev/null; then
+      if git -C "$_repo_path" show-ref --verify --quiet "refs/remotes/origin/$_base" 2>/dev/null; then
+        git -C "$_repo_path" branch "$_base" "origin/$_base" --quiet 2>/dev/null || true
+      fi
     fi
   done
 ) &

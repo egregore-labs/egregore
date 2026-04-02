@@ -25,6 +25,37 @@ _config_val() {
   fi
 }
 
+# Get base branch for a repo. Reads base_branch from egregore.json repos[] config.
+# Defaults to "develop" for backwards compatibility (existing egregores use develop).
+# Only returns something other than "develop" when base_branch is explicitly set
+# (e.g., for teams who added existing repos with a different default branch).
+# Usage: _get_base_branch "repo-name"   (omit for core repo)
+_get_base_branch() {
+  local repo_name="${1:-}"
+  local config="${CONFIG:-$SCRIPT_DIR/egregore.json}"
+
+  # Core egregore repo — always develop
+  if [ -z "$repo_name" ]; then
+    echo "develop"
+    return
+  fi
+
+  # Managed repo — check egregore.json for explicit base_branch
+  if [ -f "$config" ]; then
+    local base
+    base=$(jq -r --arg name "$repo_name" \
+      '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // empty else empty end' \
+      "$config" 2>/dev/null || true)
+    if [ -n "$base" ]; then
+      echo "$base"
+      return
+    fi
+  fi
+
+  # No explicit config — default to develop (backwards compatible)
+  echo "develop"
+}
+
 # Detect local vs connected mode
 _detect_mode() {
   local config="${CONFIG:-$SCRIPT_DIR/egregore.json}"

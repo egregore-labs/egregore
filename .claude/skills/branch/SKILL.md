@@ -100,10 +100,12 @@ Ready to work. /save when done.
 
 If the user's description references a managed repo (listed in `egregore.json` → `repos[]`), create the branch in that repo's sibling directory instead of the hub.
 
+Resolve the repo's base branch first:
 ```bash
+BASE_BRANCH=$(jq -r --arg name "$REPO" '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // "develop" else "develop" end' egregore.json)
 REPO_DIR="$(cd .. && pwd)/$REPO"
-git -C "$REPO_DIR" fetch origin develop --quiet
-git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" --quiet
+git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG "origin/$BASE_BRANCH"
 ```
 
 Use `git -C` with absolute paths — never `cd` into the repo.
@@ -113,9 +115,9 @@ Use `git -C` with absolute paths — never `cd` into the repo.
 
 Creating branch in frontend...
 
-  git -C ../frontend fetch origin develop --quiet
-  git -C ../frontend checkout -b dev/alice/auth-flow origin/develop
-  ✓ Created dev/alice/auth-flow in frontend (from develop)
+  git -C ../frontend fetch origin main --quiet
+  git -C ../frontend checkout -b dev/alice/auth-flow origin/main
+  ✓ Created dev/alice/auth-flow in frontend (from main)
 
 Ready to work. /save when done.
 ```

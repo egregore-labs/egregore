@@ -232,16 +232,16 @@ REPOS_STATUS=""
 for REPO in $MANAGED_REPOS; do
   REPO_DIR="$SCRIPT_DIR/../$REPO"
   if [ -d "$REPO_DIR/.git" ]; then
-    # Ensure develop branch exists locally
-    if ! git -C "$REPO_DIR" show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
-      if git -C "$REPO_DIR" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-        git -C "$REPO_DIR" branch develop origin/develop --quiet 2>/dev/null || true
-      fi
+    # Resolve base branch for this repo (from egregore.json or auto-detect)
+    REPO_BASE=$(_get_base_branch "$REPO")
+    # Sync base branch with remote (if not checked out)
+    R_BRANCH=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "?")
+    if [ "$R_BRANCH" != "$REPO_BASE" ]; then
+      git -C "$REPO_DIR" branch -f "$REPO_BASE" "origin/$REPO_BASE" --quiet 2>/dev/null || true
     else
-      git -C "$REPO_DIR" fetch origin develop:develop --quiet 2>/dev/null || true
+      git -C "$REPO_DIR" merge --ff-only "origin/$REPO_BASE" --quiet 2>/dev/null || true
     fi
     # Collect status
-    R_BRANCH=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "?")
     R_DIRTY=""
     if [ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null | head -1)" ]; then
       R_DIRTY=" *"
