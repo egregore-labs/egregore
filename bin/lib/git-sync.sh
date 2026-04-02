@@ -38,9 +38,9 @@ if [ "$_UPSTREAM_URL" != "none" ]; then
   git fetch upstream main --quiet 2>/dev/null &
 fi
 
-# Sync memory in parallel
+# Sync memory in parallel (symlink or direct directory — both valid)
 MEMORY_SYNCED="false"
-if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory/.git" ]; then
+if [ -d "$SCRIPT_DIR/memory/.git" ]; then
   git -C "$SCRIPT_DIR/memory" fetch origin --quiet 2>/dev/null &
 fi
 
@@ -217,8 +217,8 @@ elif ! setup_develop 2>/dev/null; then
   HEALTH_GIT="fail"
 fi
 
-# --- Sync memory ---
-if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory/.git" ]; then
+# --- Sync memory (symlink or direct directory — both valid) ---
+if [ -d "$SCRIPT_DIR/memory/.git" ]; then
   MEM_LOCAL=$(git -C "$SCRIPT_DIR/memory" rev-parse HEAD 2>/dev/null || echo "")
   MEM_REMOTE=$(git -C "$SCRIPT_DIR/memory" rev-parse origin/main 2>/dev/null || echo "")
   if [ -n "$MEM_LOCAL" ] && [ -n "$MEM_REMOTE" ] && [ "$MEM_LOCAL" != "$MEM_REMOTE" ]; then

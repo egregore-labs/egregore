@@ -30,7 +30,7 @@ MEMORY_DIRTY=""
 EGREGORE_DIRTY=""
 
 # Memory: uncommitted or unpushed changes
-if [ -L memory ] && [ -d memory/.git ]; then
+if [ -d memory/.git ]; then
   if [ -n "$(git -C memory status --porcelain 2>/dev/null)" ]; then
     MEMORY_DIRTY="uncommitted"
   elif [ -n "$(git -C memory log origin/main..HEAD --oneline 2>/dev/null)" ]; then
