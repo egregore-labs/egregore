@@ -140,7 +140,13 @@ If the remote branch is gone:
        This is advisory only — never blocks the save.
 
 4. **For managed repos** (listed in `egregore.json` → `repos[]`, located at `../{repo}/`):
-   - Read the repos list: `jq -r '.repos[]? // empty' egregore.json`
+   - Read the repos list and resolve each repo's base branch:
+     ```bash
+     # Get repo name (supports both string and object format)
+     REPO_NAME=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' egregore.json)
+     # Get base branch for a repo (object format has base_branch, default "develop")
+     BASE_BRANCH=$(jq -r --arg name "$REPO" '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // "develop" else "develop" end' egregore.json)
+     ```
    - For each repo, check for uncommitted changes:
      ```bash
      REPO_DIR="$(cd .. && pwd)/$REPO"
@@ -149,11 +155,11 @@ If the remote branch is gone:
      fi
      ```
    - **If no changes in any repo**, skip silently
-   - **If changes exist**, handle each repo with the same develop workflow as egregore:
-     1. Ensure on a working branch. If on develop or main, create one:
+   - **If changes exist**, handle each repo using its base branch (NOT hardcoded develop):
+     1. Ensure on a working branch. If on the base branch (main/develop/master), create one:
         ```bash
-        git -C "$REPO_DIR" fetch origin develop --quiet
-        git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+        git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" --quiet
+        git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG "origin/$BASE_BRANCH"
         ```
         Derive topic slug from conversation context or changed files. Fall back to date.
      2. Stage and commit changes:
@@ -161,30 +167,30 @@ If the remote branch is gone:
         git -C "$REPO_DIR" add -A
         git -C "$REPO_DIR" commit -m "$COMMIT_MESSAGE"
         ```
-     3. Rebase onto latest develop before pushing:
+     3. Rebase onto latest base branch before pushing:
         ```bash
-        git -C "$REPO_DIR" fetch origin develop --quiet
-        git -C "$REPO_DIR" rebase origin/develop --quiet
+        git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" --quiet
+        git -C "$REPO_DIR" rebase "origin/$BASE_BRANCH" --quiet
         ```
         If rebase conflicts: abort, try merge:
         ```bash
         git -C "$REPO_DIR" rebase --abort
-        git -C "$REPO_DIR" merge origin/develop --quiet -m "Sync with develop"
+        git -C "$REPO_DIR" merge "origin/$BASE_BRANCH" --quiet -m "Sync with $BASE_BRANCH"
         ```
         If merge also conflicts: stop and tell the user.
      4. Push working branch:
         ```bash
         git -C "$REPO_DIR" push -u origin $BRANCH
         ```
-     5. Create PR to develop:
+     5. Create PR to the repo's base branch:
         ```bash
-        gh pr create --repo $GITHUB_ORG/$REPO --base develop --title "..." --body "..."
+        gh pr create --repo $GITHUB_ORG/$REPO --base "$BASE_BRANCH" --title "..." --body "..."
         ```
      6. Track PR in graph (fire-and-forget):
         ```bash
         bash bin/graph-op.sh create-pr "$SID" "$PR_NUMBER" "$REPO" "$GH_USER" "$PR_TITLE" 2>/dev/null &
         ```
-     7. User sees: `[repo-name] ✓ Pushed dev/alice/topic-slug → PR #N to develop`
+     7. User sees: `[repo-name] ✓ Pushed dev/alice/topic-slug → PR #N to $BASE_BRANCH`
    - **Use `git -C` with absolute paths** — never `cd` into the repo (avoids permission prompts)
 
 ## Neo4j Sync Logic

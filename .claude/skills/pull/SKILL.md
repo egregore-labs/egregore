@@ -4,18 +4,20 @@ Pull latest for current repo and shared memory.
 
 ## What to do
 
-1. Sync develop branch with remote
-2. If on a `dev/*` working branch, rebase onto develop (fallback: merge)
+1. Sync the base branch with remote (develop for egregore hub, repo's base_branch for managed repos)
+2. If on a `dev/*` working branch, rebase onto the base branch (fallback: merge)
 3. Check memory symlink exists — if not, derive directory from `egregore.json` and create symlink
 4. Pull memory repo via symlink
 
 ## Execution
 
 ```bash
-# 1. Update local develop ref without switching branches (safe for concurrent sessions)
+# 1. Update local base branch ref without switching branches (safe for concurrent sessions)
+# For egregore hub: always "develop"
+# For managed repos: read base_branch from egregore.json repos[] (default "develop")
 git fetch origin develop:develop --quiet
 
-# 2. If on a working branch, rebase onto develop
+# 2. If on a working branch, rebase onto the base branch
 CURRENT=$(git branch --show-current)
 if [[ "$CURRENT" == dev/* ]]; then
   git rebase develop --quiet || (git rebase --abort && git merge develop -m "Sync with develop")

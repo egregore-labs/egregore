@@ -2,8 +2,9 @@ Push current branch to remote.
 
 ## Before anything else
 
-Check `git branch --show-current`. If on `develop`, `main`, or `master`:
-  → Create a working branch first: derive a topic slug from the changes or conversation context, then `git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop`
+Check `git branch --show-current`. If on a protected branch (`develop`, `main`, or `master`):
+  → Determine the base branch: for the egregore hub use `develop`, for managed repos read `base_branch` from `egregore.json` repos[] (default `"develop"`)
+  → Create a working branch: `git fetch origin $BASE_BRANCH --quiet && git checkout -b dev/{author}/{topic-slug} origin/$BASE_BRANCH`
   → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
   → Then proceed with the push.
 
