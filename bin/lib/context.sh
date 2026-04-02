@@ -101,7 +101,7 @@ fi
   # --- Graph: last-seen per person (excluding self) ---
   GRAPH_DATA="[]"
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
-    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, max(s.date) AS lastSeen ORDER BY lastSeen DESC"
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, toString(max(s.startedAt)) AS lastSeen ORDER BY lastSeen DESC"
     GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "$(jq -n --arg me "$AUTHOR" '{me: $me}')" 2>/dev/null || echo "")
     if [ -n "$GRAPH_RAW" ]; then
       GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
@@ -167,11 +167,12 @@ fi
   iso_to_epoch() {
     local iso="$1"
     local clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
+    # If date-only (no T), append midnight to avoid macOS date -j filling current time
+    [[ "$clean" != *T* ]] && clean="${clean}T00:00:00"
     if command -v gdate &>/dev/null; then
       gdate -d "$clean" +%s 2>/dev/null || echo "0"
     else
-      date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
-      date -j -f "%Y-%m-%d" "${clean%%T*}" "+%s" 2>/dev/null || echo "0"
+      date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || echo "0"
     fi
   }
 
