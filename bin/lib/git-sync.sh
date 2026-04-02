@@ -63,10 +63,9 @@ _AUTO_UPDATE=$(jq -r '.auto_update // true' "$SCRIPT_DIR/egregore.json" 2>/dev/n
 _FW_PATHS="bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/"
 if [ "$_UPSTREAM_URL" != "none" ] && [ "$_AUTO_UPDATE" != "false" ]; then
   if git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
-    # Check if upstream has changes we don't have
-    _LOCAL_HASH=$(git rev-parse HEAD:bin 2>/dev/null || echo "")
-    _UPSTREAM_HASH=$(git rev-parse upstream/main:bin 2>/dev/null || echo "")
-    if [ -n "$_LOCAL_HASH" ] && [ -n "$_UPSTREAM_HASH" ] && [ "$_LOCAL_HASH" != "$_UPSTREAM_HASH" ]; then
+    # Check if upstream has changes we don't have (diff ALL framework paths, not just bin/)
+    _FW_DIFF=$(git diff HEAD upstream/main -- $_FW_PATHS 2>/dev/null | head -1)
+    if [ -n "$_FW_DIFF" ]; then
       # Apply upstream changes (same as /update) — checkout only paths that exist
       for _p in $_FW_PATHS; do
         git checkout upstream/main -- "$_p" 2>/dev/null || true
