@@ -48,13 +48,13 @@ else
   ERR_LIST="\"no_api_key\""
 fi
 
-# --- Check memory symlink ---
+# --- Check memory directory ---
 MEMORY_LINKED="false"
-if [ -L "$SCRIPT_DIR/memory" ] && [ -d "$SCRIPT_DIR/memory" ]; then
+if [ -d "$SCRIPT_DIR/memory" ]; then
   MEMORY_LINKED="true"
 else
   [ -n "$ERR_LIST" ] && ERR_LIST="$ERR_LIST,"
-  ERR_LIST="${ERR_LIST}\"memory_not_linked\""
+  ERR_LIST="${ERR_LIST}\"memory_not_found\""
 fi
 
 # --- Check git sync ---
