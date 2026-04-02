@@ -305,17 +305,21 @@ fi
 - `people_file:missing` → set `phase = "first_todo"`. Tell user: "Almost done, but your profile didn't save. Try `/handoff` again next session."
 
 ### 6. Update state
-```json
-{
-  "onboarding_complete": true,
-  "onboarding": {
-    "phase": "complete",
-    "completed_at": "{ISO timestamp}"
-  },
-  "profile_fields_collected": ["name", "role"]
-}
+```bash
+jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '.onboarding_complete = true
+   | .onboarding.phase = "complete"
+   | .onboarding.completed_at = $ts
+   | .profile_fields_collected = ["name", "role"]' \
+  .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
 ```
 Do NOT set `usage_type` — already set by installer.
+
+**Verification — MANDATORY:** Immediately after the write, confirm it persisted:
+```bash
+jq -r '.onboarding_complete' .egregore-state.json 2>/dev/null
+```
+Must return `true`. If not, retry the write.
 
 ### 7. Shell alias
 ```bash
