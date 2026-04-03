@@ -135,6 +135,27 @@ PROJECT="$(md_field 'Project')"
 SUMMARY="$(echo "$CONTENT" | awk '/^## Session Summary/{found=1; next} found && /^[^#]/ && !/^[[:space:]]*$/{print; exit}' || true)"
 [ -z "$SUMMARY" ] && SUMMARY="$TOPIC"
 
+# Repo State: parse markdown table after "## Repo State"
+# Extracts repo, branch, PR number, and base branch from each table row
+REPO_STATE_JSON="[]"
+REPO_TABLE=$(echo "$CONTENT" | awk '/^## Repo State/{found=1; next} found && /^#/{exit} found && /^\|[^-]/ && !/^\| Repo/{print}' || true)
+if [ -n "$REPO_TABLE" ]; then
+  REPO_STATE_JSON=$(echo "$REPO_TABLE" | while IFS='|' read -r _ R_REPO R_BRANCH R_PR R_BASE _; do
+    R_REPO=$(echo "$R_REPO" | xargs 2>/dev/null || true)
+    R_BRANCH=$(echo "$R_BRANCH" | xargs 2>/dev/null || true)
+    R_PR=$(echo "$R_PR" | xargs 2>/dev/null | sed 's/^#//' | sed 's/—//' || true)
+    R_BASE=$(echo "$R_BASE" | xargs 2>/dev/null || true)
+    [ -z "$R_REPO" ] && continue
+    if [ -n "$R_PR" ] && [ "$R_PR" -eq "$R_PR" ] 2>/dev/null; then
+      jq -n --arg repo "$R_REPO" --arg branch "$R_BRANCH" --argjson pr "$R_PR" --arg base "$R_BASE" \
+        '{repo:$repo, branch:$branch, pr:$pr, base:$base}'
+    else
+      jq -n --arg repo "$R_REPO" --arg branch "$R_BRANCH" --arg base "$R_BASE" \
+        '{repo:$repo, branch:$branch, pr:null, base:$base}'
+    fi
+  done | jq -s '.' 2>/dev/null || echo "[]")
+fi
+
 # --- Build Cypher queries ---
 
 # Q1: MERGE Session + relationships
@@ -169,8 +190,8 @@ fi
 
 Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
 MERGE (s:Session {id: \$sessionId})
-ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending'
-ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath
+ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending', s.repoState = \$repoState
+ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.repoState = \$repoState
 MERGE (s)-[:BY]->(p)${PROJECT_CYPHER}${HANDED_TO_CYPHER}
 RETURN s.id AS sessionId"
 
@@ -181,6 +202,7 @@ Q1_PARAMS=$(jq -n \
   --arg topic "$TOPIC" \
   --arg summary "$SUMMARY" \
   --arg filePath "$REL_PATH" \
+  --arg repoState "$REPO_STATE_JSON" \
   "${_PROJECT_ARGS[@]}" \
   "${_RECIP_ARGS[@]}" \
   '$ARGS.named')

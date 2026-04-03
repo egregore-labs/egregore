@@ -155,7 +155,16 @@ options:
 **3. Handle response:**
 
 - **"Done" or "Not relevant"** → **Connected mode:** mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}`
-- **"Still open"** → **Connected mode:** if currently `pending`, mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call. Output: `◐ Kept open: {topic} from {author}`
+- **"Still open"** → **Connected mode:** if currently `pending`, mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call. Output: `◐ Kept open: {topic} from {author}`. **Then auto-checkout repos**: if the handoff file has a `## Repo State` section, parse the table and for each repo fetch + checkout the branch:
+  ```bash
+  PARENT_DIR="$(cd .. && pwd)"
+  # For each row in ## Repo State table:
+  REPO_DIR="$PARENT_DIR/$REPO_NAME"
+  git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
+  git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \
+    git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
+  ```
+  Report: `✓ Checked out {branch} in {repo1}, {repo2}`. If a branch no longer exists (PR merged): `◐ {repo}: PR #{N} merged — on {base}`. This works in both local and connected modes (pure git).
 - **Freeform text (user typed something)** → **Connected mode:** mark `done` AND capture: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done', s.handoffResponse = '$response' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}` + `  Captured: "{first 60 chars}..."`
 
 **4. Continue to next handoff**, or if all done:
@@ -354,6 +363,32 @@ Produce:
 5. **Next steps** — clear actions with entry points
 6. **Project** — which project this relates to (identify from context)
 
+## Step 2.5: Detect touched repos
+
+Scan the core repo and all managed repos from `egregore.json` to capture which repos have work on non-base branches. This works in **both local and connected modes** — pure git, no graph dependency.
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+EGREGORE_ROOT="$(pwd)"
+PARENT_DIR="$(cd .. && pwd)"
+GITHUB_ORG=$(jq -r '.github_org // empty' egregore.json 2>/dev/null)
+CORE_REPO=$(jq -r '.repo_name // "egregore"' egregore.json 2>/dev/null)
+MANAGED_REPOS=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' egregore.json 2>/dev/null)
+```
+
+For the core repo and each managed repo:
+
+1. **Resolve path**: core repo = `$EGREGORE_ROOT`, managed = `$PARENT_DIR/{name}`
+2. **Get branch**: `git -C "$REPO_DIR" branch --show-current`
+3. **Get base branch**: read from `egregore.json` (object format has `base_branch`, default `"develop"`)
+4. **Skip** if on the base branch AND no uncommitted changes (`git -C "$REPO_DIR" status --porcelain | head -1` is empty)
+5. **Count commits ahead**: `git -C "$REPO_DIR" rev-list "origin/${BASE}..HEAD" --count 2>/dev/null || echo "0"`
+6. **If touched** (on non-base branch with commits ahead, OR has uncommitted changes) → record `{repo, branch, base}`
+
+Store the results as a `REPO_STATE` list for use in Steps 3, 6.5, 7, and 8.
+
+If no repos are touched (all on base branches with no changes), `REPO_STATE` is empty — omit the `## Repo State` section from the handoff file entirely.
+
 ## Step 3: Create handoff file
 
 File path: `memory/handoffs/YYYY-MM/DD-[author]-[topic-slug].md`
@@ -407,10 +442,18 @@ cat > "memory/handoffs/YYYY-MM/DD-author-topic-slug.md" << 'HANDOFFEOF'
 For the next session, start by:
 - Reading: [specific file]
 - Running: [specific command]
+
+## Repo State
+
+| Repo | Branch | PR | Base |
+|------|--------|----|------|
+| [repo-name] | [branch] | — | [base-branch] |
 HANDOFFEOF
 ```
 
 Omit the **To** line if no recipient. Omit **Key Decisions** if none. Omit **Session Artifacts** section if the artifact query (Step 5) returns empty. The Session Artifacts section is populated after the Neo4j query in Step 5 — leave a placeholder during file creation, then update the file after the query.
+
+**Repo State section**: Only include `## Repo State` if `REPO_STATE` from Step 2.5 is non-empty. Write one row per touched repo. The PR column starts as `—` (em dash) — it gets backfilled with actual PR numbers in Step 6.5 after auto-save.
 
 Show progress:
 ```
@@ -488,6 +531,22 @@ Show progress:
 [4/5] ✓ Pushed + PR created
 ```
 
+## Step 6.5: Backfill PR numbers into Repo State — CONNECTED MODE ONLY
+
+**Skip this step in local mode.** Leave PR column as `—`.
+
+After auto-save completes (which creates branches and PRs), query each touched repo for its open PR number:
+
+```bash
+GITHUB_ORG=$(jq -r '.github_org // empty' egregore.json 2>/dev/null)
+for each touched repo in REPO_STATE:
+  PR_NUM=$(gh pr list --repo "$GITHUB_ORG/$REPO_NAME" --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || echo "")
+```
+
+Then update the handoff file's `## Repo State` table: replace the `—` in the PR column with `#N` for each repo that now has a PR.
+
+If a PR was already merged (branch no longer has an open PR), leave `—`. The branch name in the table is the primary coordination mechanism; the PR number is supplementary.
+
 ## Step 7: Notify recipient
 
 **Only if a recipient was specified.**
@@ -510,6 +569,11 @@ If `telegram_chat_id` is not set in `egregore.json`, skip silently — Telegram 
 Handoff from [Author]: [Topic]
 
 "[2-3 sentence briefing from the session]"
+
+[If repos touched (REPO_STATE non-empty):]
+Repos:
+  - [repo]: [branch] → PR #[N] to [base]
+  - [repo]: [branch] → [base]
 
 [If artifacts found:]
 Session included N artifacts:
@@ -562,7 +626,7 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 
 The briefing is the primary content — what was actually handed off. The progress checklist is already shown incrementally during execution; repeating it wastes space. Collapse progress to a single status line.
 
-### With recipient and artifacts:
+### With recipient, artifacts, and repos:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -577,6 +641,10 @@ The briefing is the primary content — what was actually handed off. The progre
 │  Defined pricing tiers and go-to-market sequence.                    │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
+│  REPOS                                                               │
+│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
+│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
+├──────────────────────────────────────────────────────────────────────┤
 │  ◉ Decision: Defensibility architecture framework                    │
 │  ◉ Finding: Harvest flywheel as training surface                     │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -585,7 +653,7 @@ The briefing is the primary content — what was actually handed off. The progre
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Without recipient, no artifacts:
+### Without recipient, no artifacts, with repos (local mode):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -599,7 +667,11 @@ The briefing is the primary content — what was actually handed off. The progre
 │  for expired sessions.                                               │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · graphed · pushed                                          │
+│  REPOS                                                               │
+│  ◈ egregore: dev/alice/mcp-auth → develop                            │
+│  ◈ egregore-site: dev/alice/mcp-auth → main                         │
+├──────────────────────────────────────────────────────────────────────┤
+│  ✓ Saved · pushed                                                    │
 │  Team sees this on /activity.                                        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -611,6 +683,7 @@ The briefing is the primary content — what was actually handed off. The progre
 - Topic always shown
 - "To:" line only if recipient specified
 - **Briefing** — 2-4 sentences from Step 2, wrapped at ~60 chars. This is the primary content.
+- **Repos section** (between `├───┤` dividers): `◈` for each touched repo. Format: `◈ {repo}: {branch} → PR #{N} to {base}` (connected mode) or `◈ {repo}: {branch} → {base}` (local mode, no PR numbers). Omit entirely if `REPO_STATE` is empty.
 - Artifacts section (between `├───┤` dividers): `◉` for each artifact. Omit entirely if no artifacts.
 - **Status line** — single line collapsing all progress: `✓ Saved · graphed · pushed` (add `· {Recipient} notified` if recipient)
 - Footer: "Team sees this on /activity."
@@ -635,6 +708,10 @@ Same boundary rules apply — 4 line patterns only, no sub-boxes, 72-char outer 
 │  is the biggest gap and biggest opportunity.                         │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
+│  REPOS                                                               │
+│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
+│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
+├──────────────────────────────────────────────────────────────────────┤
 │  OPEN THREADS                                                        │
 │  ○ API proxy architecture — before or after org #2?                  │
 │  ○ Person node schema — org-scoped vs platform-level                 │
@@ -652,6 +729,7 @@ Same boundary rules apply — 4 line patterns only, no sub-boxes, 72-char outer 
 
 - Header: `⇌ HANDOFF FROM [AUTHOR uppercase]` left, `Mon DD` right
 - Briefing: wrap at ~60 chars — the primary content
+- **Repos section** (between `├───┤` dividers): `◈` for each repo in `## Repo State`. Format: `◈ {repo}: {branch} → PR #{N} to {base}` (if PR exists) or `◈ {repo}: {branch} → {base}` (no PR). Omit entirely if no `## Repo State` section in the handoff file.
 - Open Threads section (between `├───┤` dividers): `○` for each thread. Omit entirely if none.
 - Artifacts section: `◉` for each artifact. Omit entirely if none.
 - Entry points: `→` for file paths, shortened to last 2-3 segments with `...` if needed
@@ -704,8 +782,11 @@ If artifacts exist, skip this step silently.
 | Empty session (nothing happened) | Ask: "Nothing to hand off yet. Want to leave a note instead?" |
 | Scoped briefing is very short | Fine — focused handoffs are better than muddled ones |
 | File already exists at path | Append timestamp to slug to avoid collision |
+| No repos touched (all on base branch) | Omit `## Repo State` section from file, omit REPOS from TUI, omit repos from Telegram notification |
+| Managed repo dir missing | Skip that repo silently — it may not be cloned locally |
+| Recipient auto-checkout branch gone | Report: `◐ {repo}: PR #{N} merged — on {base}` |
 
-## Full example: with recipient
+## Full example: with recipient (connected mode, cross-repo)
 
 ```
 > /handoff defensibility architecture to alice
@@ -737,6 +818,10 @@ Summarizing session...
 │  Defined pricing tiers and go-to-market sequence.                    │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
+│  REPOS                                                               │
+│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
+│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
+├──────────────────────────────────────────────────────────────────────┤
 │  ◉ Decision: Defensibility architecture framework                    │
 │  ◉ Finding: Harvest flywheel as training surface                     │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -745,7 +830,7 @@ Summarizing session...
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Full example: no recipient
+## Full example: no recipient (local mode, cross-repo)
 
 ```
 > /handoff mcp auth flow
@@ -754,14 +839,12 @@ Creating handoff...
 
 Summarizing session...
 
-  [1/4] ✓ Conversation file
+  [1/3] ✓ Conversation file
         → memory/handoffs/2026-02/07-alice-mcp-auth-flow.md
 
-  [2/4] ✓ Index updated
+  [2/3] ✓ Index updated
 
-  [3/4] ✓ Session -> knowledge graph
-
-  [4/4] ✓ Pushed + PR created
+  [3/3] ✓ Pushed + PR created
 
 ┌──────────────────────────────────────────────────────────────────────┐
 │  ⇌ HANDOFF SENT                                      alice · Feb 07     │
@@ -774,7 +857,11 @@ Summarizing session...
 │  for expired sessions.                                               │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · graphed · pushed                                          │
+│  REPOS                                                               │
+│  ◈ egregore: dev/alice/mcp-auth → develop                            │
+│  ◈ egregore-site: dev/alice/mcp-auth → main                         │
+├──────────────────────────────────────────────────────────────────────┤
+│  ✓ Saved · pushed                                                    │
 │  Team sees this on /activity.                                        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
