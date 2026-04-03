@@ -34,6 +34,23 @@ If `addressed_to_user` handoffs exist and the user is picking one up, create the
 bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
 ```
 
+**Auto-checkout repos from handoff**: After claiming, check the `addressed_rich` context for `repoState`. If the handoff includes repo state (non-empty `repoState` array), check out the handoff's branches in each managed repo:
+
+```bash
+PARENT_DIR="$(cd .. && pwd)"
+# For each entry in repoState:
+REPO_DIR="$PARENT_DIR/$REPO_NAME"
+if [ -d "$REPO_DIR/.git" ] || [ -f "$REPO_DIR/.git" ]; then
+  git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
+  git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \
+    git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
+fi
+```
+
+Report results: `✓ Checked out {branch} in {repo1}, {repo2}`. If a branch no longer exists (PR was merged): `◐ {repo}: PR #{N} merged — on {base}`. This works in both local and connected modes (pure git).
+
+If `repoState` is absent or empty (old handoff format), skip auto-checkout silently.
+
 **Exceptions** — skip branching when:
 - User says `/branch` (doing it themselves)
 - Already on a working branch (resumed session)

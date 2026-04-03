@@ -274,12 +274,29 @@ fi
       if [ -z "$AF_DATE" ]; then
         AF_DATE=$(sed -n 's/^Date: *//p' "$AF" 2>/dev/null | head -1)
       fi
+      # Extract repo state table if present
+      AF_REPO_STATE="[]"
+      AF_REPO_TABLE=$(awk '/^## Repo State/{found=1; next} found && /^#/{exit} found && /^\|[^-]/ && !/^\| Repo/{print}' "$AF" 2>/dev/null || true)
+      if [ -n "$AF_REPO_TABLE" ]; then
+        AF_REPO_STATE=$(echo "$AF_REPO_TABLE" | while IFS='|' read -r _ R_REPO R_BRANCH R_PR R_BASE _; do
+          R_REPO=$(echo "$R_REPO" | xargs 2>/dev/null || true)
+          R_BRANCH=$(echo "$R_BRANCH" | xargs 2>/dev/null || true)
+          R_PR=$(echo "$R_PR" | xargs 2>/dev/null | sed 's/^#//' | sed 's/—//' || true)
+          R_BASE=$(echo "$R_BASE" | xargs 2>/dev/null || true)
+          [ -z "$R_REPO" ] && continue
+          if [ -n "$R_PR" ] && [ "$R_PR" -eq "$R_PR" ] 2>/dev/null; then
+            printf '{"repo":"%s","branch":"%s","pr":%s,"base":"%s"}\n' "$R_REPO" "$R_BRANCH" "$R_PR" "$R_BASE"
+          else
+            printf '{"repo":"%s","branch":"%s","pr":null,"base":"%s"}\n' "$R_REPO" "$R_BRANCH" "$R_BASE"
+          fi
+        done | jq -sc '.' 2>/dev/null || echo "[]")
+      fi
       $FIRST || JSON="$JSON,"
       $FIRST || RICH="$RICH,"
       JSON="$JSON\"$AF_NAME\""
       AF_TOPIC_ESC=$(echo "$AF_TOPIC" | sed 's/"/\\"/g')
       AF_AUTHOR_ESC=$(echo "$AF_AUTHOR" | sed 's/"/\\"/g')
-      RICH="$RICH{\"name\":\"$AF_NAME\",\"author\":\"$AF_AUTHOR_ESC\",\"topic\":\"$AF_TOPIC_ESC\",\"date\":\"$AF_DATE\"}"
+      RICH="$RICH{\"name\":\"$AF_NAME\",\"author\":\"$AF_AUTHOR_ESC\",\"topic\":\"$AF_TOPIC_ESC\",\"date\":\"$AF_DATE\",\"repoState\":$AF_REPO_STATE}"
       FIRST=false
     done
     JSON="$JSON]"
