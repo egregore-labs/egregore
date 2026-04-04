@@ -131,6 +131,7 @@ When displaying a session topic anywhere in the activity view:
 - If orphans.orphanCount > 0: `{N} artifacts unlinked to quests — /quest suggest`
 - If knowledge_gap.gapCount > 0: `{N} sessions without captured insights — /reflect to extract`
 - Else: `/todo check to review · /ask a question · /quest to see more`
+- If `packages/egregore-artifacts/` exists: `Open in browser? /view activity`
 - Always end with: `What's your focus?`
 
 ### Date formatting

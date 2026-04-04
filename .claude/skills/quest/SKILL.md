@@ -274,3 +274,5 @@ Omit the Todos section entirely if no todos are linked to the quest.
 ## Next
 
 Use `/add` to attach artifacts. Quest files are auto-pushed to memory — no `/save` needed.
+
+View a quest in the browser: `/view quest {slug}` — renders a branded, shareable artifact.

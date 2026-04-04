@@ -131,8 +131,16 @@ fi
 PROJECT="$(md_field 'Project')"
 [ -z "$PROJECT" ] && PROJECT="$(yaml_extract 'project')"
 
-# Summary: first non-empty paragraph after ## Session Summary
-SUMMARY="$(echo "$CONTENT" | awk '/^## Session Summary/{found=1; next} found && /^[^#]/ && !/^[[:space:]]*$/{print; exit}' || true)"
+# Summary: 5-level precedence chain
+# 1. Frontmatter summary field
+SUMMARY="$(yaml_extract 'summary')"
+# 2. First non-empty paragraph after ## Briefing
+[ -z "$SUMMARY" ] && SUMMARY="$(echo "$CONTENT" | awk '/^## Briefing/{found=1; next} found && /^#/{exit} found && /^[^#]/ && !/^[[:space:]]*$/{print; exit}' || true)"
+# 3. First non-empty paragraph after ## Session Summary (legacy)
+[ -z "$SUMMARY" ] && SUMMARY="$(echo "$CONTENT" | awk '/^## Session Summary/{found=1; next} found && /^#/{exit} found && /^[^#]/ && !/^[[:space:]]*$/{print; exit}' || true)"
+# 4. First non-heading, non-metadata, non-empty line in body
+[ -z "$SUMMARY" ] && SUMMARY="$(echo "$CONTENT" | awk '!/^[[:space:]]*$/ && !/^#/ && !/^\*\*/ && !/^---/ && !/^\|/ && !/^- /{print; exit}' || true)"
+# 5. Topic fallback
 [ -z "$SUMMARY" ] && SUMMARY="$TOPIC"
 
 # Repo State: parse markdown table after "## Repo State"
