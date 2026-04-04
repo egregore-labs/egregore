@@ -57,12 +57,12 @@ find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort 
 ### 3. Generate and open
 
 ```bash
-node packages/egregore-artifacts/bin/cli.js <type> <resolved-file-path>
+npx egregore-artifacts <type> <resolved-file-path>
 ```
 
 For activity (no file):
 ```bash
-node packages/egregore-artifacts/bin/cli.js activity
+npx egregore-artifacts activity
 ```
 
 ### 4. Report
@@ -74,9 +74,9 @@ node packages/egregore-artifacts/bin/cli.js activity
 
 ## Fallback
 
-If `packages/egregore-artifacts/node_modules` doesn't exist:
+If `npx egregore-artifacts` fails (not installed), install it first:
 ```bash
-cd packages/egregore-artifacts && npm install --quiet && cd -
+npm install -g egregore-artifacts
 ```
 
 ## Ambiguity handling
