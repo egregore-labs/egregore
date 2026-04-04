@@ -818,7 +818,7 @@ memory/
   Date: 2026-03-05
   Branch: dev/oz/google-connector
   ```
-- **Sections**: Summary, Key decisions, What needs doing, Links
+- **Sections**: Briefing, Key Decisions, Current State, Open Threads, Next Steps
 - **Synced by**: `bin/index-handoff.sh` (indexes into Neo4j graph)
 
 #### `knowledge/decisions/` — Formal Decisions

@@ -15,7 +15,7 @@ Topic: $ARGUMENTS
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, `bin/index-handoff.sh`, and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, and `bin/index-handoff.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.). `bin/notify.sh` IS allowed — it routes through the public relay for group messages.
 
 Local-mode flow:
 - **Step 0**: Get user via `git config user.name`. For team members: read from `memory/people/` directory (list `.md` files, extract names from filenames or frontmatter) instead of querying the graph.
@@ -23,12 +23,13 @@ Local-mode flow:
 - **Steps 1-4**: Same as connected mode (parsing, briefing, file creation, index update).
 - **Step 5**: Skip entirely — no `bin/index-handoff.sh`, no artifact query. Show progress as `[3/N] ✓ Skipped graph (local mode)` — actually, just renumber steps to exclude graph step.
 - **Step 6**: Auto-save — same as connected mode.
-- **Step 7**: Skip entirely — no notifications.
-- **Step 8**: TUI — use `✓ Saved · pushed` (not "graphed"). Omit "· {Recipient} notified" line.
+- **Step 7**: If recipient specified and `telegram_chat_id` is set in `egregore.json`, send group notification via `bin/notify.sh send`. No DMs in local mode — notify.sh routes to group automatically. Skip if no Telegram configured.
+- **Step 8**: TUI — use `✓ Saved · pushed` (not "graphed"). Show `· {Recipient} notified` if notification was sent.
 - **Step 9**: Skip entirely — no reflection prompt query.
 
 Progress steps in local mode (no recipient): `[1/3] ✓ Conversation file` → `[2/3] ✓ Index updated` → `[3/3] ✓ Pushed + PR created`
-Progress steps in local mode (with recipient): same — notification step is removed.
+Progress steps in local mode (with recipient + Telegram configured): `[1/4] ✓ Conversation file` → `[2/4] ✓ Index updated` → `[3/4] ✓ Pushed + PR created` → `[4/4] ✓ {Recipient} notified`
+Progress steps in local mode (with recipient, no Telegram): same as no-recipient — skip notification silently.
 
 **Connected mode**: Full behavior as specified below.
 
@@ -686,7 +687,7 @@ The briefing is the primary content — what was actually handed off. The progre
 - **Repos section** (between `├───┤` dividers): `◈` for each touched repo. Format: `◈ {repo}: {branch} → PR #{N} to {base}` (connected mode) or `◈ {repo}: {branch} → {base}` (local mode, no PR numbers). Omit entirely if `REPO_STATE` is empty.
 - Artifacts section (between `├───┤` dividers): `◉` for each artifact. Omit entirely if no artifacts.
 - **Status line** — single line collapsing all progress: `✓ Saved · graphed · pushed` (add `· {Recipient} notified` if recipient)
-- Footer: "Team sees this on /activity."
+- Footer: "Team sees this on /activity." + if artifacts package exists: "Open in browser? /view handoff {filename}"
 - Truncate topic at 45 chars with `...` if needed
 - **No sub-boxes** — only outer frame `│` borders and `├────┤` separators
 

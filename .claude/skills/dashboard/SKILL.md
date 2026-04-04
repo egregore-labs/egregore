@@ -200,6 +200,7 @@ When displaying a session topic anywhere in the dashboard:
   - If `oldestTodoDays` > 7: append `(oldest: {N}d)` — staleness signal
   - If all zeros: `No activity recorded yet`
   - If identity hint: `⚠ {hint} Run /env to check.`
+- If `packages/egregore-artifacts/` exists: `Open in browser? /view activity`
 - Always end with: `What's next?`
 
 ### Empty state
