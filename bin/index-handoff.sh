@@ -198,7 +198,7 @@ fi
 
 Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
 MERGE (s:Session {id: \$sessionId})
-ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending', s.repoState = \$repoState
+ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending', s.repoState = \$repoState, s.startedAt = datetime(\$date + 'T00:00:00Z')
 ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.repoState = \$repoState
 MERGE (s)-[:BY]->(p)${PROJECT_CYPHER}${HANDED_TO_CYPHER}
 RETURN s.id AS sessionId"

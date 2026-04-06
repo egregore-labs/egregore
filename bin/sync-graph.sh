@@ -175,7 +175,8 @@ if [ -d "$MEMORY/wraps" ]; then
       CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
         MERGE (s:Session {id: \$sid})
         ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary,
-          s.filePath = \$filePath, s.status = 'wrapped', s.branch = \$branch
+          s.filePath = \$filePath, s.status = 'wrapped', s.branch = \$branch,
+          s.startedAt = datetime(\$date + 'T00:00:00Z')
         MERGE (s)-[:BY]->(p)
         RETURN s.id"
 
