@@ -37,25 +37,20 @@ if [ -n "$UPSTREAM_DIFF" ]; then
   for p in $FW_PATHS; do
     git checkout upstream/main -- "$p" 2>/dev/null || true
   done
+
+  # CC 2.0+: remove old .claude/commands/ — they cause duplicate entries in the slash menu
+  if [ "${CC_MAJOR:-0}" -ge 2 ] && [ -d ".claude/commands" ]; then
+    git rm -r .claude/commands/ 2>/dev/null || rm -rf .claude/commands/
+  fi
+
   # Show what changed
   git diff --stat HEAD
 fi
 ```
 
-**Framework paths synced (CC 2.0+):** `bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`
+**Framework paths synced (CC 2.0+):** `bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/` (old `.claude/commands/` removed automatically)
 **Framework paths synced (pre-2.0):** `bin/`, `.claude/commands/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
-
-### Post-sync: commands→skills migration cleanup (CC 2.0+ only)
-
-If CC is 2.0+ and `.claude/commands/` still exists locally, remove it — those files are dead weight (CC no longer reads them):
-```bash
-if [ "${CC_MAJOR:-0}" -ge 2 ] && [ -d ".claude/commands" ]; then
-  git rm -r .claude/commands/ 2>/dev/null || rm -rf .claude/commands/
-fi
-```
-
-### Post-sync: old CC version notice (pre-2.0 only)
 
 If CC is pre-2.0, show:
 ```
@@ -66,8 +61,7 @@ If CC is pre-2.0, show:
 
 If framework files changed, stage and commit directly to develop (no branch needed — framework updates are upstream pulls, not user work):
 ```bash
-git add $FW_PATHS 2>/dev/null
-git add .claude/commands/ 2>/dev/null  # stage removal if cleaned up
+git add $FW_PATHS .claude/commands/ 2>/dev/null
 EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
 ```
 The `EGREGORE_FRAMEWORK_UPDATE=1` marker tells the branch guard this is safe on develop.
