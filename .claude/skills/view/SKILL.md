@@ -100,12 +100,23 @@ Found multiple matches for "security":
 Which one?
 ```
 
-If no matches found:
-```
-No artifact found matching "{name}".
-Available quests: artifact-generation, egregore-reliability, ...
-Try: /view quest {name} or /view handoff {name}
-```
+If no matches found, **fall through to synthesis mode** (see below).
+
+## Synthesis mode
+
+When the input is a prompt or topic rather than a file name — or when file resolution finds nothing — synthesize an artifact from multiple sources.
+
+1. **Read relevant files** — search memory/, codebase, and conversation context for material matching the prompt. Read as many files as needed.
+2. **Write a temporary markdown file** — synthesize the findings into a well-structured document at `/tmp/egregore-artifacts/synthesized-{slug}.md`. Use headings, lists, code blocks — the renderer handles all standard markdown.
+3. **Render it** — `npx egregore-artifacts document /tmp/egregore-artifacts/synthesized-{slug}.md`
+4. **Report** — same as normal: `✓ Artifact opened in browser`
+
+This is the default fallback — don't ask the user if they want synthesis. If `/view auth architecture` doesn't match a file, just do the research and render it.
+
+**When to synthesize vs. when to say "not found":**
+- Prompt is a topic/question ("auth architecture", "how does onboarding work") → synthesize
+- Prompt looks like a filename that should exist but doesn't ("my-missing-doc") → say not found
+- Use judgment — if the user clearly expects a specific file, don't synthesize a guess
 
 ## Examples
 
@@ -138,4 +149,14 @@ Resolving "security audit"...
 
 ✓ Artifact opened in browser
   File: /tmp/egregore-artifacts/activity-2026-04-06.html
+```
+
+```
+> /view auth architecture
+
+No file match — synthesizing from codebase...
+  Reading: api/main.py, api/auth.py, api/services/supabase.py, ...
+
+✓ Artifact opened in browser
+  File: /tmp/egregore-artifacts/document-auth-architecture.html
 ```
