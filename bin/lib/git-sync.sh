@@ -60,22 +60,18 @@ wait 2>/dev/null || true
 # Disable with "auto_update": false in egregore.json.
 # Dev repos (upstream_url: "none") skip this entirely.
 _AUTO_UPDATE=$(jq -r '.auto_update // true' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-_FW_PATHS="bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/"
 if [ "$_UPSTREAM_URL" != "none" ] && [ "$_AUTO_UPDATE" != "false" ]; then
   if git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
-    # Check if upstream has changes we don't have (diff ALL framework paths, not just bin/)
-    _FW_DIFF=$(git diff HEAD upstream/main -- $_FW_PATHS 2>/dev/null | head -1)
-    if [ -n "$_FW_DIFF" ]; then
-      # Apply upstream changes (same as /update) — checkout only paths that exist
-      for _p in $_FW_PATHS; do
-        git checkout upstream/main -- "$_p" 2>/dev/null || true
-      done
-      # Only commit if there are actual changes
-      if [ -n "$(git status --porcelain $_FW_PATHS 2>/dev/null | head -1)" ]; then
-        git add $_FW_PATHS 2>/dev/null
-        git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-        FRAMEWORK_UPDATED="true"
-      fi
+    # Apply upstream changes — checkout is idempotent, skip diff check
+    # (git diff with variable path lists breaks in zsh — no word-splitting)
+    for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
+      git checkout upstream/main -- "$_p" 2>/dev/null || true
+    done
+    # Only commit if there are actual changes
+    if [ -n "$(git status --porcelain bin/ .claude/ CLAUDE.md skills/ 2>/dev/null | head -1)" ]; then
+      git add bin/ .claude/ CLAUDE.md skills/ 2>/dev/null
+      git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+      FRAMEWORK_UPDATED="true"
     fi
   fi
 fi
