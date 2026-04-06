@@ -42,7 +42,27 @@ Use the `preview` field to show the exact message that will be sent.
 **If "Edit"** → ask what to change, redraft, preview again.
 **If user types custom text** → use their text as the message, preview again.
 
-### Step 3: Send
+### Step 3: Publish artifact (if relevant)
+
+If the announcement references a document, handoff, quest, or knowledge artifact from `memory/`, publish it first so the Telegram message includes a clickable link with OG preview.
+
+**Detect:** Check if the conversation produced or references a specific file in `memory/` (handoffs, knowledge, quests). If so, publish it:
+
+```bash
+ARTIFACT_URL=$(bash bin/publish-artifact.sh document "$FILE_PATH" \
+  --title "$TITLE" \
+  --author "$AUTHOR" \
+  --description "$ONE_LINE_DESCRIPTION" 2>/dev/null)
+```
+
+Use the appropriate type: `handoff`, `quest`, or `document` (for knowledge files).
+
+- **If publish succeeds**: `ARTIFACT_URL` contains the live URL (e.g. `https://egregore.xyz/view/curvelabs/U8mscr78Vp0`). Insert it into the message draft.
+- **If publish fails**: `ARTIFACT_URL` is empty — send the message without a link. Do NOT make up a URL.
+
+**Never fabricate artifact URLs.** Only use URLs returned by `publish-artifact.sh`.
+
+### Step 4: Send
 
 ```bash
 bash bin/notify.sh group "$MESSAGE" 2>/dev/null
@@ -50,13 +70,15 @@ bash bin/notify.sh group "$MESSAGE" 2>/dev/null
 
 Confirm: `✓ Announced to the group.`
 
-### Step 4: Telemetry
+### Step 5: Telemetry
 
 ```bash
 bash bin/telemetry.sh emit "command" '{"command":"announce"}' 2>/dev/null &
 ```
 
-## Example
+## Examples
+
+### Simple announcement (no artifact)
 
 ```
 > /announce greeting redesign is live
@@ -79,8 +101,37 @@ bash bin/telemetry.sh emit "command" '{"command":"announce"}' 2>/dev/null &
   ✓ Announced to the group.
 ```
 
+### Announcement with artifact link
+
+```
+> /announce telemetry architecture doc is ready
+
+  Publishing artifact...
+  ✓ Published: https://egregore.xyz/view/curvelabs/U8mscr78Vp0
+
+  Preview:
+
+  Telemetry architecture doc is up (PR #485)
+
+  Full system reference — data flow, event types,
+  flush modes, DB schema, admin queries.
+
+  https://egregore.xyz/view/curvelabs/U8mscr78Vp0
+
+  Run /update to get it.
+
+  Send this to the group?
+  1. Send
+  2. Edit
+
+> 1
+
+  ✓ Announced to the group.
+```
+
 ## Rules
 
 - Always preview before sending — never send without confirmation
 - Keep messages concise — Telegram group, not an essay
 - If the user provides the exact message text in quotes, use it verbatim
+- Never fabricate artifact URLs — only use URLs returned by `publish-artifact.sh`

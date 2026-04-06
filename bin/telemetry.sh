@@ -28,6 +28,8 @@ ENV_FILE="$SCRIPT_DIR/.env"
 MAX_BUFFER_BYTES=1048576  # 1MB
 MAX_EVENTS_AFTER_TRUNCATE=500
 LOCK_DIR="$BUFFER_DIR/telemetry.lock"
+# Public relay for local/OSS egregores without API keys
+TELEMETRY_RELAY_URL="https://egregore-production-55f2.up.railway.app"
 
 # --- Cross-platform file locking via mkdir (atomic on all POSIX systems) ---
 _lock() {
@@ -104,8 +106,11 @@ _resolve_session_id() {
 
   # Fallback: read from file written by session-start.sh
   # (env vars from hooks don't propagate into the Claude Code agent)
+  # Use git common dir so worktrees hash to the same path as the main checkout
+  local repo_root
+  repo_root=$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||') || repo_root="$SCRIPT_DIR"
   local proj_hash
-  proj_hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  proj_hash=$(echo -n "$repo_root" | md5 2>/dev/null || echo -n "$repo_root" | md5sum 2>/dev/null | cut -d' ' -f1)
   local sid_file="$HOME/.egregore/session-${proj_hash}.id"
   if [ -f "$sid_file" ]; then
     cat "$sid_file" 2>/dev/null || echo "unknown"
@@ -128,8 +133,10 @@ cmd_emit() {
   if _is_debug; then
     local ts
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    local compact_data
+    compact_data=$(printf '%s' "$data" | tr -d '\n' | tr -s ' ')
     printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}\n' \
-      "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$data" >&2
+      "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$compact_data" >&2
     return 0
   fi
 
@@ -139,9 +146,12 @@ cmd_emit() {
   # Build event line (outside lock for minimal hold time)
   local ts
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Compact data to single line — callers may pass pretty-printed JSON
+  local compact_data
+  compact_data=$(printf '%s' "$data" | tr -d '\n' | tr -s ' ')
   local line
   line=$(printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}' \
-    "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$data")
+    "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$compact_data")
 
   # Append under lock
   _lock || { echo "$line" >> "$BUFFER_FILE" 2>/dev/null; return 0; }
@@ -170,6 +180,8 @@ cmd_flush() {
   # Read API config
   local api_url=""
   local api_key=""
+  local endpoint=""
+  local auth_header=""
   if [ -f "$CONFIG" ]; then
     api_url=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)
   fi
@@ -177,8 +189,14 @@ cmd_flush() {
     api_key=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
   fi
 
-  if [ -z "$api_url" ] || [ -z "$api_key" ]; then
-    return 0
+  if [ -n "$api_url" ] && [ -n "$api_key" ]; then
+    # Connected mode: authenticated ingest
+    endpoint="${api_url}/api/telemetry/ingest"
+    auth_header="Authorization: Bearer $api_key"
+  else
+    # Local/OSS mode: public relay (no auth needed)
+    endpoint="${TELEMETRY_RELAY_URL}/api/telemetry/relay"
+    auth_header=""
   fi
 
   # Atomic rotate under lock: move buffer so new events can keep writing
@@ -190,12 +208,14 @@ cmd_flush() {
   # POST to API
   local response
   local http_code
-  http_code=$(curl -s -o /dev/null -w '%{http_code}' \
-    -X POST "${api_url}/api/telemetry/ingest" \
-    -H "Authorization: Bearer $api_key" \
-    -H "Content-Type: application/x-ndjson" \
-    --data-binary "@$flush_file" \
-    --max-time 15 2>/dev/null || echo "000")
+  local curl_args=(-s -o /dev/null -w '%{http_code}' -X POST "$endpoint"
+    -H "Content-Type: application/x-ndjson"
+    --data-binary "@$flush_file"
+    --max-time 15)
+  if [ -n "$auth_header" ]; then
+    curl_args+=(-H "$auth_header")
+  fi
+  http_code=$(curl "${curl_args[@]}" 2>/dev/null || echo "000")
 
   if [ "$http_code" -ge 200 ] 2>/dev/null && [ "$http_code" -lt 300 ] 2>/dev/null; then
     # Success — remove flush file
@@ -238,7 +258,7 @@ cmd_status() {
   # Buffer
   if [ -f "$BUFFER_FILE" ]; then
     local count size
-    count=$(wc -l < "$BUFFER_FILE" 2>/dev/null | tr -d ' ')
+    count=$(grep -c '^{' "$BUFFER_FILE" 2>/dev/null || echo 0)
     size=$(wc -c < "$BUFFER_FILE" 2>/dev/null | tr -d ' ')
     echo "  Buffer: $count events ($size bytes)"
     echo "  Path: $BUFFER_FILE"
@@ -285,7 +305,9 @@ cmd_show() {
   fi
   echo "Last $n events:"
   echo ""
-  tail -n "$n" "$BUFFER_FILE" | jq . 2>/dev/null || tail -n "$n" "$BUFFER_FILE"
+  # Extract JSON objects (handles both single-line and legacy multi-line format)
+  grep '^{' "$BUFFER_FILE" | tail -n "$n" | jq -c . 2>/dev/null \
+    || grep '^{' "$BUFFER_FILE" | tail -n "$n"
 }
 
 # --- Main dispatch ---
