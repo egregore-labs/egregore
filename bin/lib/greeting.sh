@@ -69,6 +69,11 @@ TEAM_DATA=$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")
 TEAM_DATA_COUNT=$(echo "$TEAM_DATA" | jq 'length' 2>/dev/null || echo "0")
 NOW_RENDER=$(date +%s)
 ONLINE_THRESHOLD=7200  # 2 hours — considered "online"
+RECENCY_DAYS=3
+RECENCY_THRESHOLD=$((RECENCY_DAYS * 86400))
+TODAY_DATE=$(date +%Y-%m-%d)
+TODAY_MIDNIGHT=$(date -j -f "%Y-%m-%d" "$TODAY_DATE" +%s 2>/dev/null || \
+                 date -d "$TODAY_DATE" +%s 2>/dev/null || echo "$NOW_RENDER")
 # Column layout: 2(indent) + 2(dot+space) + 9(name) + 12(time) + 40(info) = 65
 MAX_INFO=40
 
@@ -83,6 +88,13 @@ TODOS_COUNT=$(echo "$TODOS_DATA" | jq 'length' 2>/dev/null || echo "0")
 if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; then
   echo "$ADDRESSED_RICH" | jq -r '.[] | "\(.author)\t\(.date)\t\(.topic)"' 2>/dev/null | while IFS=$'\t' read -r H_AUTHOR H_DATE H_TOPIC; do
     [ -z "$H_AUTHOR" ] && continue
+    # Convert date to epoch (UTC) and compute calendar-day diff
+    H_DATE_ONLY="${H_DATE%%T*}"
+    H_EVENT_MIDNIGHT=$(date -j -f "%Y-%m-%d" "$H_DATE_ONLY" +%s 2>/dev/null || \
+                       date -d "$H_DATE_ONLY" +%s 2>/dev/null || echo "0")
+    H_CAL_DAYS=$(( (TODAY_MIDNIGHT - H_EVENT_MIDNIGHT) / 86400 ))
+    # Skip if older than recency threshold
+    [ "$H_CAL_DAYS" -gt "$RECENCY_DAYS" ] 2>/dev/null && continue
     H_NAME=$(echo "$H_AUTHOR" | awk '{print tolower($1)}')
     if [ ${#H_NAME} -gt 8 ]; then H_NAME="${H_NAME:0:8}"; fi
     # Online status from team presence data
@@ -92,14 +104,10 @@ if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; th
     else
       DOT="○"
     fi
-    # Convert date to relative
-    H_CLEAN="${H_DATE%%T*}T00:00:00"
-    H_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$H_CLEAN" "+%s" 2>/dev/null || \
-              date -d "${H_DATE%%T*}" "+%s" 2>/dev/null || echo "0")
-    H_DELTA=$(( NOW_RENDER - H_EPOCH ))
-    if [ "$H_DELTA" -lt 86400 ] 2>/dev/null; then H_AGO="today"
-    elif [ "$H_DELTA" -lt 172800 ] 2>/dev/null; then H_AGO="yesterday"
-    else H_AGO="$(( H_DELTA / 86400 ))d ago"
+    # Calendar-day relative label
+    if [ "$H_CAL_DAYS" -le 0 ] 2>/dev/null; then H_AGO="today"
+    elif [ "$H_CAL_DAYS" -eq 1 ] 2>/dev/null; then H_AGO="yesterday"
+    else H_AGO="${H_CAL_DAYS}d ago"
     fi
     if [ ${#H_TOPIC} -gt $MAX_INFO ]; then H_TOPIC="${H_TOPIC:0:$((MAX_INFO - 1))}…"; fi
     printf "  %s %-9s%-12s%s\n" "$DOT" "$H_NAME" "$H_AGO" "$H_TOPIC"
@@ -113,22 +121,23 @@ if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
     if [ "$T_STATUS" = "blocked" ]; then DOT="✗"; else DOT="□"; fi
     T_SRC="${T_QUEST:-todo}"
     if [ ${#T_SRC} -gt 8 ]; then T_SRC="${T_SRC:0:8}"; fi
-    # Parse created date to relative
+    # Parse created date to relative (calendar-day based)
     T_AGO="--"
+    T_CAL_DAYS=""
     if [ -n "$T_CREATED" ]; then
-      T_CLEAN=$(echo "$T_CREATED" | sed 's/Z$//; s/+00:00$//')
-      # Append midnight if date-only to avoid macOS date -j filling current time
-      [[ "$T_CLEAN" != *T* ]] && T_CLEAN="${T_CLEAN}T00:00:00"
-      T_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$T_CLEAN" "+%s" 2>/dev/null || \
-                date -d "$T_CLEAN" "+%s" 2>/dev/null || echo "0")
-      if [ "$T_EPOCH" -gt 0 ] 2>/dev/null; then
-        T_DELTA=$(( NOW_RENDER - T_EPOCH ))
-        if [ "$T_DELTA" -lt 86400 ]; then T_AGO="today"
-        elif [ "$T_DELTA" -lt 172800 ]; then T_AGO="yesterday"
-        else T_AGO="$(( T_DELTA / 86400 ))d ago"
+      T_DATE_ONLY=$(echo "$T_CREATED" | sed 's/T.*//')
+      T_EVENT_MID=$(date -j -f "%Y-%m-%d" "$T_DATE_ONLY" +%s 2>/dev/null || \
+                    date -d "$T_DATE_ONLY" +%s 2>/dev/null || echo "0")
+      if [ "$T_EVENT_MID" -gt 0 ] 2>/dev/null; then
+        T_CAL_DAYS=$(( (TODAY_MIDNIGHT - T_EVENT_MID) / 86400 ))
+        if [ "$T_CAL_DAYS" -le 0 ]; then T_AGO="today"
+        elif [ "$T_CAL_DAYS" -eq 1 ]; then T_AGO="yesterday"
+        else T_AGO="${T_CAL_DAYS}d ago"
         fi
       fi
     fi
+    # Skip if older than recency threshold
+    if [ -n "$T_CAL_DAYS" ] && [ "$T_CAL_DAYS" -gt "$RECENCY_DAYS" ] 2>/dev/null; then continue; fi
     if [ ${#T_TEXT} -gt $MAX_INFO ]; then T_TEXT="${T_TEXT:0:$((MAX_INFO - 1))}…"; fi
     printf "  %s %-9s%-12s%s\n" "$DOT" "$T_SRC" "$T_AGO" "$T_TEXT"
   done
@@ -152,13 +161,13 @@ echo ""
 # --- Section 2: Around (team presence with online status) ---
 if [ "$TEAM_DATA_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_DATA_COUNT" != "0" ]; then
   echo "  ◦ around"
-  # Presence roster with online/offline dots (hide inactive >5 days)
-  STALE_THRESHOLD=$((5 * 86400))
+  # Presence roster with online/offline dots (hide inactive >3 days)
+  STALE_THRESHOLD=$((RECENCY_DAYS * 86400))
   echo "$TEAM_DATA" | jq -r '.[] | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(.branches | join(", "))"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
     [ -z "$P_NAME" ] && continue
-    # Skip if last seen >5 days ago — but keep if epoch 0 with branches (active but no date)
+    # Skip if no recent activity (within recency window)
     if [ "$P_EPOCH" -le 0 ] 2>/dev/null; then
-      [ -z "$P_BRANCHES" ] && continue
+      continue
     elif [ $(( NOW_RENDER - P_EPOCH )) -ge $STALE_THRESHOLD ] 2>/dev/null; then
       continue
     fi

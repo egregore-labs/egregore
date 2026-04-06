@@ -101,11 +101,27 @@ fi
   # --- Graph: last-seen per person (excluding self) ---
   GRAPH_DATA="[]"
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
-    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, toString(max(s.startedAt)) AS lastSeen ORDER BY lastSeen DESC"
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, toString(max(coalesce(s.startedAt, datetime(s.date)))) AS lastSeen ORDER BY lastSeen DESC"
     GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "$(jq -n --arg me "$AUTHOR" '{me: $me}')" 2>/dev/null || echo "")
     if [ -n "$GRAPH_RAW" ]; then
       GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
     fi
+  fi
+
+  # --- Git: branch tip commit dates per person (primary recency signal) ---
+  # git for-each-ref is fast and gives the actual last commit date per branch
+  GIT_COMMIT_DATA="{}"
+  GIT_REF_DATA=$(git -C "$SCRIPT_DIR" for-each-ref --sort=-committerdate \
+    --format='%(refname:short)|%(committerdate:unix)' refs/remotes/origin/dev/ 2>/dev/null || echo "")
+  if [ -n "$GIT_REF_DATA" ]; then
+    GIT_COMMIT_DATA=$(echo "$GIT_REF_DATA" | sed 's|^origin/dev/||' | while IFS='|' read -r REF_PATH REF_EPOCH || [ -n "$REF_PATH" ]; do
+      [ -z "$REF_PATH" ] && continue
+      REF_AUTHOR=$(echo "$REF_PATH" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+      echo "${REF_AUTHOR}|${REF_EPOCH}"
+    done | sort -t'|' -k1,1 -k2,2rn | sort -t'|' -k1,1 -u | jq -Rn '
+      [inputs | split("|") | {(.[0]): .[1]}]
+      | add // {}
+    ' 2>/dev/null || echo "{}")
   fi
 
   # --- Git: active dev/* branches (excluding self) ---
@@ -167,13 +183,9 @@ fi
   iso_to_epoch() {
     local iso="$1"
     local clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
-    # If date-only (no T), append midnight to avoid macOS date -j filling current time
     [[ "$clean" != *T* ]] && clean="${clean}T00:00:00"
-    if command -v gdate &>/dev/null; then
-      gdate -d "$clean" +%s 2>/dev/null || echo "0"
-    else
-      date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || echo "0"
-    fi
+    TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
+      TZ=UTC date -d "$clean" +%s 2>/dev/null || echo "0"
   }
 
   epoch_to_relative() {
@@ -183,17 +195,35 @@ fi
     if [ "$delta" -lt 60 ]; then echo "just now"
     elif [ "$delta" -lt 3600 ]; then echo "$(( delta / 60 ))m ago"
     elif [ "$delta" -lt 86400 ]; then echo "$(( delta / 3600 ))h ago"
-    elif [ "$delta" -lt 172800 ]; then echo "yesterday"
-    else echo "$(( delta / 86400 ))d ago"
+    else
+      # Calendar-day based comparison for accurate "yesterday" / "Xd ago"
+      local event_date today_date
+      event_date=$(date -r "$epoch" +%Y-%m-%d 2>/dev/null || \
+                   date -d "@$epoch" +%Y-%m-%d 2>/dev/null || echo "")
+      today_date=$(date +%Y-%m-%d)
+      if [ -z "$event_date" ] || [ "$event_date" = "$today_date" ]; then echo "today"
+      else
+        local today_e event_e
+        today_e=$(date -j -f "%Y-%m-%d" "$today_date" +%s 2>/dev/null || \
+                  date -d "$today_date" +%s 2>/dev/null || echo "$NOW_EPOCH")
+        event_e=$(date -j -f "%Y-%m-%d" "$event_date" +%s 2>/dev/null || \
+                  date -d "$event_date" +%s 2>/dev/null || echo "$epoch")
+        local days=$(( (today_e - event_e) / 86400 ))
+        [ "$days" -lt 1 ] && days=1
+        if [ "$days" -eq 1 ]; then echo "yesterday"
+        else echo "${days}d ago"
+        fi
+      fi
     fi
   }
 
-  # --- Merge graph + file presence + branches into presence array ---
+  # --- Merge git commits + graph + file presence + branches into presence array ---
   ALL_NAMES=$(echo "$GRAPH_DATA" | jq -r '.[].name' 2>/dev/null || echo "")
   FILE_NAMES=$(echo "$FILE_PRESENCE" | jq -r 'keys[]' 2>/dev/null || echo "")
   BRANCH_NAMES=$(echo "$BRANCH_MAP" | jq -r 'keys[]' 2>/dev/null || echo "")
+  GIT_NAMES=$(echo "$GIT_COMMIT_DATA" | jq -r 'keys[]' 2>/dev/null || echo "")
 
-  UNION_NAMES=$(printf "%s\n%s\n%s" "$ALL_NAMES" "$FILE_NAMES" "$BRANCH_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
+  UNION_NAMES=$(printf "%s\n%s\n%s\n%s" "$ALL_NAMES" "$FILE_NAMES" "$BRANCH_NAMES" "$GIT_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
 
   if [ -z "$UNION_NAMES" ]; then
     echo "[]" > "$CTX_DIR/team"
@@ -204,13 +234,29 @@ fi
   PRESENCE="["
   FIRST=true
   for PNAME in $UNION_NAMES; do
-    LAST_SEEN_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
-    # Fallback to file-based presence (session/wrap files)
-    if [ -z "$LAST_SEEN_ISO" ]; then
-      LAST_SEEN_ISO=$(echo "$FILE_PRESENCE" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
+    # Git commit date is authoritative (actual work shipped).
+    # Graph/file presence are fallbacks only (session opens ≠ real activity).
+    GIT_EPOCH=$(echo "$GIT_COMMIT_DATA" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
+
+    LAST_SEEN_EPOCH="0"
+    if [ -n "$GIT_EPOCH" ] && [ "$GIT_EPOCH" -gt 0 ] 2>/dev/null; then
+      LAST_SEEN_EPOCH="$GIT_EPOCH"
+    else
+      # Fallback: graph session startedAt
+      GRAPH_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
+      if [ -n "$GRAPH_ISO" ]; then
+        LAST_SEEN_EPOCH=$(iso_to_epoch "$GRAPH_ISO")
+      fi
+      # Fallback: file-based presence (local mode)
+      if [ "$LAST_SEEN_EPOCH" -le 0 ] 2>/dev/null; then
+        FILE_ISO=$(echo "$FILE_PRESENCE" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
+        if [ -n "$FILE_ISO" ]; then
+          LAST_SEEN_EPOCH=$(iso_to_epoch "$FILE_ISO")
+        fi
+      fi
     fi
-    if [ -n "$LAST_SEEN_ISO" ]; then
-      LAST_SEEN_EPOCH=$(iso_to_epoch "$LAST_SEEN_ISO")
+
+    if [ "$LAST_SEEN_EPOCH" -gt 0 ] 2>/dev/null; then
       LAST_SEEN_REL=$(epoch_to_relative "$LAST_SEEN_EPOCH")
     else
       LAST_SEEN_EPOCH="0"
