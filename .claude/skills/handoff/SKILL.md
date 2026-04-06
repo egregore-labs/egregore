@@ -548,7 +548,26 @@ Then update the handoff file's `## Repo State` table: replace the `—` in the P
 
 If a PR was already merged (branch no longer has an open PR), leave `—`. The branch name in the table is the primary coordination mechanism; the PR number is supplementary.
 
-## Step 7: Notify recipient
+## Step 7: Publish artifact + Notify recipient
+
+### 7a: Publish artifact (synchronous, before notification)
+
+Generate and publish the handoff as a branded HTML artifact **before** sending the notification, so the Telegram message includes the artifact URL with OG link preview.
+
+```bash
+ARTIFACT_URL=$(bash bin/publish-artifact.sh handoff "$HANDOFF_FILE_PATH" \
+  --title "$HANDOFF_TOPIC" \
+  --author "$AUTHOR" \
+  --description "$BRIEFING_FIRST_TWO_SENTENCES" 2>/dev/null)
+```
+
+This takes ~2-3s (HTML generation + upload). The script outputs the URL on success, or nothing on failure.
+
+- **Connected** (API key present): publishes to `egregore.xyz/view/{org}/{id}` (permanent)
+- **OSS** (no API key): publishes to `egregore.xyz/view/_/{id}` (ephemeral, 7-day TTL)
+- **If publish fails**: `ARTIFACT_URL` is empty — fall back to the GitHub entry point link in the notification.
+
+### 7b: Notify recipient
 
 **Only if a recipient was specified.**
 
@@ -581,12 +600,17 @@ Session included N artifacts:
   - [Type]: [Title]
   - [Type]: [Title]
 
+[If ARTIFACT_URL is set:]
+View: [ARTIFACT_URL]
+[else:]
 Entry point: https://github.com/{org}/{memory-repo}/blob/main/[handoff file path]
 ```
 
-Derive the GitHub URL from `egregore.json`: read `memory_repo` (strip `.git` suffix and extract `{org}/{repo}` from the URL), then append `/blob/main/` + the file path relative to the memory root (e.g. `handoffs/2026-02/07-bob-defensibility-architecture.md`).
+**The artifact URL is preferred** — it renders a branded page with OG link preview in Telegram. Only fall back to the GitHub entry point link if artifact publishing failed.
 
-Example:
+Derive the GitHub fallback URL from `egregore.json`: read `memory_repo` (strip `.git` suffix and extract `{org}/{repo}` from the URL), then append `/blob/main/` + the file path relative to the memory root.
+
+Example (with artifact URL):
 ```
 Handoff from Bob: Defensibility architecture
 
@@ -596,7 +620,7 @@ Session included 2 artifacts:
   - Decision: Defensibility architecture framework
   - Finding: Harvest flywheel as training surface
 
-Entry point: https://github.com/{org}/{org}-memory/blob/main/handoffs/2026-02/07-bob-defensibility-architecture.md
+View: https://egregore.xyz/view/curvelabs/a7xK3mP9qw0
 ```
 
 Show progress:
@@ -604,7 +628,7 @@ Show progress:
 [5/5] ✓ [Recipient] notified
 ```
 
-**If no recipient**: step 5 becomes "✓ Team sees this on /activity" and no notification is sent (show only 4 progress steps total, renumbered).
+**If no recipient**: step 5 becomes "✓ Team sees this on /activity" and no notification is sent (show only 4 progress steps total, renumbered). The artifact is still published (available via `/view` and the listing page).
 
 ## Step 8: Display sender TUI confirmation
 

@@ -9,13 +9,14 @@ User says: "show me visually", "render this", "view as artifact", "open in brows
 
 Not this: terminal formatting → just format in markdown · dashboard → `/dashboard`
 
-Arguments: $ARGUMENTS (Optional: artifact type and/or name)
+Arguments: $ARGUMENTS (Optional: artifact type and/or name, or a file path)
 
 ## Supported artifact types
 
 - `quest` — renders quest markdown from `memory/quests/`
 - `handoff` — renders handoff markdown from `memory/handoffs/`
 - `activity` — renders live team activity dashboard (no file needed)
+- `document` — renders any markdown file with branded styling (auto-detected fallback)
 
 ## Resolution logic
 
@@ -27,9 +28,12 @@ The key job of `/view` is resolving what the user wants to see into a file path.
 - `/view handoff oss-security-audit` → type=handoff, name=oss-security-audit
 - `/view activity` → type=activity, no file needed
 - `/view artifact-generation` → no type specified, search all types
-- `show me the security audit` → extract keywords, search
+- `/view memory/knowledge/decisions/some-decision.md` → direct file path
+- `show me the security audit visually` → extract keywords, search
 
 ### 2. Resolve the file
+
+**Direct file path**: If the argument looks like a file path (contains `/` or ends in `.md`), resolve it directly. If it exists, use it — type is auto-detected from location or falls back to `document`.
 
 **Quest**: Search `memory/quests/` for `{name}.md` or partial match:
 ```bash
@@ -52,12 +56,19 @@ find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort 
 **Auto-detect type** (no type specified):
 1. Search `memory/quests/` first
 2. Then `memory/handoffs/` recursively
-3. If found, infer type from location
+3. Then `memory/knowledge/` recursively
+4. If found, infer type from location (`quest` or `handoff`) — everything else is `document`
 
 ### 3. Generate and open
 
+For typed artifacts with a file:
 ```bash
 npx egregore-artifacts <type> <resolved-file-path>
+```
+
+For auto-detected (just a file path):
+```bash
+npx egregore-artifacts <resolved-file-path>
 ```
 
 For activity (no file):
@@ -116,8 +127,15 @@ Resolving "security audit"...
 ```
 
 ```
+> /view memory/knowledge/decisions/auth-redirect.md
+
+✓ Artifact opened in browser
+  File: /tmp/egregore-artifacts/document-auth-redirect.html
+```
+
+```
 > /view activity
 
 ✓ Artifact opened in browser
-  File: /tmp/egregore-artifacts/activity-2026-04-03.html
+  File: /tmp/egregore-artifacts/activity-2026-04-06.html
 ```
