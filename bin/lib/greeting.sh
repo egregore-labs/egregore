@@ -387,6 +387,11 @@ if [ -d "$SCRIPT_DIR/memory/soul" ]; then
   fi
 fi
 
+# --- Flush leftover telemetry from previous session (background) ---
+# If the previous session exited without a clean flush (terminal closed,
+# crash, kill -9), events are still in the local buffer. Drain them now.
+bash "$SCRIPT_DIR/bin/telemetry.sh" flush 2>/dev/null &
+
 # --- Emit session_start telemetry (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/telemetry.sh" emit "session_start" \
   "$(jq -n --arg branch "$BRANCH" '{branch: $branch}')" 2>/dev/null &
