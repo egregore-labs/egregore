@@ -61,7 +61,7 @@ RELAY_URL="https://egregore-production-55f2.up.railway.app"
 TMP_HTML="/tmp/egregore-artifacts/publish-$$.html"
 mkdir -p /tmp/egregore-artifacts
 
-if ! npx egregore-artifacts "$TYPE" "$FILE" --output "$TMP_HTML" 2>/dev/null; then
+if ! npx egregore-artifacts "$TYPE" "$FILE" --output "$TMP_HTML" >/dev/null 2>&1; then
   # Silent failure — don't block caller
   exit 0
 fi

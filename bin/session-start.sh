@@ -450,6 +450,11 @@ jq -n \
 source "$SCRIPT_DIR/bin/lib/context.sh"
 
 # ============================================================
+# 8b. Generate session dashboard artifact
+# ============================================================
+source "$SCRIPT_DIR/bin/lib/dashboard-artifact.sh"
+
+# ============================================================
 # 9. Render greeting
 # ============================================================
 source "$SCRIPT_DIR/bin/lib/greeting.sh"
