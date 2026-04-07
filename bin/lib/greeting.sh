@@ -4,7 +4,7 @@
 # Renders the full session greeting:
 #   - ASCII art banner
 #   - Identity line (org/repo + user + branch)
-#   - "For you" section (handoffs, todos, last activity)
+#   - "For you" section (handoffs, last activity)
 #   - "Around" section (team presence)
 #   - "Merged" section (PRs, implemented handoffs)
 #   - Health footer
@@ -17,7 +17,7 @@
 # Inputs:  SCRIPT_DIR, STATE_FILE, CONFIG, CTX_DIR, BRANCH, COMMITS_AHEAD,
 #          AUTHOR, LOCAL_MODE, MEMORY_SYNCED, REPOS_STATUS, SAVED_BRANCH,
 #          HEALTH_*, FRAMEWORK_VERSION, TIME_OF_DAY, EGREGORE_SESSION_ID,
-#          FIRST_SESSION, DISPLAY_NAME_STATE
+#          FIRST_SESSION, DISPLAY_NAME_STATE, DASHBOARD_URL
 
 # --- Output greeting for Claude to display ---
 cat << 'GREETING'
@@ -81,8 +81,6 @@ MAX_INFO=40
 echo "  ◦ for you"
 ADDRESSED_RICH=$(cat "$CTX_DIR/addressed_rich" 2>/dev/null || echo "[]")
 ADDRESSED_COUNT=$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")
-TODOS_DATA=$(cat "$CTX_DIR/todos" 2>/dev/null || echo "[]")
-TODOS_COUNT=$(echo "$TODOS_DATA" | jq 'length' 2>/dev/null || echo "0")
 
 # Handoffs addressed to you
 if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; then
@@ -114,38 +112,8 @@ if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null && [ "$ADDRESSED_COUNT" != "0" ]; th
   done
 fi
 
-# Personal todos
-if [ "$TODOS_COUNT" -gt 0 ] 2>/dev/null && [ "$TODOS_COUNT" != "0" ]; then
-  echo "$TODOS_DATA" | jq -r '.[] | "\(.text)\t\(.created // "")\t\(.quest // "")\t\(.status)"' 2>/dev/null | head -3 | while IFS=$'\t' read -r T_TEXT T_CREATED T_QUEST T_STATUS; do
-    [ -z "$T_TEXT" ] && continue
-    if [ "$T_STATUS" = "blocked" ]; then DOT="✗"; else DOT="□"; fi
-    T_SRC="${T_QUEST:-todo}"
-    if [ ${#T_SRC} -gt 8 ]; then T_SRC="${T_SRC:0:8}"; fi
-    # Parse created date to relative (calendar-day based)
-    T_AGO="--"
-    T_CAL_DAYS=""
-    if [ -n "$T_CREATED" ]; then
-      T_DATE_ONLY=$(echo "$T_CREATED" | sed 's/T.*//')
-      T_EVENT_MID=$(date -j -f "%Y-%m-%d" "$T_DATE_ONLY" +%s 2>/dev/null || \
-                    date -d "$T_DATE_ONLY" +%s 2>/dev/null || echo "0")
-      if [ "$T_EVENT_MID" -gt 0 ] 2>/dev/null; then
-        T_CAL_DAYS=$(( (TODAY_MIDNIGHT - T_EVENT_MID) / 86400 ))
-        if [ "$T_CAL_DAYS" -le 0 ]; then T_AGO="today"
-        elif [ "$T_CAL_DAYS" -eq 1 ]; then T_AGO="yesterday"
-        else T_AGO="${T_CAL_DAYS}d ago"
-        fi
-      fi
-    fi
-    # Skip if older than recency threshold
-    if [ -n "$T_CAL_DAYS" ] && [ "$T_CAL_DAYS" -gt "$RECENCY_DAYS" ] 2>/dev/null; then continue; fi
-    if [ ${#T_TEXT} -gt $MAX_INFO ]; then T_TEXT="${T_TEXT:0:$((MAX_INFO - 1))}…"; fi
-    printf "  %s %-9s%-12s%s\n" "$DOT" "$T_SRC" "$T_AGO" "$T_TEXT"
-  done
-fi
-
-# Fallback: last activity if no handoffs and no todos
-if { [ "$ADDRESSED_COUNT" = "0" ] || [ -z "$ADDRESSED_COUNT" ]; } && \
-   { [ "$TODOS_COUNT" = "0" ] || [ -z "$TODOS_COUNT" ]; }; then
+# Fallback: last activity if no handoffs
+if [ "$ADDRESSED_COUNT" = "0" ] || [ -z "$ADDRESSED_COUNT" ]; then
   LAST_ACTIVITY=$(cat "$CTX_DIR/activity" 2>/dev/null || echo "")
   if [ -n "$LAST_ACTIVITY" ]; then
     LA_TIME=$(echo "$LAST_ACTIVITY" | cut -d'|' -f1)
@@ -209,6 +177,11 @@ fi
 # --- Footer: health + repos + memory (tertiary) ---
 echo "$SEPARATOR"
 
+# Dashboard URL (cmd+clickable in terminal)
+if [ -n "${DASHBOARD_URL:-}" ]; then
+  printf "  ◆ dashboard  %s\n" "$DASHBOARD_URL"
+fi
+
 # Build compact footer line
 if [ "$LOCAL_MODE" = "true" ]; then
   # Local mode: only check github + git, skip api-key/graph/telegram
@@ -216,8 +189,8 @@ if [ "$LOCAL_MODE" = "true" ]; then
   FAILED_SERVICES=""
   for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT"; do
     svc="${pair%%:*}"
-    status="${pair#*:}"
-    if [ "$status" = "fail" ]; then
+    svc_status="${pair#*:}"
+    if [ "$svc_status" = "fail" ]; then
       HAS_FAILURE="true"
       FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
     fi
@@ -254,8 +227,8 @@ else
   FAILED_SERVICES=""
   for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
     svc="${pair%%:*}"
-    status="${pair#*:}"
-    if [ "$status" = "fail" ]; then
+    svc_status="${pair#*:}"
+    if [ "$svc_status" = "fail" ]; then
       HAS_FAILURE="true"
       FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
     fi
@@ -357,6 +330,7 @@ cat << CTXEOF
 {
   "framework_version": "$FRAMEWORK_VERSION",
   "time_of_day": "$TIME_OF_DAY",
+  "dashboard_url": "${DASHBOARD_URL:-}",
   "recent_handoffs": $CONTEXT_HANDOFFS,
   "addressed_to_user": $CONTEXT_ADDRESSED,
   "quests": $CONTEXT_QUESTS,
