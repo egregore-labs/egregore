@@ -366,29 +366,16 @@ Produce:
 
 ## Step 2.5: Detect touched repos
 
-Scan the core repo and all managed repos from `egregore.json` to capture which repos have work on non-base branches. This works in **both local and connected modes** — pure git, no graph dependency.
+**MANDATORY — run this script, do not skip or manually gather repo state:**
 
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
-EGREGORE_ROOT="$(pwd)"
-PARENT_DIR="$(cd .. && pwd)"
-GITHUB_ORG=$(jq -r '.github_org // empty' egregore.json 2>/dev/null)
-CORE_REPO=$(jq -r '.repo_name // "egregore"' egregore.json 2>/dev/null)
-MANAGED_REPOS=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' egregore.json 2>/dev/null)
+REPO_STATE_SECTION=$(bash bin/repo-state.sh 2>/dev/null || true)
 ```
 
-For the core repo and each managed repo:
+This scans the core repo and all managed repos, outputs a `## Repo State` markdown table for repos on non-base branches or with uncommitted changes. Works in both local and connected modes — pure git, no graph dependency.
 
-1. **Resolve path**: core repo = `$EGREGORE_ROOT`, managed = `$PARENT_DIR/{name}`
-2. **Get branch**: `git -C "$REPO_DIR" branch --show-current`
-3. **Get base branch**: read from `egregore.json` (object format has `base_branch`, default `"develop"`)
-4. **Skip** if on the base branch AND no uncommitted changes (`git -C "$REPO_DIR" status --porcelain | head -1` is empty)
-5. **Count commits ahead**: `git -C "$REPO_DIR" rev-list "origin/${BASE}..HEAD" --count 2>/dev/null || echo "0"`
-6. **If touched** (on non-base branch with commits ahead, OR has uncommitted changes) → record `{repo, branch, base}`
-
-Store the results as a `REPO_STATE` list for use in Steps 3, 6.5, 7, and 8.
-
-If no repos are touched (all on base branches with no changes), `REPO_STATE` is empty — omit the `## Repo State` section from the handoff file entirely.
+If `REPO_STATE_SECTION` is empty, no repos are touched — omit the section from the handoff file.
+If non-empty, append it verbatim to the handoff file in Step 3.
 
 ## Step 3: Create handoff file
 
@@ -444,17 +431,17 @@ For the next session, start by:
 - Reading: [specific file]
 - Running: [specific command]
 
-## Repo State
-
-| Repo | Branch | PR | Base |
-|------|--------|----|------|
-| [repo-name] | [branch] | — | [base-branch] |
 HANDOFFEOF
+
+# Append repo state section if any repos are touched
+if [ -n "$REPO_STATE_SECTION" ]; then
+  printf '\n%s\n' "$REPO_STATE_SECTION" >> "memory/handoffs/YYYY-MM/DD-author-topic-slug.md"
+fi
 ```
 
 Omit the **To** line if no recipient. Omit **Key Decisions** if none. Omit **Session Artifacts** section if the artifact query (Step 5) returns empty. The Session Artifacts section is populated after the Neo4j query in Step 5 — leave a placeholder during file creation, then update the file after the query.
 
-**Repo State section**: Only include `## Repo State` if `REPO_STATE` from Step 2.5 is non-empty. Write one row per touched repo. The PR column starts as `—` (em dash) — it gets backfilled with actual PR numbers in Step 6.5 after auto-save.
+**Repo State section**: Appended automatically from `$REPO_STATE_SECTION` (Step 2.5). The PR column starts as `—` (em dash) — it gets backfilled with actual PR numbers in Step 6.5 after auto-save.
 
 Show progress:
 ```
