@@ -78,5 +78,38 @@ fi
 # egregore.json
 [ -f "$REPO_ROOT/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ] && ln -sfn "$REPO_ROOT/egregore.json" "$WT_PATH/egregore.json"
 
+# --- Compute boundary for worktree (so isolation hook works) ---
+# session-start.sh doesn't re-run for worktrees, so we compute it here.
+HASH=$(echo -n "$WT_PATH" | md5 2>/dev/null || echo -n "$WT_PATH" | md5sum 2>/dev/null | cut -d' ' -f1)
+BOUNDARY_FILE="/tmp/egregore-boundary-${HASH}.json"
+MEMORY_DIR=""
+[ -L "$WT_PATH/memory" ] && MEMORY_DIR=$(realpath "$WT_PATH/memory" 2>/dev/null || true)
+# Managed repos: include main repo (worktree symlinks resolve there) + sibling repos
+MANAGED_REPOS_JSON="[\"$REPO_ROOT\""
+PARENT_DIR="$(dirname "$REPO_ROOT")"
+_repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$WT_PATH/egregore.json" 2>/dev/null || true)
+for _r in $_repos; do
+  [[ "$_r" == *".."* ]] && continue
+  _resolved=$(realpath "$PARENT_DIR/$_r" 2>/dev/null || true)
+  [ -z "$_resolved" ] && continue
+  MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON,\"$_resolved\""
+done
+MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON]"
+# Denied paths: other instances, but NOT the main repo (worktree is its child)
+DENIED_JSON="[]"
+REGISTRY="$HOME/.egregore/instances.json"
+if [ -f "$REGISTRY" ]; then
+  DENIED_JSON=$(jq --arg self "$REPO_ROOT" --arg wt "$WT_PATH" \
+    '[.[] | select(.path != $self and .path != $wt) | .path]' \
+    "$REGISTRY" 2>/dev/null || echo "[]")
+fi
+jq -n \
+  --arg project_dir "$WT_PATH" \
+  --arg memory_dir "$MEMORY_DIR" \
+  --argjson managed_repos "$MANAGED_REPOS_JSON" \
+  --argjson denied_paths "$DENIED_JSON" \
+  '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
+  > "$BOUNDARY_FILE.tmp" 2>/dev/null && mv "$BOUNDARY_FILE.tmp" "$BOUNDARY_FILE" 2>/dev/null || true
+
 # --- Output the worktree path (ONLY stdout line) ---
 echo "$WT_PATH"
