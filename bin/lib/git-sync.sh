@@ -55,26 +55,33 @@ done
 # Wait for all fetches
 wait 2>/dev/null || true
 
-# --- Auto-update framework from upstream (if enabled) ---
-# Applies framework paths from upstream on every session start.
-# Disable with "auto_update": false in egregore.json.
-# Dev repos (upstream_url: "none") skip this entirely.
+# --- Auto-update framework from upstream (deferred) ---
+# Moved AFTER setup_develop() so framework commits land on develop, not on
+# working branches. See _apply_framework_update() below.
 _AUTO_UPDATE=$(jq -r '.auto_update // true' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-if [ "$_UPSTREAM_URL" != "none" ] && [ "$_AUTO_UPDATE" != "false" ]; then
-  if git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
-    # Apply upstream changes — checkout is idempotent, skip diff check
-    # (git diff with variable path lists breaks in zsh — no word-splitting)
-    for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
-      git checkout upstream/main -- "$_p" 2>/dev/null || true
-    done
-    # Only commit if there are actual changes
-    if [ -n "$(git status --porcelain bin/ .claude/ CLAUDE.md skills/ 2>/dev/null | head -1)" ]; then
-      git add bin/ .claude/ CLAUDE.md skills/ 2>/dev/null
-      git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
-      FRAMEWORK_UPDATED="true"
-    fi
+
+_apply_framework_update() {
+  # Applies framework paths from upstream to the CURRENT branch (must be develop).
+  # Disable with "auto_update": false in egregore.json.
+  # Dev repos (upstream_url: "none") skip this entirely.
+  if [ "$_UPSTREAM_URL" = "none" ] || [ "$_AUTO_UPDATE" = "false" ]; then
+    return 0
   fi
-fi
+  if ! git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
+    return 0
+  fi
+  # Apply upstream changes — checkout is idempotent, skip diff check
+  # (git diff with variable path lists breaks in zsh — no word-splitting)
+  for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
+    git checkout upstream/main -- "$_p" 2>/dev/null || true
+  done
+  # Only commit if there are actual changes
+  if [ -n "$(git status --porcelain bin/ .claude/ CLAUDE.md skills/ 2>/dev/null | head -1)" ]; then
+    git add bin/ .claude/ CLAUDE.md skills/ 2>/dev/null
+    EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+    FRAMEWORK_UPDATED="true"
+  fi
+}
 
 # --- Worktree prune (just clean git's internal list, don't delete anything) ---
 git worktree prune 2>/dev/null || true
@@ -170,7 +177,8 @@ SAVED_BRANCH=""
 BRANCH="${CURRENT_BRANCH:-develop}"
 
 if [ "$IS_WORKTREE" = "true" ]; then
-  # Inside a worktree — skip develop checkout, we're already on our branch
+  # Inside a worktree — skip develop checkout and framework update.
+  # Worktrees are isolated working copies; framework updates belong on develop.
   BRANCH=$(git branch --show-current 2>/dev/null || echo "?")
   DEVELOP_SYNCED="true"
 
@@ -213,6 +221,11 @@ if [ "$IS_WORKTREE" = "true" ]; then
   fi
 elif ! setup_develop 2>/dev/null; then
   HEALTH_GIT="fail"
+fi
+
+# Apply framework update now — we're on develop (or worktree skipped above)
+if [ "$IS_WORKTREE" != "true" ]; then
+  _apply_framework_update 2>/dev/null || true
 fi
 
 # --- Sync memory (symlink or direct directory — both valid) ---
