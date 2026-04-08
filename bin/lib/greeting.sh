@@ -177,11 +177,6 @@ fi
 # --- Footer: health + repos + memory (tertiary) ---
 echo "$SEPARATOR"
 
-# Dashboard URL (cmd+clickable in terminal)
-if [ -n "${DASHBOARD_URL:-}" ]; then
-  printf "  ◆ dashboard  %s\n" "$DASHBOARD_URL"
-fi
-
 # Build compact footer line
 if [ "$LOCAL_MODE" = "true" ]; then
   # Local mode: only check github + git, skip api-key/graph/telegram
@@ -200,26 +195,18 @@ if [ "$LOCAL_MODE" = "true" ]; then
     echo "  ⚠${FAILED_SERVICES} — run /checkup"
   else
     if [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
-      FOOTER_LEFT="  ◆ updated"
+      printf "  ◆ updated\n"
     else
-      FOOTER_LEFT="  ✓ ready"
+      printf "  ✓ ready\n"
     fi
 
-    # Add managed repos inline
+    # Managed repos on separate line
     if [ -n "$REPOS_STATUS" ]; then
       REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
       if [ -n "$REPOS_COMPACT" ]; then
-        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
+        printf "  %s\n" "$REPOS_COMPACT"
       fi
     fi
-
-    FOOTER_RIGHT=""
-
-    FL_LEN=${#FOOTER_LEFT}
-    FR_LEN=${#FOOTER_RIGHT}
-    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
-    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
-    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
   fi
 else
   # Connected mode: check all services
@@ -237,18 +224,8 @@ else
   if [ "$HAS_FAILURE" = "true" ]; then
     echo "  ⚠${FAILED_SERVICES} — run /checkup"
   else
-    # Compact footer: ready + repos + memory
+    # Compact footer: ready + memory on one line, repos on next if present
     FOOTER_LEFT="  ✓ ready"
-
-    # Add managed repos inline
-    if [ -n "$REPOS_STATUS" ]; then
-      # Extract repo info into compact format (strip ornaments)
-      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
-      if [ -n "$REPOS_COMPACT" ]; then
-        FOOTER_LEFT="${FOOTER_LEFT}          ${REPOS_COMPACT}"
-      fi
-    fi
-
     FOOTER_RIGHT=""
     if [ "$MEMORY_SYNCED" = "true" ]; then
       FOOTER_RIGHT="◆ memory synced"
@@ -259,7 +236,20 @@ else
     F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
     if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
     printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+
+    # Managed repos on separate line (avoids line overflow)
+    if [ -n "$REPOS_STATUS" ]; then
+      REPOS_COMPACT=$(printf '%s' "$REPOS_STATUS" | sed 's/^  ◇ //;s/^[[:space:]]*//' | paste -sd'  ' - | sed 's/[[:space:]]*$//')
+      if [ -n "$REPOS_COMPACT" ]; then
+        printf "  %s\n" "$REPOS_COMPACT"
+      fi
+    fi
   fi
+fi
+
+# Dashboard link (OSC 8 hyperlink — clickable text in supported terminals)
+if [ -n "${DASHBOARD_URL:-}" ]; then
+  printf "  ◆ %s\n" "$DASHBOARD_URL"
 fi
 
 # Framework updates come through PRs to develop — no separate auto-update channel.

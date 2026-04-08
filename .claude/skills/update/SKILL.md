@@ -47,14 +47,33 @@ if [ -x bin/post-update.sh ]; then
 fi
 ```
 
-## Step 3: Commit
+## Step 3: Commit to develop
 
-If anything changed (framework sync or migrations), stage and commit:
+Framework updates MUST land on develop, never on working branches. If on a working branch, switch to develop first, commit there, then switch back.
 
 ```bash
+CURRENT_BRANCH=$(git branch --show-current)
+SWITCHED="false"
+
+# Switch to develop if on a working branch
+if [ "$CURRENT_BRANCH" != "develop" ]; then
+  git stash --quiet 2>/dev/null || true
+  git checkout develop --quiet 2>/dev/null
+  SWITCHED="true"
+fi
+
 git add -A .claude/ bin/ CLAUDE.md skills/ 2>/dev/null
 if ! git diff --cached --quiet 2>/dev/null; then
   EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
+  git push origin develop --quiet 2>/dev/null || true
+fi
+
+# Switch back to working branch
+if [ "$SWITCHED" = "true" ]; then
+  git checkout "$CURRENT_BRANCH" --quiet 2>/dev/null
+  git stash pop --quiet 2>/dev/null || true
+  # Rebase working branch onto updated develop
+  git rebase develop --quiet 2>/dev/null || true
 fi
 ```
 
