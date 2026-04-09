@@ -34,10 +34,20 @@ teardown() {
   echo "$output" | jq -e '.status == "offline"'
 }
 
-@test "notify.sh returns offline in local mode" {
+@test "notify.sh test works in local mode without telegram" {
   run bash "$TEST_ENV/bin/notify.sh" test
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.status == "offline"'
+  [[ "$output" == *"No Telegram group configured"* ]]
+}
+
+@test "notify.sh test works in local mode with telegram in state file" {
+  # Write telegram config to state file (the symlinked path)
+  jq '. + {"telegram_chat_id": "-100test", "telegram_group_link": "https://t.me/test"}' \
+    "$TEST_ENV/.egregore-state.json" > "$TEST_ENV/.egregore-state.json.tmp" && \
+    mv "$TEST_ENV/.egregore-state.json.tmp" "$TEST_ENV/.egregore-state.json"
+  run bash "$TEST_ENV/bin/notify.sh" test
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Telegram group configured"* ]]
 }
 
 @test "graph-op.sh returns empty results in local mode" {

@@ -100,6 +100,18 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
 
 elif [ "$_MODE" = "local" ]; then
   # === LOCAL MODE: Group messages via public relay, DMs not available ===
+  # Telegram config: prefer .egregore-state.json (symlinked across worktrees),
+  # fall back to egregore.json for backward compatibility.
+  STATE_FILE="$SCRIPT_DIR/.egregore-state.json"
+
+  _read_telegram_config() {
+    local field="$1"
+    local val
+    val=$(jq -r ".$field // empty" "$STATE_FILE" 2>/dev/null)
+    [ -z "$val" ] && val=$(jq -r ".$field // empty" "$CONFIG" 2>/dev/null)
+    echo "$val"
+  }
+
   send_to_person() {
     echo "DMs require managed hosting. Group message sent instead."
     send_to_group "@${1}: ${2}"
@@ -108,9 +120,9 @@ elif [ "$_MODE" = "local" ]; then
   send_to_group() {
     local message="$1"
     local chat_id
-    chat_id=$(jq -r '.telegram_chat_id // empty' "$CONFIG" 2>/dev/null)
+    chat_id=$(_read_telegram_config telegram_chat_id)
     local group_link
-    group_link=$(jq -r '.telegram_group_link // empty' "$CONFIG" 2>/dev/null)
+    group_link=$(_read_telegram_config telegram_group_link)
 
     if [ -z "$chat_id" ] && [ -z "$group_link" ]; then
       echo '{"status":"offline","reason":"no_telegram_group"}'
@@ -145,7 +157,7 @@ elif [ "$_MODE" = "local" ]; then
 
   test_connection() {
     local group_link
-    group_link=$(jq -r '.telegram_group_link // empty' "$CONFIG" 2>/dev/null)
+    group_link=$(_read_telegram_config telegram_group_link)
     if [ -n "$group_link" ]; then
       echo "Telegram group configured (local mode — group messages via relay)"
     else
