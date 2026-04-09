@@ -291,11 +291,13 @@ bash bin/telemetry.sh emit "command" '{"command":"wrap"}' 2>/dev/null &
 
 ## Step 7.5: Session Report (optional)
 
+<!-- This step runs in BOTH local and connected modes — gated only on report_url, NOT on mode. -->
+
 **Gate**: Check if `report_url` is configured in `egregore.json`:
 ```bash
 jq -r '.report_url // empty' egregore.json
 ```
-If empty, skip this entire step.
+If empty, skip this entire step. If `report_url` is set, **always run this step regardless of mode** (local or connected).
 
 ### 7.5.1 Ask to share
 

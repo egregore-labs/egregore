@@ -430,7 +430,18 @@ Tone: exploratory → decisive | Alignment: 0.85
 
   Cross-refs: Decision (stdio) ← Finding (benchmark results)
 
-Adjust? (y/edit/skip)
+```
+
+Then present approval via AskUserQuestion (Enter confirms default):
+```
+question: "Proceed with these extractions?"
+options:
+  - label: "Yes, save"
+    description: "Write files and index in graph"
+  - label: "Edit"
+    description: "Let me adjust before saving"
+  - label: "Skip"
+    description: "Skip this meeting"
 ```
 
 Display rules:
@@ -450,10 +461,10 @@ Display rules:
 - Actions listed separately at the end (not artifacts)
 - Cross-refs shown if detected
 
-Wait for user response:
-- **y** or empty → proceed to reflection checkpoint
-- **edit** → user modifies, then proceed
-- **skip** → skip this meeting, move to next
+Handle user response:
+- **"Yes, save"** (default — triggers on Enter) → proceed to reflection checkpoint
+- **"Edit"** → user modifies, then proceed
+- **"Skip"** → skip this meeting, move to next
 
 **In sync mode**: still present each meeting's proposal for confirmation.
 
@@ -920,8 +931,12 @@ Tone: collaborative | Alignment: 0.9
 
   No tensions. No evolution signals.
 
-Adjust? (y/edit/skip)
-> y
+Proceed with these extractions?
+  ● Yes, save — Write files and index in graph
+  ○ Edit — Let me adjust before saving
+  ○ Skip — Skip this meeting
+
+> [Enter]
 
 Creating artifacts...
   [1/2] Writing meetings/2026-02-20-charlie-onboarding.md
@@ -985,7 +1000,10 @@ Tone: tense → tentative alignment | Alignment: 0.6
     * Alice — draft RFC template by Friday
     * Bob — review and comment by Monday
 
-Adjust? (y/edit/skip)
+Proceed with these extractions?
+  ● Yes, save — Write files and index in graph
+  ○ Edit — Let me adjust before saving
+  ○ Skip — Skip this meeting
 ```
 
 ## Next
