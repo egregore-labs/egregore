@@ -15,10 +15,10 @@ Arguments: $ARGUMENTS (none expected)
 
 ## Step 1: Check current state
 
-Read `egregore.json` and check for existing `telegram_chat_id`:
+Check for existing `telegram_chat_id` — it lives in `.egregore-state.json` (preferred) or `egregore.json` (legacy):
 
 ```bash
-jq -r '.telegram_chat_id // empty' egregore.json 2>/dev/null
+jq -r '.telegram_chat_id // empty' .egregore-state.json 2>/dev/null || jq -r '.telegram_chat_id // empty' egregore.json 2>/dev/null
 ```
 
 If already set, show:
@@ -28,7 +28,7 @@ Telegram is already connected.
   Chat ID: {chat_id}
   Group link: {group_link}
 
-To update it, remove `telegram_chat_id` from egregore.json and run `/telegram-connect` again.
+To update it, remove `telegram_chat_id` from .egregore-state.json and run `/telegram-connect` again.
 ```
 And stop.
 
@@ -61,7 +61,9 @@ Validate: must start with `https://t.me/` — reject anything else with "That do
 
 ## Step 3: Store and test
 
-Read `egregore.json`, add `telegram_chat_id` and `telegram_group_link` fields, write it back.
+Read `.egregore-state.json`, add `telegram_chat_id` and `telegram_group_link` fields, write it back.
+
+**Important:** Write to `.egregore-state.json`, NOT `egregore.json`. The state file is symlinked across worktrees so the config propagates everywhere. No branch, commit, or push is needed — it's an untracked local file.
 
 Test the connection:
 ```bash
@@ -75,12 +77,6 @@ Telegram connected — test message sent to your group.
 
 If failed, show the error and suggest checking the chat ID.
 
-### Commit and push
-
-```bash
-git add egregore.json && git commit -m "Add Telegram group config" && git push 2>/dev/null
-```
-
 ## Step 4: Telemetry
 
 ```bash
@@ -92,4 +88,5 @@ bash bin/telemetry.sh emit "command" '{"command":"telegram-connect"}' 2>/dev/nul
 - Never expose credentials in tool output
 - The bot username is `@Egregore_clbot` — NOT `@egregore_bot`
 - Only store the group invite link and chat ID, not bot tokens (those live on the API server)
-- Always push to remote after updating egregore.json so joiners see the link
+- Store in `.egregore-state.json` (symlinked, untracked) — NOT `egregore.json` (tracked, branch-specific)
+- No commit/push needed — state file is local and shared via symlinks

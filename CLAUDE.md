@@ -53,7 +53,9 @@ If `repoState` is absent or empty (old handoff format), skip auto-checkout silen
 
 **Exceptions** — skip branching when:
 - User says `/branch` (doing it themselves)
-- Already on a working branch (resumed session)
+- Already on a working branch AND the user's intent continues the current branch's topic
+
+**Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic. Create a new branch in the current worktree: `git checkout -b dev/{author}/{new-slug} origin/develop`. Do NOT mix unrelated work on one branch — this is what Egregore's branching model is designed to prevent.
 
 If on develop after two messages, create a branch immediately from whatever context you have.
 
