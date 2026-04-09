@@ -351,14 +351,15 @@ if [ -d "$SCRIPT_DIR/memory/soul" ]; then
   fi
 fi
 
-# --- Flush leftover telemetry from previous session (background) ---
-# If the previous session exited without a clean flush (terminal closed,
-# crash, kill -9), events are still in the local buffer. Drain them now.
-bash "$SCRIPT_DIR/bin/telemetry.sh" flush 2>/dev/null &
-
-# --- Emit session_start telemetry (background, non-blocking) ---
+# --- Emit session_start telemetry (synchronous — just a local file write) ---
 bash "$SCRIPT_DIR/bin/telemetry.sh" emit "session_start" \
-  "$(jq -n --arg branch "$BRANCH" '{branch: $branch}')" 2>/dev/null &
+  "$(jq -n --arg branch "$BRANCH" '{branch: $branch}')" 2>/dev/null || true
+
+# --- Flush telemetry buffer (background, non-blocking) ---
+# Drains session_start + any leftover events from a previous session that
+# exited without a clean flush (terminal closed, crash, kill -9).
+# Runs AFTER emit so the session_start event is in the buffer before rotation.
+bash "$SCRIPT_DIR/bin/telemetry.sh" flush 2>/dev/null &
 
 # --- Health check-in (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/startup-check.sh" >/dev/null 2>&1 &
