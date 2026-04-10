@@ -4,46 +4,100 @@ Update local Egregore environment — sync framework from upstream and pull repo
 
 1. **Sync framework from upstream** (egregore-labs/egregore)
 2. **Run post-update migrations** (`bin/post-update.sh`)
-3. **Run `/pull`** (sync develop + memory)
+3. **Run `/pull`** (sync base branch + memory)
 4. Show what changed
 
-## Step 1: Switch to develop first
+## Step 1: Detect environment
 
-Framework updates MUST land on develop, never on working branches. If on a working branch, reset any dirty state and switch to develop before touching framework files.
+Detect the base branch and whether we're in a worktree. Framework updates MUST land on the base branch, never on working branches.
 
 ```bash
-CURRENT_BRANCH=$(git branch --show-current)
-SWITCHED="false"
+# Detect base branch: develop if it exists, otherwise main
+BASE_BRANCH="main"
+git show-ref --verify --quiet refs/heads/develop 2>/dev/null && BASE_BRANCH="develop"
 
-if [ "$CURRENT_BRANCH" != "develop" ]; then
-  # Stash user's uncommitted work (if any) so we can switch branches
-  git stash --quiet 2>/dev/null || true
-  git checkout develop --quiet 2>/dev/null
-  SWITCHED="true"
+CURRENT_BRANCH=$(git branch --show-current)
+
+# Detect worktree: .git is a file (not a directory) in worktrees
+IN_WORKTREE="false"
+if [ -f .git ]; then
+  IN_WORKTREE="true"
+  WT_GITDIR=$(sed 's/^gitdir: //' .git)
+  MAIN_DIR=$(cd "$WT_GITDIR/../../.." && pwd)
 fi
 ```
 
-## Step 2: Framework sync (on develop)
+## Step 2: Sync framework to base branch
 
 Egregore is a framework — updates come from upstream, not from your own repo's history.
 
-Pull ALL framework paths on develop. Paths that don't exist upstream are silently skipped.
+**In a worktree:** The base branch is checked out in the main repo. Use `git -C` to update it there — `git checkout $BASE_BRANCH` would fail since git won't let two worktrees share a branch.
+
+**Not in a worktree:** Switch to the base branch directly.
 
 ```bash
-# Ensure upstream remote exists and points to the right URL
-git remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/null \
-  || git remote set-url upstream https://github.com/egregore-labs/egregore.git
+# Ensure upstream remote exists
+if [ "$IN_WORKTREE" = "true" ]; then
+  git -C "$MAIN_DIR" remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/null \
+    || git -C "$MAIN_DIR" remote set-url upstream https://github.com/egregore-labs/egregore.git
+  git -C "$MAIN_DIR" fetch upstream main --quiet
+else
+  git remote add upstream https://github.com/egregore-labs/egregore.git 2>/dev/null \
+    || git remote set-url upstream https://github.com/egregore-labs/egregore.git
+  git fetch upstream main --quiet
+fi
+```
 
-# Fetch latest upstream
-git fetch upstream main --quiet
+### Worktree path
 
-# Sync ALL framework paths
-for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
-  git checkout upstream/main -- "$p" 2>/dev/null || true
-done
+```bash
+if [ "$IN_WORKTREE" = "true" ]; then
+  # Sync framework in main repo (on base branch)
+  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
+    git -C "$MAIN_DIR" checkout upstream/main -- "$p" 2>/dev/null || true
+  done
 
-# Show what changed (if anything)
-git diff --stat HEAD
+  # Show what changed
+  git -C "$MAIN_DIR" diff --stat HEAD
+
+  # Commit on base branch in main repo
+  git -C "$MAIN_DIR" add -A .claude/ bin/ CLAUDE.md skills/ 2>/dev/null
+  if ! git -C "$MAIN_DIR" diff --cached --quiet 2>/dev/null; then
+    EGREGORE_FRAMEWORK_UPDATE=1 git -C "$MAIN_DIR" commit -m "Update Egregore framework from upstream"
+    git -C "$MAIN_DIR" push origin "$BASE_BRANCH" --quiet 2>/dev/null || true
+  fi
+
+  # Rebase worktree branch onto updated base
+  git stash --quiet 2>/dev/null || true
+  git fetch origin "$BASE_BRANCH" --quiet
+  if ! git rebase "origin/$BASE_BRANCH" --quiet 2>/dev/null; then
+    git rebase --abort 2>/dev/null || true
+    echo "⚠ Rebase had conflicts — aborted. Run: git rebase origin/$BASE_BRANCH and resolve manually."
+  fi
+  git stash pop --quiet 2>/dev/null || true
+fi
+```
+
+### Non-worktree path
+
+```bash
+if [ "$IN_WORKTREE" = "false" ]; then
+  SWITCHED="false"
+
+  if [ "$CURRENT_BRANCH" != "$BASE_BRANCH" ]; then
+    git stash --quiet 2>/dev/null || true
+    git checkout "$BASE_BRANCH" --quiet 2>/dev/null
+    SWITCHED="true"
+  fi
+
+  # Sync ALL framework paths
+  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ CLAUDE.md skills/; do
+    git checkout upstream/main -- "$p" 2>/dev/null || true
+  done
+
+  # Show what changed
+  git diff --stat HEAD
+fi
 ```
 
 **Framework paths synced:** `bin/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`
@@ -51,42 +105,47 @@ git diff --stat HEAD
 
 ## Step 3: Post-update migrations
 
-After syncing, run `bin/post-update.sh` if it exists. This script is itself synced from upstream, so it's always current.
+After syncing, run `bin/post-update.sh` if it exists. In worktrees, run from `$MAIN_DIR` to ensure the updated version executes even if the rebase didn't complete.
 
 ```bash
-if [ -x bin/post-update.sh ]; then
-  bash bin/post-update.sh
+if [ "$IN_WORKTREE" = "true" ]; then
+  [ -x "$MAIN_DIR/bin/post-update.sh" ] && bash "$MAIN_DIR/bin/post-update.sh"
+else
+  [ -x bin/post-update.sh ] && bash bin/post-update.sh
 fi
 ```
 
-## Step 4: Commit and switch back
+## Step 4: Commit and switch back (non-worktree only)
+
+Worktree path already committed in Step 2. This handles the non-worktree case:
 
 ```bash
-git add -A .claude/ bin/ CLAUDE.md skills/ 2>/dev/null
-if ! git diff --cached --quiet 2>/dev/null; then
-  EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
-  git push origin develop --quiet 2>/dev/null || true
-fi
+if [ "$IN_WORKTREE" = "false" ]; then
+  git add -A .claude/ bin/ CLAUDE.md skills/ 2>/dev/null
+  if ! git diff --cached --quiet 2>/dev/null; then
+    EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
+    git push origin "$BASE_BRANCH" --quiet 2>/dev/null || true
+  fi
 
-# Switch back to working branch, rebase, restore user's work
-if [ "$SWITCHED" = "true" ]; then
-  git checkout "$CURRENT_BRANCH" --quiet 2>/dev/null
-  git rebase develop --quiet 2>/dev/null || true
-  # Restore user's uncommitted work — stash pop is safe here because:
-  # - The stash was taken BEFORE any framework checkout
-  # - It contains only the user's work, not framework diffs
-  # - Rebase already brought framework changes via develop
-  git stash pop --quiet 2>/dev/null || true
+  # Switch back to working branch, rebase, restore user's work
+  if [ "$SWITCHED" = "true" ]; then
+    git checkout "$CURRENT_BRANCH" --quiet 2>/dev/null
+    if ! git rebase "$BASE_BRANCH" --quiet 2>/dev/null; then
+      git rebase --abort 2>/dev/null || true
+      echo "⚠ Rebase had conflicts — aborted. Run: git rebase $BASE_BRANCH and resolve manually."
+    fi
+    git stash pop --quiet 2>/dev/null || true
+  fi
 fi
 ```
 
-The `EGREGORE_FRAMEWORK_UPDATE=1` marker tells the branch guard this is safe on develop.
+The `EGREGORE_FRAMEWORK_UPDATE=1` marker tells the branch guard this is safe on the base branch.
 
 ## Step 5: Pull repos
 
-Run `/pull` logic (sync develop, rebase working branch, pull memory).
+Run `/pull` logic (sync base branch, rebase working branch, pull memory).
 
-## Example
+## Example (on main, no worktree)
 
 ```
 > /update
@@ -100,7 +159,25 @@ Syncing framework from upstream...
 Running post-update migrations...
   ✓ Removed .claude/commands/ (migrated to skills)
 
-  ✓ Framework updated and committed
+  ✓ Framework updated and committed to main
+
+Pulling...
+  main           ✓ synced
+  memory         ✓ up to date
+```
+
+## Example (on working branch in worktree)
+
+```
+> /update
+
+Syncing framework in main repo (on develop)...
+  bin/notify.sh                | 12 +++---
+  .claude/skills/update/       | modified
+  2 files changed, 18 insertions(+), 6 deletions(-)
+
+  ✓ Framework updated and committed to develop
+  ✓ Rebased working branch onto develop
 
 Pulling...
   develop        ✓ synced
