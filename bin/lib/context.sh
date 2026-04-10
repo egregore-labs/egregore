@@ -296,12 +296,24 @@ fi
   JSON="[]"
   RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    # Match both github username and display name, with or without markdown bold
+    # Match github username, display name, github_name first word, and people-file name
     # Handoff files may use "to: name", "**To**: name", or "To: name"
     _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
+    _GH_NAME=$(jq -r '.github_name // empty' "$STATE_FILE" 2>/dev/null)
+    _FIRST_NAME=$(echo "$_GH_NAME" | awk '{print $1}')
+    # Also check people file: memory/people/{author}.md has "# Name" on first line
+    _PEOPLE_NAME=""
+    _PEOPLE_FILE="$SCRIPT_DIR/memory/people/$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]').md"
+    [ -f "$_PEOPLE_FILE" ] && _PEOPLE_NAME=$(sed -n 's/^# *//p' "$_PEOPLE_FILE" 2>/dev/null | head -1)
     _GREP_PAT="[Tt]o[*]*: *$AUTHOR\|[Tt]o[*]*:$AUTHOR"
-    [ -n "$_DISPLAY" ] && [ "$_DISPLAY" != "$AUTHOR" ] && _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_DISPLAY\|[Tt]o[*]*:$_DISPLAY"
-    ADDRESSED=$(grep -rl "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
+    for _VARIANT in "$_DISPLAY" "$_FIRST_NAME" "$_PEOPLE_NAME"; do
+      [ -z "$_VARIANT" ] && continue
+      [ "$_VARIANT" = "$AUTHOR" ] && continue
+      # Skip if already in pattern (avoid duplicates)
+      echo "$_GREP_PAT" | grep -qF "$_VARIANT" && continue
+      _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_VARIANT\|[Tt]o[*]*:$_VARIANT"
+    done
+    ADDRESSED=$(grep -rli "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     JSON="["
     RICH="["
     FIRST=true
