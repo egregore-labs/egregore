@@ -99,6 +99,15 @@
         ]
       },
       {
+        "matcher": "Edit|Write|Bash|EnterWorktree|EnterPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/onboarding-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|Bash|EnterPlanMode",
         "hooks": [
           {

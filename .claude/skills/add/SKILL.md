@@ -68,7 +68,7 @@ topics: [evaluation, benchmarks, llm]
 [Content here]
 ```
 
-## Neo4j Artifact creation (via bin/graph.sh)
+## Neo4j Artifact creation (via bin/graph.sh) — CONNECTED MODE ONLY
 
 Run with `bash bin/graph.sh query "..." '{"param": "value"}'`
 
@@ -149,6 +149,24 @@ Topics: [evaluation, temporality, dynamic-ontologies]
 ✓ Linked to quest: benchmark-eval
 ```
 
+## Local-mode example
+
+```
+> /add https://arxiv.org/abs/2311.04934
+
+Fetching...
+
+This looks like: "Benchmarking LLM Reasoning"
+Type: source (external)
+
+Relevant quests (from memory/quests/):
+  → benchmark-eval (high)
+
+Topics: [evaluation, reasoning, llm]
+
+✓ Saved to memory/artifacts/2026-01-26-benchmarking-llm-reasoning.md
+```
+
 ## Next
 
-Run `/save` to share, or `/quest [name]` to see the graph.
+Run `/save` to share, or `/quest [name]` to see related work.
