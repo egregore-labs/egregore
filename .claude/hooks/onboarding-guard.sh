@@ -58,34 +58,16 @@ if [ "$TOOL_NAME" = "AskUserQuestion" ]; then
   exit 0
 fi
 
-# Allow Bash commands that are read-only (git config, cat, jq, etc.)
+# Allow ALL Bash commands during onboarding.
+# The guard's purpose is to block non-onboarding Edit/Write/EnterWorktree —
+# not Bash. Onboarding needs Bash freedom for VERIFY (.env reads, egregore.json
+# reads, memory symlink checks), state writes (jq with escaped quotes), graph
+# calls, and more. A per-command whitelist was incomplete and the regex to
+# extract commands from JSON broke on escaped quotes (jq commands routinely
+# contain \"). Allowing all Bash is simpler and correct — the real gatekeeping
+# happens on Edit/Write/EnterWorktree below.
 if [ "$TOOL_NAME" = "Bash" ]; then
-  COMMAND=$(echo "$INPUT" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)"/\1/' 2>/dev/null) || true
-
-  # Allow git config reads (used during onboarding)
-  if echo "$COMMAND" | grep -qE '^git config' 2>/dev/null; then
-    exit 0
-  fi
-
-  # Allow state file updates (onboarding writes to .egregore-state.json)
-  if echo "$COMMAND" | grep -qF '.egregore-state.json' 2>/dev/null; then
-    exit 0
-  fi
-
-  # Allow memory/ writes (onboarding creates person files)
-  if echo "$COMMAND" | grep -qE '(memory/people|memory/handoffs)' 2>/dev/null; then
-    exit 0
-  fi
-
-  # Allow graph/notify/telemetry operations (onboarding uses these)
-  if echo "$COMMAND" | grep -qE 'bin/(graph|graph-op|notify|telemetry|index-handoff|ensure-shell-function)\.sh' 2>/dev/null; then
-    exit 0
-  fi
-
-  # Allow egregore.md edits (onboarding updates members section)
-  if echo "$COMMAND" | grep -qF 'egregore.md' 2>/dev/null; then
-    exit 0
-  fi
+  exit 0
 fi
 
 # Allow Edit/Write to onboarding-related files
