@@ -12,15 +12,31 @@ Arguments: $ARGUMENTS (Optional: URL to fetch, or leave empty for interactive mo
 - `/add` — Interactive mode, prompts for content
 - `/add [url]` — Fetch and ingest external source
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
+
+Local-mode flow:
+- Steps 1-5 (fetch, type, quests, topics, file creation) work normally — quest matching reads from `memory/quests/` directory instead of graph query.
+- Step 6 (Neo4j Artifact node): skip entirely. The artifact file in `memory/artifacts/` is the source of truth.
+- Step 7: confirm file saved, skip relation messaging. Show `✓ Saved to memory/artifacts/{filename}`.
+- Auto-save (commit + push) works normally.
+
+**Connected mode**: Full behavior including graph nodes as specified below.
+
 ## What to do
 
 1. If URL provided, fetch and extract content
 2. Ask for or infer content type
-3. Suggest relevant quests based on content
+3. Suggest relevant quests based on content (local mode: read from `memory/quests/` files)
 4. Suggest topics
 5. Create artifact file with proper frontmatter
-6. Create Artifact node in Neo4j via `bash bin/graph.sh query "..."` (never MCP, suppress raw output — capture in variable, only show status)
-7. Confirm relations created
+6. Create Artifact node in Neo4j via `bash bin/graph.sh query "..."` (never MCP, suppress raw output — capture in variable, only show status) — **CONNECTED MODE ONLY**
+7. Confirm relations created (local mode: confirm file saved only)
 
 ## Artifact types
 
