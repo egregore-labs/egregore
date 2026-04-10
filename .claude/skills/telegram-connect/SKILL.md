@@ -34,12 +34,20 @@ And stop.
 
 ## Step 2: Guide setup
 
+Read the org slug from `egregore.json`:
+```bash
+jq -r '.slug // empty' egregore.json 2>/dev/null
+```
+
+If slug is set, generate the deep link with it: `https://t.me/Egregore_clbot?startgroup=org_{slug}`
+If slug is empty, fall back to: `https://t.me/Egregore_clbot?startgroup=true`
+
 Show:
 ```
 To set up Telegram notifications:
 
   1. Create a Telegram group for your team
-  2. Add the bot: https://t.me/Egregore_clbot?startgroup=true
+  2. Add the bot: {deep_link}
   3. The bot will respond with your Chat ID — copy it
   4. Get the invite link: group name → Edit → Invite Links → Copy
   5. Paste both below
