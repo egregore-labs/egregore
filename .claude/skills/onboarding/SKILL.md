@@ -1,6 +1,6 @@
 Welcome a new user to this Egregore.
 
-Deterministic state machine: VERIFY → ORIENT → FIRST_TODO → FIRST_HANDOFF. Orient first, collect later — show what Egregore is before asking questions. Profile data collected progressively during real work.
+Deterministic state machine: VERIFY → ORIENT → INVITE → FIRST_HANDOFF. Orient first, invite early — show what Egregore is, then show it works best with others. Profile data collected progressively during real work.
 
 ## Output discipline — CRITICAL
 
@@ -15,11 +15,14 @@ This is a conversation with a new user, not a CI pipeline.
 
 **What the user should experience:**
 1. A framing of what Egregore is (2-3 sentences from egregore.md)
-2. "What are you working on?" → creates first todo + branch
+2. "It works best when there's someone on the other end."
 3. Name question (one AskUserQuestion)
-4. User works normally
-5. On session end: first handoff + role question
-6. "You're in."
+4. Invite offer → invite someone or skip
+5. Save/handoff one-liner explanation
+6. "What are you working on?" → creates branch
+7. User works normally
+8. On session end: first handoff + gentle nudge if invite was skipped
+9. "You're in."
 
 ## Local mode gate (applies to ALL states)
 
@@ -38,16 +41,23 @@ During VERIFY, check `api_url` from `egregore.json`. Store for entire flow.
 
 Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY.
 
-**Migration from old 7-state machine:** If phase is `welcome`, `harvest_identity`, `harvest_connection`, or `consent`:
+**Migration from old state machines:** If phase is `welcome`, `harvest_identity`, `harvest_connection`, `consent`, or `first_todo`:
 ```bash
 PHASE=$(jq -r '.onboarding.phase // empty' .egregore-state.json 2>/dev/null)
 case "$PHASE" in
-  welcome|harvest_identity|harvest_connection|consent)
+  welcome|harvest_identity|harvest_connection|consent|first_todo)
     # Migrate: preserve existing data, reset to new flow
-    jq '.onboarding.phase = "orient"' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+    # If name already collected, skip to invite; otherwise orient
+    HAS_NAME=$(jq -r '.display_name // empty' .egregore-state.json 2>/dev/null)
+    if [ -n "$HAS_NAME" ]; then
+      NEW_PHASE="invite"
+    else
+      NEW_PHASE="orient"
+    fi
+    jq --arg p "$NEW_PHASE" '.onboarding.phase = $p' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
     # Build profile_fields_collected from existing state
     FIELDS="[]"
-    [ "$(jq -r '.display_name // empty' .egregore-state.json)" ] && FIELDS=$(echo "$FIELDS" | jq '. + ["name"]')
+    [ -n "$HAS_NAME" ] && FIELDS=$(echo "$FIELDS" | jq '. + ["name"]')
     jq --argjson f "$FIELDS" '.profile_fields_collected = $f' .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
     ;;
 esac
@@ -58,12 +68,14 @@ Preserved from state: `display_name`, `name`, `github_username`, `github_name` �
 ```bash
 USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
 PEOPLE_FILE="memory/people/${USERNAME}.md"
-HAS_ROLE=$(grep -c '^Role:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
+HAS_PROFILE=$(grep -c '^Onboarded:' "$PEOPLE_FILE" 2>/dev/null || echo 0)
 ```
-- `HAS_ROLE > 0` → "You're already set up. Run `/me` to update your profile." Stop.
-- `HAS_ROLE = 0` → reset `onboarding.phase = "first_todo"`, resume.
+- `HAS_PROFILE > 0` → "You're already set up. Run `/me` to update your profile." Stop.
+- `HAS_PROFILE = 0` → reset `onboarding.phase = "invite"`, resume.
 
-**If phase = `first_todo` (returning from dropped session):**
+The `^Onboarded:` check matches the verification gate (step 1 below) and `bin/session-start.sh` auto-heal — all three checks share one witness.
+
+**If phase = `invite` (returning from dropped session):**
 Say: "Welcome back! Last time you were working on {context from git log/branch}. Before we continue — let's capture what you did last session." Then run FIRST_HANDOFF for the previous session's work.
 
 ---
@@ -104,35 +116,17 @@ Read `egregore.md` Identity and Culture sections (already loaded from VERIFY).
 Display:
 
 ```
-An organization should be able to think across sessions, across
-people, across time. Egregore is how {org_name} does that.
+Every session leaves traces — decisions, patterns, context.
+Egregore makes those traces persistent and shared.
 
-{First 2 sentences from Identity section}
+You do your work. When you're done, you hand off what you
+learned. The next session — yours or someone else's — starts
+smarter.
 
-The way it works: you declare what you're working on (/todo),
-do the work, then capture what you learned (/handoff).
-That's the core loop — everything else builds on it.
-
-What are you working on right now?
+It works best with someone on the other end.
 ```
 
-No questions. No choices. Context, then action.
-
-**State update:** `onboarding.phase = "orient"`, `onboarding.started_at = {ISO timestamp}`
-
-**Exit:** → FIRST_TODO (user describes their work)
-
----
-
-## State: FIRST_TODO
-
-**Entry:** User described their work in response to ORIENT
-
-**Actions:**
-
-1. **Create the todo** — use `/todo` flow if graph is connected, local note if not. The todo is the vehicle — what matters is the user declared work.
-
-2. **Ask name** via AskUserQuestion:
+Then **ask name** via AskUserQuestion:
 ```
 header: "Name"
 question: "What should we call you here? Your GitHub name is {github_name}."
@@ -144,9 +138,64 @@ options:
 ```
 If "Something else" → user provides name via freeform. Validate: 1-30 chars, alphanumeric + spaces + hyphens.
 
-3. **Create working branch:** `dev/{name}/{topic-slug}`
+**State update — MANDATORY**, run immediately after collecting the name:
+```bash
+CHOSEN_NAME="<the name the user chose or typed>"
+jq --arg dn "$CHOSEN_NAME" --arg n "$(echo "$CHOSEN_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" \
+  '.display_name = $dn | .name = $n | .onboarding.phase = "orient" | .onboarding.started_at = "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'" | .profile_fields_collected = ["name"]' \
+  .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
+```
+**Verification:** Confirm the write:
+```bash
+jq -r '.display_name' .egregore-state.json 2>/dev/null
+```
+Must return the chosen name. If not, retry.
 
-4. **Show technical orientation** (onboarding only — dotted frame, real paths):
+**API calls (connected mode only):** `POST /api/user/ensure` with github_username, display_name
+
+**Exit:** → INVITE
+
+---
+
+## State: INVITE
+
+**Entry:** Name collected in ORIENT
+
+**Actions:**
+
+1. **Offer invite** via AskUserQuestion:
+```
+header: "Invite"
+question: "Anyone you'd want to bring in? If you have their GitHub username, we can send them access right now."
+options:
+  - label: "Invite someone"
+    description: "I have a GitHub username to invite"
+  - label: "I'll work solo for now"
+    description: "Skip — I can always /invite later"
+```
+
+2. **If "Invite someone":**
+   - Ask for the GitHub username (freeform via "Other" on next AskUserQuestion, or just ask as text)
+   - Run the full `/invite` flow (invoke the invite skill with the username)
+   - After invite completes, continue to step 3
+
+3. **If "I'll work solo for now":** continue to step 3
+
+4. **Teach save/handoff** (minimal — one sentence each):
+```
+Two things to know when you're done:
+  /save    — pushes your branch and opens a PR
+  /handoff — captures what you learned for next time
+```
+
+5. **Ask what they're working on:**
+```
+What are you working on?
+```
+
+6. **When user describes work** → create working branch: `dev/{name}/{topic-slug}`
+
+7. **Show technical orientation** (onboarding only — dotted frame, real paths):
 ```
   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
   What just happened:
@@ -160,7 +209,7 @@ If "Something else" → user provides name via freeform. Validate: 1-30 chars, a
   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-5. **Set consent defaults** in `.egregore-state.json`:
+8. **Set consent defaults** in `.egregore-state.json`:
 ```json
 {
   "session_tracking": true,
@@ -172,20 +221,13 @@ If "Something else" → user provides name via freeform. Validate: 1-30 chars, a
 ```
 Note: `transcript_sharing` defaults to `false` (opt-in). Other flags default on. `consent_collected: false` signals these are defaults — explicit consent collected in a later session.
 
-**State update — MANDATORY**, run immediately after collecting the name:
+**State update:**
 ```bash
-CHOSEN_NAME="<the name the user chose or typed>"
-jq --arg dn "$CHOSEN_NAME" --arg n "$(echo "$CHOSEN_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')" \
-  '.display_name = $dn | .name = $n | .onboarding.phase = "first_todo" | .profile_fields_collected = ["name"]' \
+INVITE_SKIPPED="<true or false>"
+jq --argjson skip "$INVITE_SKIPPED" \
+  '.onboarding.phase = "invite" | .onboarding.invite_skipped = $skip' \
   .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
 ```
-**Verification:** Confirm the write:
-```bash
-jq -r '.display_name' .egregore-state.json 2>/dev/null
-```
-Must return the chosen name. If not, retry.
-
-**API calls (connected mode only):** `POST /api/user/ensure` with github_username, display_name
 
 **Exit:** → User works normally. Claude assists as usual. FIRST_HANDOFF triggers when the user ends the session.
 
@@ -193,7 +235,7 @@ Must return the chosen name. If not, retry.
 
 ## State: FIRST_HANDOFF
 
-**Entry:** User signals session-end intent while `onboarding_complete` is false and `phase` is `first_todo`.
+**Entry:** User signals session-end intent while `onboarding_complete` is false and `phase` is `invite`.
 
 **Trigger detection:**
 1. User runs `/wrap`, `/handoff`, or `/save` — always triggers
@@ -201,7 +243,7 @@ Must return the chosen name. If not, retry.
 3. **Disambiguation:** "I'm done with this file" = subtask, NOT session end. Only trigger on clear session-end intent. When ambiguous, ask: "Done for the session, or just this task?"
 4. `/save` during onboarding runs normal save flow AND triggers FIRST_HANDOFF
 
-**If terminal closes without triggering:** State stays at `phase = "first_todo"`. Next session detects this in Resumption and runs FIRST_HANDOFF for previous session's work.
+**If terminal closes without triggering:** State stays at `phase = "invite"`. Next session detects this in Resumption and runs FIRST_HANDOFF for previous session's work.
 
 **Actions:**
 
@@ -210,22 +252,7 @@ Must return the chosen name. If not, retry.
 
 2. Run the handoff flow (same as `/handoff`).
 
-3. During the handoff, collect role:
-```
-header: "Role"
-question: "One thing that helps route handoffs — what's your role?"
-options:
-  - label: "Engineering"
-    description: "I write code"
-  - label: "Design"
-    description: "I design products or experiences"
-  - label: "Research"
-    description: "I explore ideas and synthesize knowledge"
-  - label: "Operations"
-    description: "I keep things running and organized"
-```
-
-4. Show technical orientation:
+3. Show technical orientation:
 ```
   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
   What just happened:
@@ -241,17 +268,28 @@ options:
   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
+4. **Gentle nudge (if invite was skipped):**
+
+Check `onboarding.invite_skipped` in `.egregore-state.json`. If `true`, show after the orientation box:
+```
+This is what someone would see if you invited them —
+your handoff in /activity, ready to pick up. Run /invite
+anytime to bring someone in.
+```
+
 **Completion actions (steps 1-5 in parallel, gate on verification before 6-8):**
+
+**Completion witness:** The `Onboarded:` line in step 1 is what `bin/session-start.sh` auto-heal greps for if a state write is ever dropped. Write it exactly once, only here, as part of the person file template. Case-sensitive — do not rename, lowercase, or move into frontmatter.
+
+Auto-heal also accepts a back-compat witness: any person file whose first line starts with `# ` (markdown H1). This grandfathers pre-PR-544 users whose person files predate the explicit witness. Invite stubs (which use `---` YAML frontmatter) do not match either witness, so they cannot accidentally short-circuit onboarding.
 
 ### 1. Create person file in memory
 ```bash
 cat > "memory/people/{github_username}.md" << EOF
 # {display_name}
 GitHub: {github_username}
-Role: {role}
-Focus: (not yet collected)
-Work style: (not yet collected)
 Joined: {YYYY-MM-DD}
+Onboarded: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 ```
 
@@ -259,7 +297,7 @@ EOF
 Append after `## Members`:
 ```markdown
 ### {display_name}
-{role_label}. Joined {YYYY-MM-DD}.
+Joined {YYYY-MM-DD}.
 ```
 
 ### 3. Commit + push memory
@@ -284,11 +322,11 @@ If `taken` → append github username: `"{display_name} ({github_username})"`
 # Step 2: MERGE the person node
 bash bin/graph.sh query \
   "MERGE (p:Person {github: \$github})
-   ON CREATE SET p.name = \$name, p.fullName = \$fullName, p.role = \$role, p.joined = date()
-   ON MATCH SET p.name = \$name, p.role = \$role
+   ON CREATE SET p.name = \$name, p.fullName = \$fullName, p.joined = date()
+   ON MATCH SET p.name = \$name
    WITH p MATCH (o:Org {id: \$_org}) MERGE (p)-[:MEMBER_OF]->(o)
    RETURN p.name" \
-  '{"github":"...","name":"...","fullName":"...","role":"..."}'
+  '{"github":"...","name":"...","fullName":"..."}'
 ```
 Note: `$_org` is auto-injected by the API from the API key — do NOT pass it as a parameter.
 
@@ -299,21 +337,22 @@ API_KEY="$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)"
 curl -sf "${API_URL}/api/user/ensure" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"github_username":"...","display_name":"...","member_role":"..."}' 2>/dev/null
+  -d '{"github_username":"...","display_name":"..."}' 2>/dev/null
 ```
 
 **Verification gate (after steps 1-3):**
 ```bash
 USERNAME=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
 PEOPLE_FILE="memory/people/${USERNAME}.md"
-if [ -f "$PEOPLE_FILE" ] && grep -q '^Role:' "$PEOPLE_FILE" 2>/dev/null; then
+if [ -f "$PEOPLE_FILE" ] && grep -q '^Onboarded:' "$PEOPLE_FILE" 2>/dev/null; then
   echo "people_file:ok"
 else
   echo "people_file:missing"
 fi
 ```
+The gate checks the `Onboarded:` witness specifically — not `GitHub:` — because the witness is what auto-heal also depends on. If this gate passes, auto-heal will work; if it fails, neither path is safe.
 - `people_file:ok` → proceed to steps 6-8
-- `people_file:missing` → set `phase = "first_todo"`. Tell user: "Almost done, but your profile didn't save. Try `/handoff` again next session."
+- `people_file:missing` → set `phase = "invite"`. Tell user: "Almost done, but your profile didn't save. Try `/handoff` again next session."
 
 ### 6. Update state
 ```bash
@@ -321,7 +360,7 @@ jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '.onboarding_complete = true
    | .onboarding.phase = "complete"
    | .onboarding.completed_at = $ts
-   | .profile_fields_collected = ["name", "role"]' \
+   | .profile_fields_collected = ["name"]' \
   .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
 ```
 Do NOT set `usage_type` — already set by installer.
@@ -349,19 +388,18 @@ Display: **"You're in. From now on, just type `{ALIAS_NAME}` in any terminal to 
 
 ## Progressive Profile Collection (follow-up sessions)
 
-Everything beyond name and role is collected inline during the first few sessions:
+Everything beyond name is collected inline during the first few sessions:
 
 | Data | Collected when | How |
 |------|---------------|-----|
-| **Name** | FIRST_TODO | AskUserQuestion |
-| **Role** | FIRST_HANDOFF | AskUserQuestion |
+| **Name** | ORIENT | AskUserQuestion |
 | **Focus** | First `/quest` or `/activity` (2nd+ session) | Derive from egregore.md Collaboration section |
 | **Work style** | First `/ask` (2nd+ session) | Async / Collaborative / Both |
 | **Consent** | Second session startup | "Egregore tracks sessions by default. Change via `/telemetry`. All good?" |
 
 Track in `.egregore-state.json`:
 ```json
-{ "profile_fields_collected": ["name", "role"] }
+{ "profile_fields_collected": ["name"] }
 ```
 
 Commands check before asking:
@@ -383,4 +421,6 @@ If field not in list → ask inline. After collecting → append to array, updat
 | Terminal closes mid-onboarding | Resume from saved phase on next session. Collected data preserved. |
 | `egregore.md` missing | Use generic text: "Welcome to {org_name}." Skip narration. |
 | People file already exists (invite stub) | Overwrite with full profile. Preserve `Joined` date from stub if earlier. |
-| `/save` during FIRST_TODO | Run normal save, then check if session-end → trigger FIRST_HANDOFF. If continuing → stay in FIRST_TODO. |
+| `/save` during INVITE phase | Run normal save, then check if session-end → trigger FIRST_HANDOFF. If continuing → stay in INVITE. |
+| Invite fails (permissions, network) | Show error, continue to save/handoff teaching. Don't block onboarding on invite failure. |
+| User invites multiple people | Allow — run `/invite` for each username. No limit during onboarding. |

@@ -83,15 +83,32 @@ if [ -f "$STATE_FILE" ]; then
   ONBOARDING_COMPLETE=$(jq -r '.onboarding_complete // false' "$STATE_FILE" 2>/dev/null || echo "true")
 fi
 
-# Self-heal: if state says incomplete but person file exists with a Role,
-# onboarding DID complete — the state write was lost. Fix it.
+# Self-heal: state says incomplete but a completion witness exists →
+# onboarding finished, the state write was lost. See SKILL.md "Completion witness".
+# Three witnesses, in order of strength:
+#   1. `^Onboarded:` in person file — explicit, written by new flow's step 1
+#   2. `^# ` H1 in person file — back-compat, matches any pre-PR-544 person
+#      file (real onboardings always start with a markdown header). Excludes
+#      invite stubs which use `---` YAML frontmatter.
+#   3. `### {display_name}` under egregore.md `## Members` — fallback for
+#      cases where the person file is missing/corrupted but Members has them.
 if [ "$ONBOARDING_COMPLETE" != "true" ] && [ -n "$AUTHOR" ]; then
   PEOPLE_FILE="$SCRIPT_DIR/memory/people/${AUTHOR}.md"
-  if [ -f "$PEOPLE_FILE" ] && grep -q '^Role:' "$PEOPLE_FILE" 2>/dev/null; then
-    if [ -f "$STATE_FILE" ]; then
-      jq '.onboarding_complete = true | .onboarding.phase = "complete"' "$STATE_FILE" > "$STATE_FILE.tmp" \
-        && mv "$STATE_FILE.tmp" "$STATE_FILE"
+  WITNESSED="false"
+  if [ -f "$PEOPLE_FILE" ]; then
+    if grep -q '^Onboarded:' "$PEOPLE_FILE" 2>/dev/null; then
+      WITNESSED="true"
+    elif head -1 "$PEOPLE_FILE" 2>/dev/null | grep -q '^# '; then
+      WITNESSED="true"
     fi
+  fi
+  if [ "$WITNESSED" != "true" ] && [ -n "$DISPLAY_NAME_STATE" ] && [ -f "$SCRIPT_DIR/egregore.md" ]; then
+    sed -n '/^## Members/,/^## /p' "$SCRIPT_DIR/egregore.md" 2>/dev/null \
+      | grep -qx "### ${DISPLAY_NAME_STATE}" && WITNESSED="true"
+  fi
+  if [ "$WITNESSED" = "true" ] && [ -f "$STATE_FILE" ]; then
+    jq '.onboarding_complete = true | .onboarding.phase = "complete"' "$STATE_FILE" > "$STATE_FILE.tmp" \
+      && mv "$STATE_FILE.tmp" "$STATE_FILE"
     ONBOARDING_COMPLETE="true"
   fi
 fi

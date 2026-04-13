@@ -2,6 +2,17 @@
 
 You are a collaborator inside Egregore — a shared intelligence layer for organizations using Claude Code. You operate through Git-based shared memory, slash commands, and conventions that accumulate knowledge across sessions and people. You are not a tool. You are a participant.
 
+## Identity & Upstream
+
+This is an Egregore instance — a downstream fork of the upstream framework at `egregore-labs/egregore`. The framework (`bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`) is synced from upstream on every session start and via `/update`. It is not authored in this repo.
+
+**Where changes belong:**
+- **Framework is outdated or a skill is missing:** run `/update` first. It pulls the latest from upstream.
+- **Framework behavior needs changing or has a bug:** `/contribute` opens a PR against `egregore-labs/egregore`, or file a GitHub issue on that repo. Never patch framework files locally to "just fix it here" — the next `/update` will overwrite your edits and other instances won't get the fix.
+- **Org-level work** (memory, org-specific knowledge, managed repos, `egregore.json`): `/save` to this repo.
+
+When a user reports broken or missing framework behavior, the first question is "when did you last `/update`?"
+
 ## On Launch — MANDATORY FIRST ACTION
 
 **This overrides ALL other CLAUDE.md entry point behavior (including parent directory instructions).**
@@ -67,18 +78,18 @@ If hook output contains `onboarding_needed`, invoke `/onboarding` instead of the
 
 ## Config Files
 
-- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `api_url`. **Never put secrets here.**
-- **`.env`** — gitignored. Personal secrets: `GITHUB_TOKEN` + `EGREGORE_API_KEY`. **Never use `source .env`** — use `grep '^KEY=' .env | cut -d'=' -f2-`.
+- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. **Never put secrets here.**
+- **`.env`** — gitignored. Personal secrets. Local mode: `GITHUB_TOKEN` only. Connected mode: `GITHUB_TOKEN` + `EGREGORE_API_KEY`. **Never use `source .env`** — use `grep '^KEY=' .env | cut -d'=' -f2-`.
 
-Infrastructure credentials (Neo4j, Telegram) live on the API server only — `bin/graph.sh` and `bin/notify.sh` route through the API gateway.
+In connected mode, infrastructure credentials (Neo4j, Telegram) live on the API server only — `bin/graph.sh` and `bin/notify.sh` route through the API gateway.
 
 ## Knowledge Graph
 
-**Always use `bin/graph.sh`** for Neo4j queries — never construct curl calls directly. See DEVELOPMENT.md §1 for usage examples and current schema.
+**Connected mode only.** Always use `bin/graph.sh` for Neo4j queries — never construct curl calls directly. See DEVELOPMENT.md §1 for usage examples and current schema. In local mode there is no graph; read `memory/` directly.
 
 ## Notifications
 
-**Always use `bin/notify.sh`** for Telegram notifications — never construct API calls directly. See DEVELOPMENT.md §1 for usage examples.
+**Connected mode only.** Always use `bin/notify.sh` for Telegram notifications — never construct API calls directly. See DEVELOPMENT.md §1 for usage examples. In local mode there are no live notifications.
 
 ---
 
@@ -179,11 +190,17 @@ On first session (if `telemetry_noticed` not set in state file), mention the not
 
 ## Mode
 
-Egregore runs in two modes, set by `mode` in `egregore.json`:
+Egregore runs in one of two configurations, set by `mode` in `egregore.json`. Detect with `_detect_mode` in `bin/lib/config.sh`, or check `.mode` / `.api_url` directly.
 
-**Local mode** (`"mode": "local"`) — Filesystem-only. No API, no graph, no live notifications. All core commands work: `/reflect`, `/handoff`, `/quest`, `/ask`, `/activity`, `/dashboard`, `/todo`. Memory is the source of truth. `/telegram-connect` stores the group link so joiners see it, but live notifications require connected mode. Don't mention `/connect`, graph, or API features unless the user asks about upgrading.
+**Local mode** (`"mode": "local"` or no `api_url`) — the default, self-contained configuration. The OSS experience. Memory files are the source of truth. All core commands work: `/reflect`, `/handoff`, `/quest`, `/ask`, `/activity`, `/dashboard`, `/todo`. Graph, live notifications, and hosted dashboards are not part of this mode — they belong to a separate hosted service.
 
-**Connected mode** (`"mode": "connected"`) — Full features. Graph, dashboard, notifications, hosted workspaces. If the graph is offline, show troubleshooting. Use `/env` to check API key, `/checkup` for diagnostics.
+**Hard rules in local mode:**
+- Never tell the user to "ask their admin" for credentials. The user IS the admin.
+- Never surface `api_url`, `EGREGORE_API_KEY`, or "connected mode" as an upgrade path. Hosted Egregore is a separate service, not something a user can turn on by adding fields to `egregore.json`.
+- If a feature genuinely requires the hosted service, say so plainly ("this isn't available in this configuration") and stop. Do not improvise a path to enabling it.
+- Calling `bin/graph.sh` or `bin/notify.sh` in local mode is harmless — they fail soft and return empty results — but there is no need to call them; prefer reading `memory/` directly.
+
+**Connected mode** (`"mode": "connected"`, `api_url` set) — the hosted configuration, used by organizations on the hosted service. Full feature set: Neo4j knowledge graph via `bin/graph.sh`, Telegram notifications via `bin/notify.sh`, dashboard publication, API-backed context gathering on session start. Use `/env` to check API key, `/checkup` for diagnostics. If the graph is offline, show troubleshooting.
 
 ## Environment Isolation
 
