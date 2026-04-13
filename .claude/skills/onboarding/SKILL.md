@@ -17,11 +17,11 @@ This is a conversation with a new user, not a CI pipeline.
 1. A framing of what Egregore is (2-3 sentences from egregore.md)
 2. "It works best when there's someone on the other end."
 3. Name question (one AskUserQuestion)
-4. Invite offer → invite someone or skip
+4. **Creators only:** Invite offer → invite someone or skip. **Joiners skip this step entirely** — they just got here; they shouldn't be bringing more people in before they've done any work.
 5. Save/handoff one-liner explanation
 6. "What are you working on?" → creates branch
 7. User works normally
-8. On session end: first handoff + gentle nudge if invite was skipped
+8. On session end: first handoff. Plus a gentle nudge about inviting others, **creators only, if they skipped the invite offer**.
 9. "You're in."
 
 ## Local mode gate (applies to ALL states)
@@ -113,9 +113,11 @@ Also read `egregore.md` and `.egregore-state.json` in parallel (needed for ORIEN
 
 Read `egregore.md` Identity and Culture sections (already loaded from VERIFY).
 
-Display:
+Display an **Insight** block wrapping the framing. Use this exact format — the `✱ Insight` header with a horizontal rule above and below the body. Do NOT add any preamble. No improvised explanations of how the egregore works, no references to internal configuration (field names, modes, services, infrastructure), no synthesis of what the state machine is doing. The Insight contains **only** the two framing paragraphs below — render them as-is.
 
 ```
+✱ Insight ────────────────────────────────────────
+
 Every session leaves traces — decisions, patterns, context.
 Egregore makes those traces persistent and shared.
 
@@ -123,6 +125,12 @@ You do your work. When you're done, you hand off what you
 learned. The next session — yours or someone else's — starts
 smarter.
 
+──────────────────────────────────────────────────
+```
+
+Then, outside the Insight block:
+
+```
 It works best with someone on the other end.
 ```
 
@@ -163,7 +171,15 @@ Must return the chosen name. If not, retry.
 
 **Actions:**
 
-1. **Offer invite** via AskUserQuestion:
+**Detect user type first — this gates steps 1-3 below.**
+```bash
+USAGE_TYPE=$(jq -r '.usage_type // "joiner_group"' .egregore-state.json 2>/dev/null)
+```
+
+- **`usage_type == "founder_group"` (creator flow)** — the user just set up a fresh egregore. They're the first person here. Run steps 1-3 to offer them an invite, then continue to step 4.
+- **`usage_type == "joiner_group"` (invited user)** — the user was invited and is joining an existing group. **Skip steps 1-3 entirely.** A brand-new joiner should not be inviting others before they've done any work — they don't know the group dynamics yet, and the UX implies they're expected to bring people in. Jump directly to step 4. They can always run `/invite` later.
+
+1. **Offer invite** via AskUserQuestion *(creator flow only)*:
 ```
 header: "Invite"
 question: "Anyone you'd want to bring in? If you have their GitHub username, we can send them access right now."
@@ -174,12 +190,12 @@ options:
     description: "Skip — I can always /invite later"
 ```
 
-2. **If "Invite someone":**
+2. **If "Invite someone"** *(creator flow only)*:
    - Ask for the GitHub username (freeform via "Other" on next AskUserQuestion, or just ask as text)
    - Run the full `/invite` flow (invoke the invite skill with the username)
-   - After invite completes, continue to step 3
+   - After invite completes, continue to step 4
 
-3. **If "I'll work solo for now":** continue to step 3
+3. **If "I'll work solo for now"** *(creator flow only)*: continue to step 4
 
 4. **Teach save/handoff** (minimal — one sentence each):
 ```
@@ -223,7 +239,9 @@ Note: `transcript_sharing` defaults to `false` (opt-in). Other flags default on.
 
 **State update:**
 ```bash
-INVITE_SKIPPED="<true or false>"
+# For joiners (skipped the invite offer entirely), set invite_skipped = true.
+# For creators who answered the question, set invite_skipped = true/false per their answer.
+INVITE_SKIPPED="<true if joiner, or creator chose 'I'll work solo for now'; false if creator chose 'Invite someone'>"
 jq --argjson skip "$INVITE_SKIPPED" \
   '.onboarding.phase = "invite" | .onboarding.invite_skipped = $skip' \
   .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
@@ -268,9 +286,10 @@ jq --argjson skip "$INVITE_SKIPPED" \
   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-4. **Gentle nudge (if invite was skipped):**
+4. **Gentle nudge (creator flow only, if invite was skipped):**
 
-Check `onboarding.invite_skipped` in `.egregore-state.json`. If `true`, show after the orientation box:
+Check both `usage_type` and `onboarding.invite_skipped` in `.egregore-state.json`. Only show this nudge if `usage_type == "founder_group"` **and** `invite_skipped == true`. Skip entirely for joiners — they didn't decline an invite, they were never offered one.
+
 ```
 This is what someone would see if you invited them —
 your handoff in /activity, ready to pick up. Run /invite
