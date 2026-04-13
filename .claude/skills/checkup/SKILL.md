@@ -10,10 +10,26 @@ Check every service and dependency, render a TUI diagnostic box, and auto-fix wh
 
 ## Procedure
 
+**First, detect mode.** This gates which checks run.
+
+```bash
+MODE=$(jq -r '.mode // empty' egregore.json 2>/dev/null)
+API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
+if [ "$MODE" = "local" ] || [ -z "$API_URL" ]; then
+  MODE="local"
+else
+  MODE="connected"
+fi
+```
+
+In **local mode**, Checks 3b, 4, 5, 6 are skipped entirely (no graph, no API key, no telegram). The SERVICES section of the diagnostic box is not rendered.
+
+In **connected mode**, all checks run as below.
+
 Run checks in **3 sequential batches**. Within each batch, checks can run in parallel. **Never run network checks (5-6) in the same parallel batch as local checks (7-10)** — a network timeout will cascade-cancel the siblings.
 
-**Batch 1** (local, fast): Checks 1-4 — config, env, GitHub token, API key slug
-**Batch 2** (network, may timeout): Checks 3b, 5-6 — identity (Person node), graph, telegram
+**Batch 1** (local, fast): Checks 1-2, GitHub token. In connected mode also Check 4 (API key slug).
+**Batch 2** (network, may timeout, connected mode only): Checks 3b, 5-6 — identity (Person node), graph, telegram
 **Batch 3** (local + git): Checks 7-10 — memory, git, framework, alias
 
 Collect results into a `checks` array, then render the diagnostic box.
@@ -24,7 +40,8 @@ Collect results into a `checks` array, then render the diagnostic box.
 jq . egregore.json
 ```
 
-- **Pass** if valid JSON with non-empty `org_name`, `github_org`, `slug`, `api_url`
+- **Pass (connected mode)** if valid JSON with non-empty `org_name`, `github_org`, `slug`, `api_url`
+- **Pass (local mode)** if valid JSON with non-empty `org_name`, `github_org`, `slug` — `api_url` is not required
 - **Fail** if file missing, invalid JSON, or required fields empty
 - **Fix**: run `/setup`
 
@@ -36,9 +53,10 @@ Extract `slug` and `org_name` for display.
 test -f .env && grep -c '^[A-Z]' .env
 ```
 
-- **Pass** if `.env` exists and has both `GITHUB_TOKEN` and `EGREGORE_API_KEY`
+- **Pass (connected mode)** if `.env` exists and has both `GITHUB_TOKEN` and `EGREGORE_API_KEY`
+- **Pass (local mode)** if `.env` exists and has `GITHUB_TOKEN` — `EGREGORE_API_KEY` is not required
 - **Fail** if missing file or missing keys
-- **Fix**: for missing `GITHUB_TOKEN`, run `bash bin/github-auth.sh`. For missing `EGREGORE_API_KEY`, tell user to ask team admin.
+- **Fix**: for missing `GITHUB_TOKEN`, run `bash bin/github-auth.sh`. In connected mode, a missing `EGREGORE_API_KEY` is auto-fetched via Check 4's fix below.
 
 Count the keys present for display.
 
@@ -55,12 +73,16 @@ curl -s -H "Authorization: token $TOKEN" https://api.github.com/user --max-time 
 
 Show `authenticated as {login}` on pass.
 
-### Check 3b: Identity (Person node)
+### Check 3b: Identity (Person node) — connected mode only
+
+**In local mode, skip this check entirely. Do not run the bash block below.** There is no graph.
 
 ```bash
-AUTHOR=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
-DISPLAY_NAME=$(jq -r '.display_name // empty' .egregore-state.json 2>/dev/null)
-RESULT=$(bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) RETURN p.name AS name, p.github AS github" "{\"gh\":\"$AUTHOR\"}" 2>/dev/null)
+if [ "$MODE" = "connected" ]; then
+  AUTHOR=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
+  DISPLAY_NAME=$(jq -r '.display_name // empty' .egregore-state.json 2>/dev/null)
+  RESULT=$(bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) RETURN p.name AS name, p.github AS github" "{\"gh\":\"$AUTHOR\"}" 2>/dev/null)
+fi
 ```
 
 - **Pass** if Person node exists and `p.name` matches local `display_name` (or `github_username` if no display_name set)
@@ -70,12 +92,16 @@ RESULT=$(bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) RETURN p.name 
 
 Show `known as {p.name} ({p.github})` on pass, `drift: local={display_name}, graph={p.name}` on warn.
 
-### Check 4: API key slug
+### Check 4: API key slug — connected mode only
+
+**In local mode, skip this check entirely. Do not run the bash block below.** There is no API key.
 
 ```bash
-CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)
-EXPECTED_SLUG=$(jq -r '.slug // empty' egregore.json)
-KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+if [ "$MODE" = "connected" ]; then
+  CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)
+  EXPECTED_SLUG=$(jq -r '.slug // empty' egregore.json)
+  KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+fi
 ```
 
 - **Pass** if `KEY_SLUG == EXPECTED_SLUG`
@@ -90,20 +116,28 @@ KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
 
 Show `valid (slug: {slug})` on pass, `slug mismatch (key={KEY_SLUG}, config={EXPECTED_SLUG})` on fail.
 
-### Check 5: Graph (Neo4j)
+### Check 5: Graph (Neo4j) — connected mode only
+
+**In local mode, skip this check entirely. Do not run the bash block below.** There is no graph.
 
 ```bash
-timeout 10 bash bin/graph.sh test 2>&1; echo "EXIT:$?"
+if [ "$MODE" = "connected" ]; then
+  timeout 10 bash bin/graph.sh test 2>&1; echo "EXIT:$?"
+fi
 ```
 
 - **Pass** if output contains "Connected"
 - **Fail** if timeout (exit 124), error, or no "Connected"
 - **Fix**: report "API or network is down. No action needed from you."
 
-### Check 6: Telegram
+### Check 6: Telegram — connected mode only
+
+**In local mode, skip this check entirely. Do not run the bash block below.** There are no live notifications.
 
 ```bash
-timeout 10 bash bin/notify.sh test 2>&1; echo "EXIT:$?"
+if [ "$MODE" = "connected" ]; then
+  timeout 10 bash bin/notify.sh test 2>&1; echo "EXIT:$?"
+fi
 ```
 
 - **Pass** if output contains "connected"
@@ -173,7 +207,9 @@ Show `{alias_name} in {profile}` on pass.
 
 ## Rendering
 
-After collecting all results, render a diagnostic box. Use exactly this format:
+After collecting all results, render a diagnostic box. In **connected mode**, render all four sections (CONFIG, IDENTITY, SERVICES, WORKSPACE). In **local mode**, omit the SERVICES section entirely and omit the `Person` row from IDENTITY (no graph → no Person node check).
+
+**Connected mode format:**
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -204,6 +240,31 @@ After collecting all results, render a diagnostic box. Use exactly this format:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+**Local mode format:**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ⊕ CHECKUP                                          {date}         │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  CONFIG                                                              │
+│  ✓ egregore.json valid (slug: {slug}, org: {org_name})              │
+│  ✓ .env configured (GITHUB_TOKEN present)                           │
+│                                                                      │
+│  IDENTITY                                                            │
+│  ✓ GitHub — authenticated as {login}                                │
+│                                                                      │
+│  WORKSPACE                                                           │
+│  ✓ Memory — linked and synced                                       │
+│  ✓ Git — develop synced                                             │
+│  ✓ Framework v{N} (current)                                         │
+│  ✓ Shell alias — {name} in {profile}                                │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  {passed} passed · {warnings} warnings · {errors} errors            │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
 Symbols:
 - `✓` = passed
 - `⚠` = warning (works but degraded)
@@ -218,16 +279,16 @@ For failures, add a `→` line immediately after showing what Claude will do:
 
 ## Auto-fix
 
-After rendering the box, **automatically fix** what you can:
+After rendering the box, **automatically fix** what you can. Items 2, 3, and 8 apply in connected mode only — in local mode, skip them (the underlying services don't exist).
 
 1. **GitHub token expired** → run `bash bin/github-auth.sh` and report result
-2. **Identity drift** → re-sync: `bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) SET p.name = \$name RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$DISPLAY_NAME\"}"` (only if local `display_name` is set)
-3. **API key mismatch** → fetch correct key from API and update `.env`
+2. **Identity drift** *(connected mode only)* → re-sync: `bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) SET p.name = \$name RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$DISPLAY_NAME\"}"` (only if local `display_name` is set)
+3. **API key mismatch** *(connected mode only)* → fetch correct key from API and update `.env`
 4. **Memory not linked** → run `/setup`
 5. **Git diverged** → run `/pull`
 6. **Framework outdated** → run `/update`
 7. **Shell alias missing** → run `bash bin/ensure-shell-function.sh`
-8. **Graph/Telegram down** → just report. No user action.
+8. **Graph/Telegram down** *(connected mode only)* → just report. No user action.
 
 After fixing, re-check the fixed items and report:
 ```
