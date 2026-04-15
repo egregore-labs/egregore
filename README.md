@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/egregore-labs/egregore/main/logo.svg" alt="Egregore" height="36" />
+  <img src="banner.jpg" alt="Egregore — towards shared minds" />
 </p>
 
 <p align="center">
