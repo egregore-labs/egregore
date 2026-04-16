@@ -17,6 +17,10 @@
 Egregore is a shared cognition layer for AI-native collaboration. It turns Claude Code into an inhabitable production environment where every session, handoff, and decision accumulates into a living memory owned by your organization.
 With use, the deep context that accumulates enables seamless continuity across multi-agent workflows, visibility into organizational patterns and decision-making, and persistence of collective intelligence across people, sessions, and time.
 
+
+https://github.com/user-attachments/assets/71a690fb-8a4e-4d0b-9a61-e6cdc7595430
+
+
 ## Install
 
 ```bash
