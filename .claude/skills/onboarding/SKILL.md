@@ -247,13 +247,26 @@ jq --argjson skip "$INVITE_SKIPPED" \
   .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
 ```
 
-**Exit:** → User works normally. Claude assists as usual. FIRST_HANDOFF triggers when the user ends the session.
+**Joiner fast-track:** If `usage_type == "joiner_group"`, run the Completion Actions (steps 1-8 below in FIRST_HANDOFF) **now**, with these adaptations:
+
+- Skip the FIRST_HANDOFF interception message (no session-end narrative — the joiner hasn't done work yet; we're just establishing their profile).
+- **Step 1 (person file):** if `memory/people/{github_username}.md` exists as an invite stub (YAML frontmatter only — no `Onboarded:` witness), REPLACE it with the markdown witness format (`# {display_name}` + `GitHub:` + `Joined:` + `Onboarded:` timestamp). Otherwise create fresh using the same template.
+- **Step 6 (flip flag):** write `onboarding_complete = true`, `phase = "complete"`, `completed_at`.
+- Steps 2, 3, 4, 5, 7, 8: same as FIRST_HANDOFF.
+
+Rationale: joiners don't need to "prove the loop" — the Egregore is already established and the inviter already did. Making joiners run `/handoff` before they can Edit/Write traps every first-time invitee (hook blocks all Edit/Write/EnterWorktree while `onboarding_complete` is false). The joiner's `intent answer` above is their onboarding signal; that's enough.
+
+**Exit:**
+- Creators: → User works normally. FIRST_HANDOFF triggers when they end the session.
+- Joiners (after fast-track above): → `onboarding_complete: true` is now set. User works normally; no FIRST_HANDOFF gate.
 
 ---
 
 ## State: FIRST_HANDOFF
 
-**Entry:** User signals session-end intent while `onboarding_complete` is false and `phase` is `invite`.
+**Entry:** Creator (`usage_type == "founder_group"`) signals session-end intent while `onboarding_complete` is false and `phase` is `invite`.
+
+Joiners never reach this state — they complete in the INVITE state's joiner fast-track. FIRST_HANDOFF is exclusively a creator flow (it teaches the handoff loop before work unlocks — redundant for joiners, whose Egregore already has proven the loop).
 
 **Trigger detection:**
 1. User runs `/wrap`, `/handoff`, or `/save` — always triggers
