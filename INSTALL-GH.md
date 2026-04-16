@@ -23,10 +23,12 @@ Pick **GitHub.com → HTTPS → Login with a web browser**. This is a first-part
 
 ## Install
 
-Run from any directory (e.g. `~/dev`):
+Run from any directory (e.g. `~/dev`). Download first, inspect if you want, then run — so you always see the code before it executes:
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/init-gh.sh)
+curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/init-gh.sh
+less init-gh.sh          # optional — read what it will do
+bash init-gh.sh
 ```
 
 The installer will:
@@ -64,7 +66,8 @@ Works the same as the App flow — adds them as a collaborator on every repo (`r
 
 ```bash
 # gh path (no third-party App, no PAT — same as founder install)
-bash <(curl -sL https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh) <org>/<egregore-repo>
+curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh
+bash join-gh.sh <org>/<egregore-repo>
 
 # or npx path (requires running code from npm)
 npx create-egregore join <org>/<egregore-repo>
@@ -113,7 +116,7 @@ gh repo delete <owner>/<memory-repo>
 # Remove the local clones
 rm -rf <egregore-dir> <memory-dir>
 # Re-run
-bash <(curl -sL https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/init-gh.sh)
+bash init-gh.sh
 ```
 
 ## What the installer does NOT do
