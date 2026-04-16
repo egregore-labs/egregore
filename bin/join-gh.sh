@@ -8,7 +8,11 @@
 #
 # Usage:
 #   bash bin/join-gh.sh <owner>/<repo>
-#   bash <(curl -sL https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh) <owner>/<repo>
+#
+# Or grab it standalone:
+#   curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh
+#   less join-gh.sh    # optional — inspect before running
+#   bash join-gh.sh <owner>/<repo>
 #
 # Example:
 #   bash bin/join-gh.sh acme-org/ops-team
