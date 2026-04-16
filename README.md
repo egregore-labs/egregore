@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://egregore.xyz">Website</a> ·
-  <a href="https://github.com/egregore-labs/egregore/discussions">Community</a> ·
+  <a href="https://x.com/egregore_xyz">Community</a> ·
   <a href="LICENSE">MIT License</a>
 </p>
 
