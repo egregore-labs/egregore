@@ -39,7 +39,7 @@ npx create-egregore join <github-org>
 
 (You will need an invitation from the instance owner. See `/invite` below.)
 
-If your org blocks third-party GitHub Apps, see [INSTALL-GH.md](INSTALL-GH.md) for a gh-CLI install path.
+If your org blocks third-party GitHub Apps, there's a gh-CLI install path: see [INSTALL-GH.md](INSTALL-GH.md) or the [docs](https://egregore.xyz/docs/guides/installation).
 
 ## Start
 
