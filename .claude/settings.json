@@ -24,6 +24,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-refresh.sh"
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "matcher": "",
