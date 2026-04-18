@@ -54,12 +54,13 @@ fi
 
 # Open browser — use verification_uri_complete if available, otherwise plain URI
 url="${verification_uri_complete:-$verification_uri}"
+echo "  Opening your browser..."
+echo "  If it doesn't open, visit: $url"
+echo ""
 if command -v open >/dev/null 2>&1; then
   open "$url"
 elif command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$url"
-else
-  echo "  Open this URL manually: $url"
 fi
 
 # Poll for authorization
