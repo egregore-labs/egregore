@@ -81,6 +81,12 @@ is_exempt() {
     /tmp/*|/tmp|/private/tmp/*|/private/tmp) return 0 ;;
   esac
 
+  # Exempt: paths outside the hub project (managed repos are sibling dirs
+  # with their own branch state — the hub's develop guard doesn't apply).
+  if [[ "$resolved" != "$PROJECT_DIR" && "$resolved" != "$PROJECT_DIR/"* ]]; then
+    return 0
+  fi
+
   return 1
 }
 
@@ -131,8 +137,16 @@ targets_other_repo() {
   return 1
 }
 
-# --- Block message (short — Claude knows what to do from CLAUDE.md) ---
-BLOCK_MSG="Protected branch: create a working branch first. Run: git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop"
+# --- Block message — instructs Claude to confirm the branch with the user ---
+# When the topic is obvious from the last turn, Claude may skip the question and
+# auto-branch. When it's ambiguous, Claude MUST use AskUserQuestion before
+# creating the branch (see CLAUDE.md "Branch-guard protocol").
+BLOCK_MSG="Protected branch (${BRANCH}). Before writing, create a working branch for this work.
+
+If the topic is clear from the conversation, auto-branch:
+  git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop
+
+If the topic is ambiguous, use AskUserQuestion to confirm the slug with the user first (offer 2-3 suggestions + a rename option), then branch."
 
 # --- Check based on tool type ---
 case "$TOOL_NAME" in
@@ -183,9 +197,9 @@ case "$TOOL_NAME" in
     ;;
 
   EnterPlanMode)
-    # Block plan mode on protected branches — forces branch creation first
-    echo "$BLOCK_MSG" >&2
-    exit 2
+    # Plan mode doesn't write anything — allow on protected branches.
+    # The actual Edit/Write/Bash that follows will still trigger branching.
+    exit 0
     ;;
 
   *)

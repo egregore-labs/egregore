@@ -107,10 +107,22 @@ If the remote branch is gone:
      ```
    - **If push fails**: stop here. Do NOT proceed. Tell the user:
      > Push failed. Your commits are safe on your working branch. Check your network and try `/save` again.
-   - Create PR to develop:
+   - Check for an existing open PR on this branch before creating (dedupe):
      ```bash
-     gh pr create --base develop --title "..." --body "..."
+     EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number,baseRefName --jq '.[0]' 2>/dev/null)
+     EXISTING_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number // empty')
+     EXISTING_BASE=$(echo "$EXISTING_PR" | jq -r '.baseRefName // empty')
      ```
+     - **If an open PR exists with base `develop`** → reuse it. Set `PR_NUMBER=$EXISTING_NUMBER` and skip `gh pr create`. Tell the user: `Updated existing PR #$PR_NUMBER`.
+     - **If an open PR exists with a different base** (e.g. `main`) → retarget it rather than open a second one:
+       ```bash
+       gh pr edit "$EXISTING_NUMBER" --base develop
+       ```
+       Set `PR_NUMBER=$EXISTING_NUMBER`. Tell the user: `Retargeted PR #$PR_NUMBER to develop`.
+     - **If no open PR exists** → create one (always pass `--base` explicitly so `gh` never falls back to the repo's default branch):
+       ```bash
+       gh pr create --base develop --title "..." --body "..."
+       ```
    - **If PR creation fails**: stop here. The branch was pushed, so tell the user:
      > PR creation failed, but your branch `{BRANCH}` was pushed.
      > Your commits are safe. Try again with `/save` or create the PR manually.
@@ -190,10 +202,22 @@ If the remote branch is gone:
         ```bash
         git -C "$REPO_DIR" push -u origin $BRANCH
         ```
-     5. Create PR to the repo's base branch:
+     5. Check for an existing open PR on this branch before creating (dedupe), then create or retarget:
         ```bash
-        gh pr create --repo $GITHUB_ORG/$REPO --base "$BASE_BRANCH" --title "..." --body "..."
+        EXISTING_PR=$(gh pr list --repo "$GITHUB_ORG/$REPO" --head "$BRANCH" --state open --json number,baseRefName --jq '.[0]' 2>/dev/null)
+        EXISTING_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number // empty')
+        EXISTING_BASE=$(echo "$EXISTING_PR" | jq -r '.baseRefName // empty')
         ```
+        - If open PR exists with base `$BASE_BRANCH` → reuse: `PR_NUMBER=$EXISTING_NUMBER`, skip create, message `Updated existing PR #$PR_NUMBER`.
+        - If open PR exists with a different base → retarget rather than duplicate:
+          ```bash
+          gh pr edit "$EXISTING_NUMBER" --repo "$GITHUB_ORG/$REPO" --base "$BASE_BRANCH"
+          ```
+          Set `PR_NUMBER=$EXISTING_NUMBER`, message `Retargeted PR #$PR_NUMBER to $BASE_BRANCH`.
+        - If no open PR exists → create (always pass `--base` explicitly):
+          ```bash
+          gh pr create --repo "$GITHUB_ORG/$REPO" --base "$BASE_BRANCH" --title "..." --body "..."
+          ```
      6. Track PR in graph (fire-and-forget):
         ```bash
         bash bin/graph-op.sh create-pr "$SID" "$PR_NUMBER" "$REPO" "$GH_USER" "$PR_TITLE" 2>/dev/null &

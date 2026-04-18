@@ -70,6 +70,17 @@ If `repoState` is absent or empty (old handoff format), skip auto-checkout silen
 
 If on develop after two messages, create a branch immediately from whatever context you have.
 
+### Branch-guard protocol
+
+The `branch-guard.sh` PreToolUse hook blocks writes and commits on `develop`/`main`/`master`. When it fires (you'll see a `Protected branch (...)` message in the tool error), choose between two paths based on how clear the topic is:
+
+- **Topic is obvious from the last turn** (user said "fix X", "add Y feature") → auto-branch silently. Derive the slug, run `git checkout -b dev/{author}/{slug} origin/develop`, continue. Don't interrupt the user for something they already implicitly answered.
+- **Topic is ambiguous** (open-ended exploration, "let's look at...", user didn't specify what we're building yet) → use AskUserQuestion **before** branching, with 2–3 suggested slugs derived from context plus a "rename it" option. Only branch after they confirm.
+
+The hook's block message is aimed at you, not the user. The user sees nothing unless you surface it — so when you do auto-branch, say one sentence ("Creating `dev/{author}/{slug}`.") so the user isn't confused about why a new branch appeared.
+
+Plan mode is **not** blocked by branch-guard — you can enter plan mode on develop without branching first. The branch gets created when you actually try to Edit/Write/commit.
+
 ### Onboarding exception
 
 If hook output contains `onboarding_needed`, invoke `/onboarding` instead of the greeting.
