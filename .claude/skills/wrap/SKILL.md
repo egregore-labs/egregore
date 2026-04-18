@@ -340,6 +340,23 @@ The agent generates a JSON report from the session context already gathered in S
 }
 ```
 
+`session_duration_ms`: derive from the session id timestamp (`.egregore-session-id` is formatted `YYYYMMDDTHHMMSS-<user>-<rand>`):
+
+```bash
+SID=$(cat .egregore-session-id 2>/dev/null)
+DURATION_MS=0
+if [[ "$SID" =~ ^[0-9]{8}T[0-9]{6}- ]]; then
+  START_TS=$(echo "$SID" | sed -E 's/^([0-9]{8})T([0-9]{6}).*/\1 \2/' | awk '{printf "%s-%s-%s %s:%s:%s", substr($1,1,4),substr($1,5,2),substr($1,7,2),substr($2,1,2),substr($2,3,2),substr($2,5,2)}')
+  START_EPOCH=$(date -j -u -f '%Y-%m-%d %H:%M:%S' "$START_TS" +%s 2>/dev/null || date -u -d "$START_TS" +%s 2>/dev/null)
+  if [ -n "$START_EPOCH" ]; then
+    NOW_EPOCH=$(date -u +%s)
+    DURATION_MS=$(( (NOW_EPOCH - START_EPOCH) * 1000 ))
+  fi
+fi
+```
+
+`message_count`: leave as `0` — Claude has no reliable way to count turns without transcript access. The field stays in the payload for forward-compat; downstream consumers treat `0` as "unknown".
+
 The `gaps` array is the agent's introspective analysis of the session: commands the user wanted but didn't exist, repeated errors, confusing moments, missing information. If the session went smoothly, `gaps` can be empty.
 
 ### 7.5.3 Ask for user note
