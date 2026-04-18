@@ -7,6 +7,14 @@ Save your contributions to Egregore. Pushes working branch, creates PR to develo
 User says: "push my work", "sync changes", "commit and push", "save everything", "push this up"
 Not this: user is leaving/done → `/handoff` (which auto-saves)
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip the "Sync to Neo4j" step entirely. Skip `bin/sync-graph.sh` and the graph enrichment section. Skip the `bash bin/graph-op.sh create-pr ...` fire-and-forget calls. Do NOT show any graph-related messaging ("[sync] Checking Neo4j...", "Synced N to graph", "tracked PR in graph", etc.). Git operations (commit, push, `gh pr create`) work identically in both modes — only the graph reporting layer is skipped.
+
 ## Execution rules
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines (e.g. "Synced 2 sessions, 1 artifact to graph").
