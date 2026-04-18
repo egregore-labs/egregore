@@ -8,6 +8,14 @@ Show your profile or change how you're known across Egregore.
 - "call me oz", "I go by cem", "change my name to X"
 - User runs `/me` or `/me <name>`
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging (Person node, "synced to graph", Neo4j, orphan merge, etc.). `/me` in local mode is file-based only: read `memory/people/{github}.md` for the profile, update the `# {display_name}` header + the `.egregore-state.json` display_name field when setting a name. Skip uniqueness check against the graph (optional TODO: check against other `memory/people/*.md` files).
+
 ## Behavior
 
 ### No arguments → Show profile

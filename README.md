@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://egregore.xyz">Website</a> ·
-  <a href="https://x.com/egregore_xyz">X</a> ·
+  <a href="https://x.com/egregore_xyz">Community</a> ·
   <a href="LICENSE">MIT License</a>
 </p>
 
@@ -130,10 +130,10 @@ EGREGORE_NO_TELEMETRY=1  # in your .env
 DO_NOT_TRACK=1           # or the standard flag
 ```
 
-## Egregore: Managed hosting (coming soon)
+## Egregore Native: Managed hosting (coming soon)
 
 The open-source Egregore was built as a self-hosted, sovereign architecture without dependencies. Egregore's true capabilities, functionalities and scale are greatly enhanced with managed services.
-For teams that want the knowledge graph, live notifications, organizational agents, and persistent GUI: info@egregore.xyz.
+For teams that want the knowledge graph, live notifications, organizational agents, and persistent GUI: native@egregore.xyz.
 
 ## Contributing
 

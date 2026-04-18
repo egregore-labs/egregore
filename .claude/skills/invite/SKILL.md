@@ -4,8 +4,8 @@ Arguments: $ARGUMENTS (Required: GitHub username of the person to invite)
 
 ## Execution rules
 
-**Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
-**Notifications via `bash bin/notify.sh send`**. No direct curl to Telegram.
+**Neo4j-first (connected mode only).** In connected mode, all queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j. In local mode, Step 1b routes to Step 2L (GitHub API only) — Steps 2–4b (graph + notify) are skipped entirely. Do NOT show any graph-related messaging in local mode (no "Person node created", no "recorded in graph", no Neo4j references).
+**Notifications via `bash bin/notify.sh send` (connected mode only)**. No direct curl to Telegram.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
 
 **CRITICAL: Never expose credentials in tool output.**

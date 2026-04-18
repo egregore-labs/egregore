@@ -11,10 +11,18 @@ Topic: $ARGUMENTS
 
 **Auto-saves.** No need to run `/save` after.
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, and `bin/graph-wal.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, Session node, enriched, etc.). Local-mode wrap is file-based only: write the wrap file to `memory/wraps/YYYY-MM/DD-{author}-{slug}.md`, commit + push memory, show a clear one-line confirmation (`✓ Wrapped · memory/wraps/...`). Skip all graph context queries, Artifact linking, and Session enrichment. The memory-side /save at the end still runs (git operations work the same in both modes).
+
 ## Execution rules
 
-**Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
-**WAL-first for writes.** All graph mutations go through `bash bin/graph-wal.sh append` first, then direct write as best-effort.
+**Neo4j-first (connected mode only).** In connected mode, all queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
+**WAL-first for writes (connected mode only).** All graph mutations go through `bash bin/graph-wal.sh append` first, then direct write as best-effort.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/graph-wal.sh` calls MUST redirect stdout: pipe to `/dev/null` or capture in a variable. Only show formatted progress lines.
 
 - 1 Bash call: `git config user.name`

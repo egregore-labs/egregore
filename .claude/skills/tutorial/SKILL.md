@@ -10,6 +10,14 @@ This applies to: Step 2 reflect artifacts, Step 3 quests, Step 3 source artifact
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
 
+## Mode detection
+
+```bash
+MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+```
+
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging (knowledge graph, Neo4j, nodes, relationships, edges, "linked", "synced to graph", etc.). The tutorial in local mode is markdown-only: it creates artifact files in `memory/knowledge/{findings,patterns,decisions}/`, quest files in `memory/quests/`, and a journey log. No graph queries, no node creation, no edge counts. When the tutorial talks about what the team knows, refer to "shared memory" or "memory files" — not "the knowledge graph." Show `(feature of hosted version — coming soon)` where a graph-only capability is referenced.
+
 ## Step 0: State Check
 
 Read `.egregore-state.json`. Extract `usage_type`, `tutorial_complete`, and any existing tutorial state (`domain`, `stage`, `team_or_solo`).
