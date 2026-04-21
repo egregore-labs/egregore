@@ -16,6 +16,8 @@ Arguments: $ARGUMENTS (Optional: artifact type and/or name, or a file path)
 - `quest` — renders quest markdown from `memory/quests/`
 - `handoff` — renders handoff markdown from `memory/handoffs/`
 - `activity` — renders live team activity dashboard (no file needed)
+- `board` — renders project board from `memory/board/board.json` (no file needed; interactive editor with paste-back loop, 5 tabs: Activity / Priority / Person / Timeline / Done). In connected mode, also publishes to a stable URL at `egregore.xyz/view/{org}/board` on every invocation — bookmark it and refresh to see the latest.
+- `network` — renders people/relationship network (no file needed)
 - `document` — renders any markdown file with branded styling (auto-detected fallback)
 
 ## Resolution logic
@@ -27,6 +29,8 @@ The key job of `/view` is resolving what the user wants to see into a file path.
 - `/view quest artifact-generation` → type=quest, name=artifact-generation
 - `/view handoff oss-security-audit` → type=handoff, name=oss-security-audit
 - `/view activity` → type=activity, no file needed
+- `/view board` → type=board, reads `memory/board/board.json`, no file argument needed
+- `/view network` → type=network, no file needed
 - `/view artifact-generation` → no type specified, search all types
 - `/view memory/knowledge/decisions/some-decision.md` → direct file path
 - `show me the security audit visually` → extract keywords, search
@@ -53,6 +57,8 @@ find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort 
 
 **Activity**: No file resolution needed — runs `bin/activity-data.sh` live.
 
+**Board / Network**: No file resolution needed. `board` reads `memory/board/board.json` automatically (via git root). `network` is generated from people data.
+
 **Auto-detect type** (no type specified):
 1. Search `memory/quests/` first
 2. Then `memory/handoffs/` recursively
@@ -76,12 +82,37 @@ For activity (no file):
 npx egregore-artifacts activity
 ```
 
+**For board (connected mode only — publish to stable URL):**
+
+After opening locally, fire-and-forget a publish with a stable `--id` so the URL `egregore.xyz/view/{org}/board` always shows the latest board:
+
+```bash
+_API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
+_MODE=$(jq -r '.mode // empty' egregore.json 2>/dev/null)
+if [ -n "$_API_URL" ] && [ "$_MODE" != "local" ]; then
+  ORG_NAME=$(jq -r '.org_name // .slug' egregore.json)
+  bash bin/publish-artifact.sh board memory/board/board.json \
+    --id board \
+    --title "Project Board — $ORG_NAME" \
+    --author "$ORG_NAME" \
+    --description "Latest board for $ORG_NAME" 2>/dev/null &
+fi
+```
+
+The publish script exits silently on failure, so the local open always succeeds regardless of API state. OSS/local mode skips this step entirely — the board stays local unless the user publishes explicitly.
+
 ### 4. Report
 
 ```
 ✓ Artifact opened in browser
   File: /tmp/egregore-artifacts/{type}-{name}-{ts}.html
 ```
+
+For `/view board` in connected mode, append:
+```
+◆ https://egregore.xyz/view/{org_slug}/board   (stable — refresh for latest)
+```
+Read `org_slug` from `egregore.json`.
 
 ## Fallback
 
