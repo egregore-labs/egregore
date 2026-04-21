@@ -135,24 +135,26 @@ else
   fail "/save missing retarget path — could still create duplicate"
 fi
 
-# No orphan `gh pr create --base develop` without a dedupe check directly before it
-# (cheap heuristic: every `gh pr create` should be preceded within 20 lines by a `gh pr list`)
+# No orphan `gh pr create` in operational code blocks without a dedupe check.
+# Only count lines that look like actual shell commands (indented inside a code
+# block — `    gh pr create` or `     gh pr create`), not prose mentions of
+# the command name. Every such command must be preceded within 40 lines by a
+# `gh pr list`.
 awk '
   /gh pr list/ { last_list = NR }
-  /gh pr create/ {
+  /^    *gh pr create/ {
     if (last_list == 0 || NR - last_list > 40) {
-      # ignore examples blocks — they start with `>` or are inside fenced ``` blocks labeled "example" or "If already a member"
       print NR ":" $0
     }
   }
 ' "$SAVE_MD" | grep -v "^$" > /tmp/unguarded.txt || true
 UNGUARDED=$(grep -v "^$" /tmp/unguarded.txt 2>/dev/null | wc -l | tr -d ' ')
-# Some example blocks still contain bare `gh pr create` — count expected examples
-# Accept up to 4 example-block occurrences (Examples section at end of file)
+# Example output blocks near the end still include bare `gh pr create` in
+# illustrative sample console output. Allow a small quota for those.
 if [ "$UNGUARDED" -le 4 ]; then
-  pass "no unguarded gh pr create in operational sections (allowing $UNGUARDED in example blocks)"
+  pass "no unguarded gh pr create in operational code blocks (allowing $UNGUARDED in illustrative examples)"
 else
-  fail "found $UNGUARDED unguarded gh pr create calls" "$(cat /tmp/unguarded.txt)"
+  fail "found $UNGUARDED unguarded gh pr create calls in code blocks" "$(cat /tmp/unguarded.txt)"
 fi
 
 # ─────────────────────────────────────────────────────────
