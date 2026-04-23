@@ -122,7 +122,7 @@ case "$TOOL_NAME" in
 
     RESOLVED=$(resolve_path "$FILE_PATH")
     if ! is_allowed "$RESOLVED"; then
-      echo "Environment isolation: $RESOLVED is outside this instance's boundary. Each Egregore instance can only access its own project, memory, and managed repos." >&2
+      echo "Environment isolation: $RESOLVED is outside this instance's boundary (project + memory + managed repos). Do not retry — the hook will block again. Use AskUserQuestion to ask the user how to proceed, with options: 'Paste contents inline', 'Move file into the repo and point me at the new path', 'Cancel — don't access it'." >&2
       exit 2
     fi
     ;;
@@ -135,7 +135,7 @@ case "$TOOL_NAME" in
 
     RESOLVED=$(resolve_path "$SEARCH_PATH")
     if ! is_allowed "$RESOLVED"; then
-      echo "Environment isolation: $RESOLVED is outside this instance's boundary." >&2
+      echo "Environment isolation: $RESOLVED is outside this instance's boundary. Do not retry — the hook will block again. Use AskUserQuestion to ask the user how to proceed (paste results inline, move the target into the repo, or cancel)." >&2
       exit 2
     fi
     ;;
@@ -150,7 +150,7 @@ case "$TOOL_NAME" in
     DENIED_PATHS=$(echo "$BOUNDARY_JSON" | jq -r '.denied_paths[]?' 2>/dev/null) || true
     for denied in ${DENIED_PATHS:-}; do
       if echo "$COMMAND" | grep -qF "$denied" 2>/dev/null; then
-        echo "Environment isolation: command references another Egregore instance at $denied." >&2
+        echo "Environment isolation: command references another Egregore instance at $denied. Do not retry — the hook will block again. Use AskUserQuestion to ask the user how to proceed (paste the needed data inline, rephrase the command to stay in-boundary, or cancel)." >&2
         exit 2
       fi
     done

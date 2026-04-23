@@ -471,6 +471,16 @@ source "$SCRIPT_DIR/bin/lib/context.sh"
 # ============================================================
 source "$SCRIPT_DIR/bin/lib/dashboard-artifact.sh"
 
+# Stable board URL — shown in greeting, refreshable. Connected mode only;
+# /view board upserts content at this URL via `publish-artifact.sh --id board`.
+BOARD_URL=""
+if [ "${LOCAL_MODE:-false}" != "true" ] && [ -f "$SCRIPT_DIR/memory/board/board.json" ]; then
+  _ORG_SLUG=$(jq -r '.slug // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  if [ -n "$_ORG_SLUG" ]; then
+    BOARD_URL="https://egregore.xyz/view/${_ORG_SLUG}/board"
+  fi
+fi
+
 # ============================================================
 # 9. Render greeting
 # ============================================================

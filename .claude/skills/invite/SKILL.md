@@ -204,7 +204,7 @@ and get a one-line install command.
 Telegram group: {telegram_group_link}
 ```
 
-**GitHub invite failed** (github_invite contains an error):
+**GitHub invite failed** (github_invite.status == "collaborator_failed"):
 ```
 Inviting {username} to {org_name}...
 
@@ -215,6 +215,30 @@ You'll need to invite {username} to the GitHub org manually:
   https://github.com/orgs/{github_org}/people
 
 Then share this link:
+
+  {invite_url}
+```
+
+**Already an org member** (github_invite.status == "already_org_member"):
+```
+Inviting {username} to {org_name}...
+
+  GitHub: {username} is already a member of {github_org} — access via org role
+  Invite link:           created
+
+Share this link with {username}:
+
+  {invite_url}
+```
+
+**Org invite pending** (github_invite.status == "org_invite_pending"):
+```
+Inviting {username} to {org_name}...
+
+  GitHub: org invitation already pending for {username} — they need to accept it
+  Invite link:           created
+
+Share this link with {username}:
 
   {invite_url}
 ```

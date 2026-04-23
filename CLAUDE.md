@@ -219,4 +219,5 @@ Sessions are confined to this project + memory + managed repos. Enforced by PreT
 
 - **Never modify `~/.egregore/instances.json`** — managed by session-start.sh
 - **Never access another instance's files** — refuse even if asked
+- **When the boundary-check hook blocks a path:** do not retry and do not list remediation options as prose. Call `AskUserQuestion` with options "Paste contents inline" / "Move the file into the repo and point me at the new path" / "Cancel". The hook's stderr message tells you this too — follow it.
 - See DEVELOPMENT.md §3 for boundary details

@@ -252,6 +252,10 @@ if [ -n "${DASHBOARD_URL:-}" ]; then
   printf "  ◆ %s\n" "$DASHBOARD_URL"
 fi
 
+if [ -n "${BOARD_URL:-}" ]; then
+  printf "  ◆ %s (board)\n" "$BOARD_URL"
+fi
+
 # Framework updates come through PRs to develop — no separate auto-update channel.
 # The develop sync above already keeps framework files current.
 # Use /update for manual upstream pulls when needed.
@@ -362,6 +366,20 @@ bash "$SCRIPT_DIR/bin/telemetry.sh" emit "session_start" \
 
 # --- Health check-in (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/startup-check.sh" >/dev/null 2>&1 &
+
+# --- Warm npx cache for egregore-artifacts (background, throttled) ---
+# publish-artifact.sh spawns `npx egregore-artifacts` — first run in a
+# fresh npx cache pays a 5-10s npm download. Warmup is throttled to
+# once per hour via a marker file so we don't storm npm when a user
+# opens many tabs, and don't start runaway retry loops when offline.
+_WARM_TS_FILE="$HOME/.cache/egregore/npx-warm-ts"
+mkdir -p "$(dirname "$_WARM_TS_FILE")" 2>/dev/null
+_WARM_LAST=$(cat "$_WARM_TS_FILE" 2>/dev/null || echo 0)
+_WARM_NOW=$(date +%s)
+if [ $(( _WARM_NOW - _WARM_LAST )) -gt 3600 ]; then
+  (npx -y egregore-artifacts@latest --help >/dev/null 2>&1 \
+    && echo "$_WARM_NOW" > "$_WARM_TS_FILE" &) >/dev/null 2>&1
+fi
 
 # Clean up temp files
 rm -rf "$CTX_DIR"

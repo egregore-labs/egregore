@@ -505,7 +505,35 @@ Show progress:
 [3/5] ✓ Session -> knowledge graph
 ```
 
-## Step 6: Auto-save
+## Step 6: Save + publish (PARALLEL via helper)
+
+Use the helper `bin/handoff-save-publish.sh` which runs memory push and
+artifact publish concurrently (wall-clock = max of the two, not sum), and
+detaches Telegram notify + PR-number backfill so they survive session
+exit without blocking the TUI. Returns ARTIFACT_URL on stdout.
+
+```bash
+ARTIFACT_URL=$(bash bin/handoff-save-publish.sh "$HANDOFF_FILE_PATH" \
+  "$HANDOFF_TOPIC" \
+  "$AUTHOR" \
+  "$BRIEFING_FIRST_SENTENCE" \
+  --recipient "$RECIPIENT" \
+  --repo-state-section "$REPO_STATE_SECTION")
+```
+
+Show progress:
+```
+[4/4] ✓ Pushed + published (parallel); notify + PR backfill in background
+```
+
+Skip Steps 6.5 and 7 — the helper script handles both as detached
+background work.
+
+---
+
+### Legacy description (kept for context if the helper is unavailable)
+
+## Step 6 (legacy): Auto-save
 
 Run the full `/save` flow:
 

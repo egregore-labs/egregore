@@ -211,8 +211,8 @@ Q1_PARAMS=$(jq -n \
   --arg summary "$SUMMARY" \
   --arg filePath "$REL_PATH" \
   --arg repoState "$REPO_STATE_JSON" \
-  "${_PROJECT_ARGS[@]}" \
-  "${_RECIP_ARGS[@]}" \
+  "${_PROJECT_ARGS[@]:+${_PROJECT_ARGS[@]}}" \
+  "${_RECIP_ARGS[@]:+${_RECIP_ARGS[@]}}" \
   '$ARGS.named')
 
 # Q2: Auto-resolve old read handoffs from this author
@@ -227,13 +227,39 @@ RETURN count(s) AS resolved"
 Q2_PARAMS=$(jq -n --arg author "$AUTHOR_HANDLE" --arg sessionId "$SESSION_ID" \
   '{author: $author, sessionId: $sessionId}')
 
+# Q3: Capture the handoff's knowledge-graph neighborhood for artifact rendering.
+# Only the "graph-only" relations — things not already visible in the markdown
+# header. Author/recipients/project live in the metadata row above the graph,
+# so including them would be noise.
+Q3_CYPHER="MATCH (s:Session {id: \$sessionId})
+OPTIONAL MATCH (s)-[:IMPLEMENTS]->(prior:Session)
+OPTIONAL MATCH (prior)-[:BY]->(priorAuthor:Person)
+OPTIONAL MATCH (later:Session)-[:IMPLEMENTS]->(s)
+OPTIONAL MATCH (later)-[:BY]->(laterAuthor:Person)
+OPTIONAL MATCH (s)-[:CONTINUES]->(cont:Session)
+OPTIONAL MATCH (cont)-[:BY]->(contAuthor:Person)
+OPTIONAL MATCH (s)-[:ADVANCED|INVOLVES]->(quest:Quest)
+OPTIONAL MATCH (s)-[:HAS_ACTIVITY]->(art:Artifact)
+OPTIONAL MATCH (s)-[:PRODUCED]->(pr:PR)
+RETURN
+  collect(DISTINCT {id: prior.id, topic: prior.topic, author: priorAuthor.name}) AS implementsHandoff,
+  collect(DISTINCT {id: later.id, topic: later.topic, author: laterAuthor.name}) AS implementedBy,
+  collect(DISTINCT {id: cont.id, topic: cont.topic, author: contAuthor.name}) AS continues,
+  collect(DISTINCT {id: quest.id, title: quest.title}) AS quests,
+  collect(DISTINCT {id: art.id, title: art.title, type: art.type, path: art.path}) AS artifacts,
+  collect(DISTINCT {id: pr.id, number: pr.number, title: pr.title, repo: pr.repo}) AS prs"
+
+Q3_PARAMS=$(jq -n --arg sessionId "$SESSION_ID" '{sessionId: $sessionId}')
+
 # --- Build batch request ---
 BATCH_JSON=$(jq -n \
   --arg q1 "$Q1_CYPHER" \
   --argjson p1 "$Q1_PARAMS" \
   --arg q2 "$Q2_CYPHER" \
   --argjson p2 "$Q2_PARAMS" \
-  '[{statement: $q1, parameters: $p1}, {statement: $q2, parameters: $p2}]')
+  --arg q3 "$Q3_CYPHER" \
+  --argjson p3 "$Q3_PARAMS" \
+  '[{statement: $q1, parameters: $p1}, {statement: $q2, parameters: $p2}, {statement: $q3, parameters: $p3}]')
 
 # --- Execute ---
 RESPONSE=$(bash "$SCRIPT_DIR/bin/graph-batch.sh" "$BATCH_JSON" 2>/dev/null) || {
@@ -253,5 +279,28 @@ fi
 # --- Parse response ---
 RESOLVED=$(echo "$RESPONSE" | jq -r '.results[1].values[0][0] // 0' 2>/dev/null || echo "0")
 
-jq -n --arg sessionId "$SESSION_ID" --argjson resolved "$RESOLVED" \
-  '{sessionId: $sessionId, resolved: $resolved}'
+# Parse Q3 neighborhood into a subgraph object. Collect() entries that didn't
+# match anything come back as {name: null, ...} — filter those out.
+EMPTY_SG='{"implementsHandoff":[],"implementedBy":[],"continues":[],"quests":[],"artifacts":[],"prs":[]}'
+SUBGRAPH_JSON=$(echo "$RESPONSE" | jq -c '
+  (.results[2] // null) as $r
+  | if $r == null or (($r.values // []) | length) == 0 then
+      {implementsHandoff:[], implementedBy:[], continues:[], quests:[], artifacts:[], prs:[]}
+    else
+      ($r.fields // []) as $f
+      | ($r.values[0] // []) as $v
+      | reduce range(0; ($f | length)) as $i ({}; .[$f[$i]] = $v[$i])
+      | {
+          implementsHandoff: ((.implementsHandoff // []) | map(select(.id != null))),
+          implementedBy:     ((.implementedBy // []) | map(select(.id != null))),
+          continues:         ((.continues // []) | map(select(.id != null))),
+          quests:            ((.quests // []) | map(select(.id != null))),
+          artifacts:         ((.artifacts // []) | map(select(.id != null or .path != null))),
+          prs:               ((.prs // []) | map(select(.number != null or .id != null)))
+        }
+    end
+' 2>/dev/null || echo "$EMPTY_SG")
+[ -z "$SUBGRAPH_JSON" ] && SUBGRAPH_JSON="$EMPTY_SG"
+
+jq -n --arg sessionId "$SESSION_ID" --argjson resolved "$RESOLVED" --argjson subgraph "$SUBGRAPH_JSON" \
+  '{sessionId: $sessionId, resolved: $resolved, subgraph: $subgraph}'
