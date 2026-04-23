@@ -8,8 +8,8 @@ set -euo pipefail
 # OSS mode (no API key): publishes to /api/artifacts/share (ephemeral, 7-day TTL)
 #
 # --id <slug>: stable artifact ID — re-publishing with the same ID upserts the content
-#              at the same URL. Managed Egregore only; ignored otherwise.
-#              Must be 1-50 chars, alphanumeric/hyphen/underscore.
+#              at the same URL (e.g. egregore.xyz/view/{org}/board). Connected mode only;
+#              ignored in OSS mode. Must be 1-50 chars, alphanumeric/hyphen/underscore.
 #
 # Outputs artifact URL on success, exits silently on failure.
 # Designed for fire-and-forget use: `bash bin/publish-artifact.sh handoff file.md &`
