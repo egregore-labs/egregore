@@ -3,9 +3,20 @@
 # Outputs a markdown table (## Repo State) for handoff files.
 # Only includes repos on non-base branches or with uncommitted changes.
 #
-# Usage: bash bin/repo-state.sh
+# Usage: bash bin/repo-state.sh [--no-pr]
+#   --no-pr    Skip the `gh pr list` lookup per repo (~400–600ms each).
+#              PR column will be `—`. Useful on the hot path where a detached
+#              backfill will fill PR numbers in later.
 #   Outputs the markdown section to stdout. Empty output = nothing to report.
 set -euo pipefail
+
+NO_PR=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-pr) NO_PR=1; shift ;;
+    *) shift ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
@@ -48,9 +59,9 @@ check_repo() {
     return 0
   fi
 
-  # Check for open PR
+  # Check for open PR (skipped with --no-pr; a detached backfill fills it in)
   local pr="—"
-  if command -v gh &>/dev/null && [ -n "$GITHUB_ORG" ]; then
+  if [ "$NO_PR" = "0" ] && command -v gh &>/dev/null && [ -n "$GITHUB_ORG" ]; then
     local pr_num
     pr_num=$(gh pr list --repo "$GITHUB_ORG/$repo_name" --head "$branch" --json number -q '.[0].number' 2>/dev/null || true)
     [ -n "$pr_num" ] && pr="#$pr_num"
