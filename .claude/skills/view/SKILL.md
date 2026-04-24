@@ -101,6 +101,8 @@ fi
 
 The publish script exits silently on failure, so the local open always succeeds regardless of API state. OSS/local mode skips this step entirely — the board stays local unless the user publishes explicitly.
 
+**Auto-linked references (connected mode).** When `publish-artifact.sh` publishes a markdown file, any backtick-wrapped `memory/**/*.{md,html}` paths inside it are re-published in parallel at deterministic URLs (`egregore.xyz/view/{slug}/{m|h}-{12 hex}`) so the rendered parent view contains clickable links to each referenced file. See `bin/publish-references.sh`. No-op in OSS mode (the relay assigns random slugs, so the renderer falls back to plain `<code>`).
+
 ### 4. Report
 
 ```

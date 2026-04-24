@@ -1,13 +1,13 @@
 End a session with a summary for the next person (or future you). With no arguments, triages open handoffs first.
 
+Topic: $ARGUMENTS
+
+**Auto-saves.** No need to run `/save` after.
+
 ## When to invoke
 
 User says: "I'm done", "wrapping up", "leave a handoff", "pass this to [name]", "hand off", "done for now", "signing off"
 Not this: user wants to push but keep working → `/save`
-
-Topic: $ARGUMENTS
-
-**Auto-saves.** No need to run `/save` after.
 
 ## Mode detection
 
@@ -15,60 +15,30 @@ Topic: $ARGUMENTS
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, and `bin/index-handoff.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.). `bin/notify.sh` IS allowed — it routes through the public relay for group messages.
+**Local mode** (`mode === "local"`): graph queries and DM-style notifications are unavailable. The group-relay notification still works when `telegram_chat_id` is set. Artifact publishing routes through the public OSS relay (ephemeral 7-day TTL) — an acceptable fallback, but note that the handoff body is uploaded there.
 
-Local-mode flow:
-- **Step 0**: Get user via `git config user.name`. For team members: read from `memory/people/` directory (list `.md` files, extract names from filenames or frontmatter) instead of querying the graph.
-- **Step 0.5 (Triage)**: Read open handoffs from `memory/handoffs/index.md` — filter for handoffs directed at the current user. Display the same triage UI, but skip all `bin/graph.sh` mark-read/mark-done calls. Triage responses are informational only in local mode — the user tracks status manually.
-- **Steps 1-4**: Same as connected mode (parsing, briefing, file creation, index update).
-- **Step 5**: Skip entirely — no `bin/index-handoff.sh`, no artifact query. Show progress as `[3/N] ✓ Skipped graph (local mode)` — actually, just renumber steps to exclude graph step.
-- **Step 6**: Auto-save — same as connected mode.
-- **Step 7**: If recipient specified and `telegram_chat_id` is set in `egregore.json`, send group notification via `bin/notify.sh send`. No DMs in local mode — notify.sh routes to group automatically. Skip if no Telegram configured.
-- **Step 8**: TUI — use `✓ Saved · pushed` (not "graphed"). Show `· {Recipient} notified` if notification was sent.
-- **Step 9**: Skip entirely — no reflection prompt query.
+**Connected mode**: full feature set — Neo4j indexing, today's artifacts query, DM notifications, branded permanent artifact URLs, PR-number backfill.
 
-Progress steps in local mode (no recipient): `[1/3] ✓ Conversation file` → `[2/3] ✓ Index updated` → `[3/3] ✓ Pushed + PR created`
-Progress steps in local mode (with recipient + Telegram configured): `[1/4] ✓ Conversation file` → `[2/4] ✓ Index updated` → `[3/4] ✓ Pushed + PR created` → `[4/4] ✓ {Recipient} notified`
-Progress steps in local mode (with recipient, no Telegram): same as no-recipient — skip notification silently.
+## Execution model
 
-**Connected mode**: Full behavior as specified below.
+Mechanical work delegates to `bin/handoff-run.sh` in a single Bash call. The main session drafts the briefing markdown and pipes it via heredoc; the script writes the file, updates the index, indexes to Neo4j, pushes memory, publishes the artifact, and notifies the recipient — all in parallel where possible.
 
-## Execution rules
+**No per-step progress chatter.** The Bash tool block IS the progress indicator. No `[1/5] ✓ Conversation file` lines.
 
-**Neo4j-first.** All queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
-**Notifications via `bash bin/notify.sh send`**. No direct curl to Telegram.
+**No raw JSON.** Parse `handoff-run.sh`'s result file (written to `$TMPDIR/handoff-run-result.json`); only render the rich TUI card as text. Never echo raw JSON back to the user.
 
-**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST redirect stdout: pipe to `/dev/null` or capture in a variable. Only show formatted progress lines. Example:
-```bash
-bash bin/graph.sh query "..." > /dev/null 2>&1
-```
-If you need to parse the result, capture it and only echo a status:
-```bash
-RESULT=$(bash bin/graph.sh query "..." 2>/dev/null) && echo "OK" || echo "FAILED"
-```
+**Suppress raw output.** All `bin/graph.sh` and `bin/notify.sh` calls from this skill (triage, artifact query, reflection query) MUST redirect stdout to `/dev/null` or capture in a variable. Only show formatted progress lines or the final card.
 
-- 1 Bash call: `git config user.name`
-- 1 Neo4j query: Session creation (with HANDED_TO if recipient)
-- 1 Neo4j query: Artifact lookup (today's artifacts by author)
-- Auto-save via `/save` flow
-- 1 notification via `bin/notify.sh send` (if recipient specified)
-- Progress shown incrementally, step by step
-
-## Step 0: Get current user and team members
+## Step 0: Identity + team directory
 
 ```bash
 git config user.name
 ```
 
-Derive author handle: lowercase first word of git user.name (e.g. "Alice Smith" → "alice").
+Derive author handle: **lowercase first word** of git user.name (e.g. "Alice Smith" → "alice", "Oguzhan" → "oguzhan"). Do NOT pass a mixed-case handle — the script uses it verbatim in filenames and commit messages.
 
-**Connected mode:** Query all team members from the graph (suppress raw output, parse names):
-```bash
-MEMBERS=$(bash bin/graph.sh query "MATCH (p:Person) RETURN p.name AS name, p.github AS github, p.fullName AS fullName" 2>/dev/null)
-echo "$MEMBERS" | jq -r '.values[][] // empty' 2>/dev/null
-```
+**Team members — always from the filesystem**, regardless of mode. `memory/people/*.md` is the source of truth for both the GitHub handle and the display name:
 
-**Local mode:** Read team members from `memory/people/` directory:
 ```bash
 for f in memory/people/*.md; do
   [ -f "$f" ] || continue
@@ -77,23 +47,20 @@ for f in memory/people/*.md; do
   echo "$github|$display"
 done
 ```
-This gives `github_username|Display Name` pairs. The file format is:
-```
-# Display Name
-GitHub: username
-Role: ...
-```
 
-Use this list for recipient matching in Step 1.
-Match recipient names case-insensitively against display name (from `# ` header), github username (filename), or any partial match. The display name takes priority — if a user chose "oz" during onboarding, `/handoff oz` should resolve to their file even if the filename is their GitHub username.
+- **Filename** (minus `.md`) = GitHub handle.
+- **First line** (`# Display Name`) = the name the person chose, including anything they set via `/me "call me oz"`. `/me` writes this line directly to the file and re-syncs the graph's `Person.name` to match — the file is canonical. In local mode the file is the only place it lives; in connected mode the graph mirrors it.
 
-## Step 0.5: Triage mode (no arguments + open handoffs)
+Match recipient case-insensitively against either. Display name wins on conflict (`/handoff to oz` should resolve even if the filename is `oguzhan.md`).
 
-**Trigger:** `$ARGUMENTS` is empty (user ran bare `/handoff`).
+The graph has a couple more fields (`fullName`, `telegramUsername`) that /handoff doesn't use for recipient matching, so a graph round-trip here would just be ~1s of network for the same handle + display name we already have on disk. Skip it.
 
-Before creating a new handoff, check for open handoffs directed at the current user.
+## Step 0.5: Triage mode (bare `/handoff` + open handoffs exist)
 
-**Connected mode:** Query the graph:
+**Trigger:** `$ARGUMENTS` is empty AND there are open handoffs directed at the current user.
+
+**Connected mode:** query the graph for open handoffs to me in the last 14 days:
+
 ```cypher
 MATCH (s:Session)-[:HANDED_TO]->(p:Person {name: $me})
 WHERE coalesce(s.handoffStatus, 'pending') IN ['pending', 'read']
@@ -102,43 +69,23 @@ MATCH (s)-[:BY]->(author:Person)
 RETURN s.topic AS topic, s.date AS date, author.name AS author,
        s.filePath AS filePath, s.id AS sessionId,
        coalesce(s.handoffStatus, 'pending') AS status
-ORDER BY
-  CASE coalesce(s.handoffStatus, 'pending')
-    WHEN 'pending' THEN 0 ELSE 1
-  END,
-  s.date DESC
+ORDER BY CASE coalesce(s.handoffStatus, 'pending') WHEN 'pending' THEN 0 ELSE 1 END, s.date DESC
 LIMIT 8
 ```
 
-**Local mode:** Read `memory/handoffs/index.md` and scan recent entries (last 14 days) for handoffs with `to: {current user}`. Read the handoff files to extract topic, date, author. All handoffs are treated as `pending` (no status tracking in local mode). Skip triage entirely if no recent handoffs mention the current user — fall through to Step 1.
+**Local mode:** read `memory/handoffs/index.md`, scan last 14 days, find entries with `to: {me}` (or `handoff to {me}`), read each file for topic and author. All treated as `pending` — no status tracking in local mode.
 
-**If no open handoffs** → skip triage, fall through to Step 1 (normal handoff flow with no-topic handling).
+**If no open handoffs** → fall through to Step 1 (normal create flow; summarize the session to synthesize a topic).
 
-**If open handoffs exist** → enter triage mode. Route by count:
+**If open handoffs exist** → enter triage mode.
 
-### Route A: Guided walk-through (1-3 handoffs)
-
-Walk through each handoff one at a time, showing context and capturing the user's response.
+### Route A: Guided walk-through (1 – 3 handoffs)
 
 For each handoff, in order:
 
-**1. Show the handoff content.** Read the file at `filePath` from the query (prepend `memory/` to the path). Display the receiver TUI:
+**1. Display the receiver view** (see "Receiver View" section below). Read the file at `filePath` (prepend `memory/` if the path is relative) to populate content.
 
-```
-  ─── 1 of N ───
-
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  ⇌ HANDOFF FROM {AUTHOR uppercase}                      {when}     │
-  ├──────────────────────────────────────────────────────────────────────┤
-  │                                                                      │
-  │  Topic: {topic}                                                      │
-  │                                                                      │
-  │  {summary from file, wrapped at ~60 chars}                           │
-  │                                                                      │
-  └──────────────────────────────────────────────────────────────────────┘
-```
-
-**2. Ask for status via AskUserQuestion:**
+**2. Ask via AskUserQuestion:**
 
 ```
 header: "Handoff"
@@ -155,20 +102,28 @@ options:
 
 **3. Handle response:**
 
-- **"Done" or "Not relevant"** → **Connected mode:** mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}`
-- **"Still open"** → **Connected mode:** if currently `pending`, mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call. Output: `◐ Kept open: {topic} from {author}`. **Then auto-checkout repos**: if the handoff file has a `## Repo State` section, parse the table and for each repo fetch + checkout the branch:
-  ```bash
-  PARENT_DIR="$(cd .. && pwd)"
-  # For each row in ## Repo State table:
-  REPO_DIR="$PARENT_DIR/$REPO_NAME"
-  git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
-  git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \
-    git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
-  ```
-  Report: `✓ Checked out {branch} in {repo1}, {repo2}`. If a branch no longer exists (PR merged): `◐ {repo}: PR #{N} merged — on {base}`. This works in both local and connected modes (pure git).
-- **Freeform text (user typed something)** → **Connected mode:** mark `done` AND capture: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done', s.handoffResponse = '$response' RETURN s.id"`. **Local mode:** skip the graph call. Output: `✓ Resolved: {topic} from {author}` + `  Captured: "{first 60 chars}..."`
+- **"Done" / "Not relevant"** (or any freeform text that implies done):
+  - **Connected mode:** `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done'${RESP:+, s.handoffResponse = '$RESP'} RETURN s.id" >/dev/null 2>&1` where `$RESP` is a SQL-escaped freeform response if user typed one.
+  - **Local mode:** skip the graph call — status is informational only.
+  - Output: `✓ Resolved: {topic} from {author}` (and `  Captured: "{first 60 chars}…"` if freeform).
 
-**4. Continue to next handoff**, or if all done:
+- **"Still open"**:
+  - **Connected mode:** if currently `pending`, mark as `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id" >/dev/null 2>&1`
+  - **Local mode:** skip the graph call.
+  - Output: `◐ Kept open: {topic} from {author}`
+  - **Auto-checkout repos**: if the handoff file has a `## Repo State` section, parse its table (skip the header rows) and for each row, fetch + checkout the branch in the sibling repo directory:
+    ```bash
+    PARENT_DIR="$(cd .. && pwd)"
+    REPO_DIR="$PARENT_DIR/$REPO_NAME"
+    if [ -d "$REPO_DIR/.git" ] || [ -f "$REPO_DIR/.git" ]; then
+      git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
+      git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \
+        git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
+    fi
+    ```
+    Report: `✓ Checked out {branch} in {repo1}, {repo2}`. If the remote branch is gone (PR merged): `◐ {repo}: PR #{N} merged — on {base}`. Managed repo dir missing → skip silently.
+
+**4. After all handoffs:**
 
 ```
 All caught up.
@@ -176,732 +131,418 @@ All caught up.
 Handing off this session? (topic, or enter to skip)
 ```
 
-If user provides a topic → fall through to Step 1 with that topic. If empty/enter → exit without creating a new handoff.
+If user provides a topic → fall through to Step 1. If empty/enter → exit.
 
 ### Route B: Batch triage (4+ handoffs)
-
-Show all handoffs as a multiSelect AskUserQuestion for quick resolution.
 
 ```
 header: "Triage"
 question: "Which handoffs have you addressed?"
 multiSelect: true
-options: (one per handoff, max 4 shown)
+options: (max 4; pending first, then oldest read)
   - label: "{author}: {topic}"
     description: "{status_icon} {when}"
 ```
 
-Where `status_icon` is `●` for pending, `◐` for read.
-
-If more than 4 handoffs, show the top 4 (pending first, then oldest read) and note: `Showing 4 of N — run /handoff again to triage the rest.`
+Where `status_icon` is `●` for pending, `◐` for read. If more than 4, show top 4 and note: `Showing 4 of N — run /handoff again to triage the rest.`
 
 **After selection:**
+- Each selected handoff → mark `done` (connected) / skip (local).
+- Unselected `pending` handoffs → mark `read` (connected) / skip (local).
+- Output: `✓ Resolved N handoffs` (and `◐ Kept N open` if any unselected).
 
-- Each selected handoff → **Connected mode:** mark `done`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) SET s.handoffStatus = 'done' RETURN s.id"`. **Local mode:** skip the graph call.
-- Unselected handoffs that are `pending` → **Connected mode:** mark `read`: `bash bin/graph.sh query "MATCH (s:Session {id: '$sessionId'}) WHERE s.handoffStatus = 'pending' OR s.handoffStatus IS NULL SET s.handoffStatus = 'read', s.handoffReadDate = date() RETURN s.id"`. **Local mode:** skip the graph call.
-- Output: `✓ Resolved N handoffs` (and `◐ Kept N open` if any unselected)
+Then the same "Handing off this session?" fall-through as Route A.
 
-Then:
-
-```
-Handing off this session? (topic, or enter to skip)
-```
-
-Same fall-through as Route A.
-
-### Triage examples
-
-**Guided (2 handoffs):**
-```
-> /handoff
-
-  You have 2 open handoffs.
-
-  ─── 1 of 2 ───
-
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  ⇌ HANDOFF FROM CAROL                                 yesterday   │
-  ├──────────────────────────────────────────────────────────────────────┤
-  │                                                                      │
-  │  Topic: Slash Command Testing                                        │
-  │                                                                      │
-  │  Tested /activity, /reflect, /handoff. Found backtick eval           │
-  │  bug in activity command. Provided test results with fixes.          │
-  │                                                                      │
-  └──────────────────────────────────────────────────────────────────────┘
-
-  What's the status of carol's handoff on Slash Command Testing?
-    1. Done
-    2. Still open
-    3. Not relevant
-
-> "Fixed the backtick bug, activity works. Reflect still needs
-   the rubric rewrite."
-
-  ✓ Resolved: Slash Command Testing from carol
-    Captured: "Fixed the backtick bug, activity works. Reflect
-    still needs the rubric rewrite."
-
-  ─── 2 of 2 ───
-
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  ⇌ HANDOFF FROM ALICE                                     2d ago    │
-  ├──────────────────────────────────────────────────────────────────────┤
-  │  ...                                                                 │
-  └──────────────────────────────────────────────────────────────────────┘
-
-  What's the status of alice's handoff on Setup flow?
-> 1
-
-  ✓ Resolved: New Egregore setup flow from alice
-
-  All caught up.
-
-  Handing off this session? (topic, or enter to skip)
-> implicit handoff resolution to alice
-
-  Creating handoff...
-  ...
-```
-
-**Batch (5 handoffs):**
-```
-> /handoff
-
-  You have 5 open handoffs. Which have you addressed?
-
-  ☐ ● carol: Slash Command Testing (yesterday)
-  ☐ ◐ alice: New Egregore setup flow (2d ago)
-  ☐ ◐ alice: Infra fix after sync (3d ago)
-  ☐ ● dave: Animation handoff (4d ago)
-
-  Showing 4 of 5 — run /handoff again to triage the rest.
-
-> [selects carol + alice setup flow]
-
-  ✓ Resolved 2 handoffs
-  ◐ Kept 2 open
-
-  Handing off this session? (topic, or enter to skip)
-> enter
-
-  Done.
-```
-
----
-
-## Step 1: Parse arguments
+## Step 1: Parse arguments (create flow)
 
 **Only reached if `$ARGUMENTS` is non-empty OR user provided a topic after triage.**
 
-Parse `$ARGUMENTS` for topic and recipient.
+Extract from `$ARGUMENTS`:
+- **Topic** — the thing being handed off (may include "to <person>" which you strip from the topic).
+- **Recipient** — optional, derived from "to <name>" or "for <name>". Leave empty if not specified or if the user wrote "to self".
 
-**Recipient detection** — understand from natural language who the handoff is for:
-- "setup flow to oskar" → topic: "setup flow", recipient: oskar
-- "mcp auth for alice to pick up" → topic: "mcp auth", recipient: alice
-- "handoff blog styling" → topic: "blog styling", recipient: none
+Examples:
+- `auth flow to alice` → topic: `auth flow`, recipient: `alice`
+- `mcp debugging for cem to pick up` → topic: `mcp debugging`, recipient: `cem`
+- `research pipeline writeup` → topic: `research pipeline writeup`, recipient: (none)
+- `tui cleanup to self` → topic: `tui cleanup`, recipient: (none — "self" is implicit)
 
-Team members: **from the graph query in Step 0** (not hardcoded).
+**Recipient matching:** case-insensitive against the team directory from Step 0. Match display name OR GitHub handle. Display name wins on conflict.
 
-Match recipient names case-insensitively against the Person names from the graph.
+**Empty arguments AND no open handoffs to triage** → summarize the session and synthesize a topic from conversation context.
 
-If `$ARGUMENTS` has no clear recipient, show a picker using AskUserQuestion:
-- List each Person name from the graph (excluding the current user)
-- Add a final option: "General (no specific recipient)"
+**Recipient not in the team directory** → don't burn an AskUserQuestion. Proceed without `--recipient` and note it in the final card footer: `◐ {name} not in team directory — handoff saved without direct address.`
 
-If no recipient detected or user picks "General", the handoff is for the team or future self.
+## Step 2: Draft the briefing (no tool call)
 
-## Step 2: Brief the recipient
+Synthesize the session into a briefing. Actively interpret — this is not a transcript. Situate the work in team context (active quests, recent handoffs, known priorities). Tell the reader what matters and why.
 
-### Scope assessment
+Produce (omit any section that is genuinely empty — don't ship placeholder bullets):
 
-Before generating the briefing, consider whether this session covered multiple
-distinct threads of work that a reader might not all need.
+1. **Briefing** — 2–4 sentences. What happened, why it matters, how it connects.
+2. **Key Decisions** — decisions with rationale and implications.
+3. **Current State** — working / in progress / blocked.
+4. **Open Threads** — unfinished items with enough context to pick up.
+5. **Next Steps** — clear actions with entry points.
+6. **Entry Points** — specific files/commands for the next session.
 
-This is a judgment call. Most sessions don't need it. Skip it when:
-- The session had one clear focus
-- The user provided a specific topic in `/handoff` arguments that already narrows scope
-- The conversation was short or exploratory
+If `$ARGUMENTS` narrows scope, constrain the briefing to that scope; don't include unrelated threads from the session.
 
-Ask when you'd genuinely be unsure what to include — when the session
-switched between unrelated areas, or when briefing everything would
-produce a handoff where the reader can't tell what to act on first.
+**This is drafted in your head**, not via a tool call. The resulting markdown is the heredoc payload to `handoff-run.sh` in Step 4.
 
-If asking: use AskUserQuestion. The options must name the actual threads
-from the conversation — not generic labels. Derive them from what was
-discussed. Always include a "whole session" option. 2-4 options max.
+## Step 3: Session Artifacts — automatic
 
-    header: "Scope"
-    question: "{your context-sensitive question}"
-    options:
-      - label: "{thread A — named from conversation}"
-        description: "{what this covers}"
-      - label: "{thread B — named from conversation}"
-        description: "{what this covers}"
-      - label: "Whole session"
-        description: "Hand off everything we discussed"
+You don't do anything here. `handoff-run.sh` queries the graph for today's artifacts by this author in parallel with everything else (Branch D), filters out tutorial-tagged ones, and appends a `## Session Artifacts` section to the handoff file BEFORE Branch B commits — so the committed file always has them. The results also come back in the result JSON's `artifacts` array for the card render.
 
-This counts toward the 1-2 AskUserQuestion budget for the handoff command.
-If the recipient picker in Step 1 already used 1, skip scope assessment.
+The graph is the right tool here: indexed by date + author + tag, returns a structured list. A filesystem walk would have to read every file under `memory/knowledge/` and filter by frontmatter — slow and ugly. This is exactly the navigation-layer role the graph is built for.
 
-### Generate briefing
+Local mode: skipped silently (no graph). `artifacts` in the JSON will be an empty array.
 
-Synthesize the session into a briefing for the recipient (or future reader).
-This is not a transcript — actively interpret what happened, connect it to
-team context (active quests, recent handoffs, known priorities), and tell the
-reader what matters and why.
+## Step 4: Call handoff-run.sh
 
-If a scope was selected above, constrain the briefing to the selected scope.
-Material from unselected threads should not appear.
-
-Produce:
-
-1. **Briefing** — 2-4 sentences. What happened, why it matters, how it connects
-   to what the team is working on. Situate the work — don't just describe it.
-2. **Key decisions** — any decisions made, with rationale and implications
-3. **Current state** — what's working, in progress, blocked
-4. **Open threads** — unfinished items with enough context to pick up
-5. **Next steps** — clear actions with entry points
-6. **Project** — which project this relates to (identify from context)
-
-## Step 2.5: Detect touched repos
-
-**MANDATORY — run this script, do not skip or manually gather repo state:**
+One bash call. Briefing content on stdin via heredoc.
 
 ```bash
-REPO_STATE_SECTION=$(bash bin/repo-state.sh 2>/dev/null || true)
-```
-
-This scans the core repo and all managed repos, outputs a `## Repo State` markdown table for repos on non-base branches or with uncommitted changes. Works in both local and connected modes — pure git, no graph dependency.
-
-If `REPO_STATE_SECTION` is empty, no repos are touched — omit the section from the handoff file.
-If non-empty, append it verbatim to the handoff file in Step 3.
-
-## Step 3: Create handoff file
-
-File path: `memory/handoffs/YYYY-MM/DD-[author]-[topic-slug].md`
-
-Example: `memory/handoffs/2026-02/07-bob-defensibility-architecture.md`
-
-Generate slug from topic: lowercase, hyphens, no special chars, max 50 chars.
-
-Ensure the directory exists:
-```bash
-mkdir -p memory/handoffs/YYYY-MM
-```
-
-Write the file using Bash (memory is outside project, avoids permission issues):
-
-```bash
-cat > "memory/handoffs/YYYY-MM/DD-author-topic-slug.md" << 'HANDOFFEOF'
-# Handoff: [Topic]
+bash bin/handoff-run.sh \
+  --author <lowercase-handle> \
+  --topic "<topic>" \
+  [--recipient <name>] \
+  [--project <name>] \
+  <<'HANDOFFEOF'
+# Handoff: <topic>
 
 **Date**: YYYY-MM-DD
-**Author**: [from git config user.name]
-**To**: [recipient, if specified]
-**Project**: [project name from context]
+**Author**: <Display Name>
+**To**: <recipient, if any>
+**Project**: <project, if identifiable>
 
 ## Briefing
 
-[2-4 sentences — what happened, why it matters, how it connects]
+<2-4 sentences>
 
 ## Key Decisions
 
-- **[Decision]**: [Rationale]
+- **<Decision>**: <rationale>
 
 ## Current State
 
-[What's working, what's in progress, what's blocked]
+<what's working / in progress / blocked>
 
 ## Open Threads
 
-- [ ] [Unfinished item with context]
-
-## Session Artifacts
-
-- [Type]: [Title] -> [shortened file path]
+- [ ] <unfinished item with context>
 
 ## Next Steps
 
-1. [Clear action with entry point]
+1. <clear action with entry point>
 
 ## Entry Points
 
 For the next session, start by:
-- Reading: [specific file]
-- Running: [specific command]
+- Reading: <specific file>
+- Running: <specific command>
 
+## Session Artifacts
+
+- <Type>: <Title> -> <path>
 HANDOFFEOF
-
-# Append repo state section if any repos are touched
-if [ -n "$REPO_STATE_SECTION" ]; then
-  printf '\n%s\n' "$REPO_STATE_SECTION" >> "memory/handoffs/YYYY-MM/DD-author-topic-slug.md"
-fi
 ```
 
-Omit the **To** line if no recipient. Omit **Key Decisions** if none. Omit **Session Artifacts** section if the artifact query (Step 5) returns empty. The Session Artifacts section is populated after the Neo4j query in Step 5 — leave a placeholder during file creation, then update the file after the query.
+**`--author`**: lowercase handle only (see Step 0). **`**Author**:`** in the file body: display name (e.g. `Oz`).
 
-**Repo State section**: Appended automatically from `$REPO_STATE_SECTION` (Step 2.5). The PR column starts as `—` (em dash) — it gets backfilled with actual PR numbers in Step 6.5 after auto-save.
+**`--project`**: derive from conversation context. Omit the flag if unclear.
 
-Show progress:
+**Omit optional body sections** (Key Decisions, Open Threads, Session Artifacts, etc.) entirely if empty.
+
+`handoff-run.sh` handles, in one process:
+1. File write to `memory/handoffs/YYYY-MM/DD-author-slug.md`
+2. Append `## Repo State` section from `bin/repo-state.sh` if any repos are on non-base branches or have uncommitted changes
+3. Prepend `memory/handoffs/index.md`
+4. Index to Neo4j via `bin/index-handoff.sh` (connected mode only — Session node, BY/HANDED_TO/ABOUT edges, auto-resolve of old `read` handoffs from this author)
+5. Memory commit + pull-rebase-push to main (in parallel with 4)
+6. Publish branded HTML artifact via `bin/publish-artifact.sh` (which also detaches a depth-1 publish of backtick-referenced `memory/**/*.md` paths)
+7. Send Telegram notification via `bin/notify.sh` — **always**, even for self-handoffs. With `--recipient` in connected mode → DM; otherwise → group (includes self-handoffs and local mode). A handoff without a Telegram beat is invisible.
+8. Emit one status line to stdout, write full result to `$TMPDIR/handoff-run-result.json`
+
+## Step 5: Render the rich card
+
+Read `$TMPDIR/handoff-run-result.json`:
+
+```json
+{
+  "mode": "connected|local",
+  "file": "handoffs/YYYY-MM/DD-author-slug.md",
+  "absFile": "/absolute/path/...",
+  "sessionId": "...",
+  "resolved": 0,
+  "graphStatus": "ok|offline|skipped",
+  "memoryStatus": "ok|failed|skipped (--no-push)",
+  "notifyStatus": "sent|failed|skipped|unknown",
+  "artifactUrl": "https://...",
+  "recipient": "...",
+  "topic": "...",
+  "author": "...",
+  "subgraph": { ... },
+  "artifacts": [ {"title": "...", "type": "Decision|Finding|...", "path": "memory/..."} ]
+}
 ```
-[1/5] ✓ Conversation file
+
+### The box
+
+Wrap in a ` ``` ` code fence so the chat renderer preserves monospace alignment. Outer width 72 chars. Only four line patterns:
+
+1. **Top**: `┌` + 70×`─` + `┐`
+2. **Separator**: `├` + 70×`─` + `┤`
+3. **Content**: `│` + 2 spaces + text + trailing spaces padding to 68 chars + `│` (70 chars between borders)
+4. **Bottom**: `└` + 70×`─` + `┘`
+
+Copy the top/separator/bottom lines verbatim — don't recount dashes each time.
+
+**Never use `&nbsp;` or other HTML entities** — this renderer doesn't convert them. Use real space characters inside the box (monospace, reliable), and plain markdown below.
+
+**Em-dashes (`—`), arrows (`→`), and other multi-byte UTF-8 characters each count as one display column** — don't double-count them.
+
+Shape (no recipient, no artifacts):
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ⇌ HANDOFF SENT                                      {Author} · {MMM DD}  │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Topic: {topic}                                                      │
+│                                                                      │
+│  {briefing line 1, wrapped at ~64 chars}                             │
+│  {briefing line 2}                                                   │
+│  {briefing line 3}                                                   │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  ✓ {status bits joined with " · "}                                   │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Step 4: Update conversation index
+Shape (with recipient, repos, and artifacts):
 
-Prepend to `memory/handoffs/index.md`:
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ⇌ HANDOFF SENT                                      {Author} · {MMM DD}  │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Topic: {topic}                                                      │
+│  To:    {Recipient}                                                  │
+│                                                                      │
+│  {briefing line 1}                                                   │
+│  {briefing line 2}                                                   │
+│  {briefing line 3}                                                   │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  REPOS                                                               │
+│  ◈ {repo}: {branch} → PR #{N} to {base}                              │
+│  ◈ {repo}: {branch} → {base}                                         │
+├──────────────────────────────────────────────────────────────────────┤
+│  ◉ {Type}: {Title}                                                   │
+│  ◉ {Type}: {Title}                                                   │
+├──────────────────────────────────────────────────────────────────────┤
+│  ✓ {status bits}                                                     │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Repos section** — populate by re-reading the written handoff file's `## Repo State` table (its path is `absFile` from the JSON). Omit the section entirely if no table. PR number `—` means no open PR yet (backfill may populate later).
+
+**Artifacts section** — populate from the `artifacts` array in the result JSON (filled by Branch D of `handoff-run.sh`). Each entry: `◉ {type}: {title}`. Omit the section entirely if the array is empty.
+
+### Filling in the fields
+
+- **`{Author}`** — from `author` in JSON. Prefer the display name (from `memory/people/{handle}.md`'s `# <name>` header) if you have it; otherwise capitalize the handle (`oguzhan` → `Oguzhan`).
+- **`{MMM DD}`** — today formatted like `Apr 24`.
+- **`{topic}`** — from JSON. Truncate at 58 chars with `…` if longer.
+- **`{Recipient}`** — only if `recipient` in JSON is non-empty. Title-case.
+- **`{briefing}`** — the 2–4 sentences from Step 2, wrapped hard at ~64 chars. Use what you drafted — no need to re-read the file.
+- **Status bits** — build from JSON flags, join with ` · `:
+  - Always: `saved`
+  - If `graphStatus == "ok"`: `graphed`
+  - If `memoryStatus == "ok"`: `pushed`
+  - If `notifyStatus == "sent"` AND `recipient` non-empty: `{recipient} notified` (lowercase recipient)
+  - If `notifyStatus == "sent"` AND `recipient` empty: `group notified` (self-handoff posted to Telegram group)
+  - If `notifyStatus == "unknown"`: `{recipient} relayed to group` (DM-to-group fallback)
+  - If `artifactUrl` non-empty: `published`
+
+### Links below the box
+
+After the closing ` ``` `, render two links on one line — the hosted artifact and the local /view command:
 
 ```markdown
-- **YYYY-MM-DD** — [author]: [topic] ([handoff to recipient] | [handoff])
+[view this handoff →]({artifactUrl})  ·  `/view handoff {slug}` (open locally)
 ```
 
-Show progress:
+- **Hosted link** (`[view this handoff →]({artifactUrl})`) — only include if `artifactUrl` in the JSON is non-empty. This is the branded egregore.xyz URL with OG preview.
+- **Local /view hint** (`` `/view handoff {slug}` ``) — ALWAYS include. The slug is the filename stem after `DD-{author}-`, e.g. for `memory/handoffs/2026-04/24-oguzhan-auth-refactor.md` the slug is `auth-refactor`. Extract it from the `file` field in the result JSON: strip the directory and `.md` suffix, then drop the `DD-{author}-` prefix. This lets the user open the handoff locally in the browser without copy-pasting a URL.
+
+If `artifactUrl` is empty, collapse to just the local hint:
+
+```markdown
+`/view handoff {slug}` (open locally)
 ```
-[2/5] ✓ Index updated
-```
 
-## Step 5: Index to Neo4j + query artifacts — CONNECTED MODE ONLY
+Then, if natural, add ONE short sentence of sign-off — a human beat telling the recipient what the state is for them. Examples:
+- `Renc has the link, the WIP note, and everything else. Ready when you want to move on.`
+- `Ping me if the rebase conflicts.`
+- `Nothing needed from you — just capturing state.`
 
-**Skip this entire step in local mode.** Do not run `bin/index-handoff.sh` or the artifact query. Omit the Session Artifacts section from the handoff file. Do not show any graph-related progress.
+Keep it to one sentence. Skip if there's nothing meaningful to add.
 
-### Session indexing
+### Padding content lines — critical
+
+Every content line is exactly 72 chars wide including borders: `│  {text}{pad to 68}│`. If a line looks visually short, it wasn't padded — fix it.
+
+### Degraded states (warnings ABOVE the box)
+
+| Flag | Render (markdown line, above the code fence) |
+|---|---|
+| `graphStatus == "offline"` in connected mode | `⚠ graph indexing failed — will sync on next /save` |
+| `memoryStatus == "failed"` | `⚠ memory push failed — commits are local` |
+| `notifyStatus == "failed"` | `⚠ notification to {recipient} failed — they can see this on /activity` |
+
+`memoryStatus == "skipped (--no-push)"` is NOT a failure — no warning. `notifyStatus == "unknown"` reflects a DM-to-group fallback — no warning; the status bit conveys it.
+
+### What NOT to render
+
+- **No `&nbsp;`** or other HTML entities.
+- **No raw JSON** — ever.
+- **No `[N/5]` progress lines** — the Bash tool block is the progress indicator.
+- **No "Team sees this on /activity."** footer boilerplate — status bits say everything.
+- **No preamble** like "Handoff created successfully" — the box IS the acknowledgment.
+
+## Step 6: Auto-save egregore-side — DETACHED, NON-BLOCKING
+
+**Fire once, forget.** Handoffs happen at natural exit points; people walk away. Don't make them wait on git — but don't let their session work sit uncommitted either.
+
+Immediately after rendering the card, fire `bin/handoff-save-egregore.sh` detached. It reparents to init, so it survives session exit:
 
 ```bash
-RESULT=$(bash bin/index-handoff.sh "memory/handoffs/YYYY-MM/DD-author-topic-slug.md" 2>/dev/null)
+( bash bin/handoff-save-egregore.sh "$AUTHOR" "$TOPIC" >/dev/null 2>&1 & ) >/dev/null 2>&1
 ```
 
-The script handles all graph writes: Session node (MERGE for idempotency), BY/HANDED_TO/ABOUT relationships, and auto-resolve of old `read` handoffs from this author.
+Then, in the markdown below the box, add one line so the user knows it's happening:
 
-Returns: `{"sessionId":"...","resolved":N}` or `{"error":"..."}`.
-
-If it fails: show "Graph offline — file saved, will sync on next /save". Continue to Step 6.
-
-If resolved > 0, include in progress output: `[3/5] ✓ Session -> knowledge graph (resolved N prior handoffs)`
-
-### Artifact query
-
-Query for artifacts created today by the author, excluding tutorial-generated artifacts:
-
-```cypher
-MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {name: $author})
-WHERE a.created >= datetime({year: $year, month: $month, day: $day})
-  AND NOT 'tutorial-generated' IN coalesce(a.topics, [])
-RETURN a.title AS title, a.type AS type, a.filePath AS path, a.topics AS topics
-ORDER BY a.created DESC
+```markdown
+Saving core-repo changes in the background — markdown-only will auto-merge to develop.
 ```
 
-Run this in parallel with the Session creation query.
+Omit that line if you already know there's nothing to save (quick check: `git status --porcelain` empty AND `git rev-list --count origin/develop..HEAD` is 0). The helper does the same check itself — it's just cheaper to skip the line than to say "nothing to save".
 
-**Relevance filter:** After fetching, only include artifacts in the TUI whose topics overlap with the session topic. Compare each artifact's `topics` array against keywords extracted from the handoff topic. If no artifacts pass the relevance filter, omit the artifacts section entirely. This prevents unrelated same-day artifacts from leaking into handoffs.
+**The helper does:**
+1. Early-exits if the working tree is clean and no commits are ahead of `origin/develop`.
+2. If on `develop`/`main`/`master`, creates `dev/{author}/handoff-YYYY-MM-DD` from `origin/develop`.
+3. Commits uncommitted work with message `Handoff: {topic}`.
+4. Rebases onto `origin/develop` (falls back to merge if rebase conflicts).
+5. Pushes the working branch.
+6. Creates (or reuses) a PR to `develop`.
+7. **Markdown-only diff → `gh pr merge --auto --merge`** — PR auto-merges as soon as checks pass. This is the common case for handoffs.
+8. **Any non-markdown changes present → leave PR open for review.** No auto-merge for code/config. The user sees the PR next session.
 
-If relevant artifacts are found, update the handoff file's Session Artifacts section with the results. Format each artifact as:
-```
-- [Type capitalized]: [Title] -> [shortened file path]
-```
+Unresolvable conflicts or auth failures leave the branch as-is locally. The user will discover and resolve next session — no data loss, just a delayed merge.
 
-Show progress:
-```
-[3/5] ✓ Session -> knowledge graph
-```
+Do NOT run `/save` inline here. `/save` is correct but slow (preflight, cypher checks, graph ops, managed-repo loop). For a handoff, the user is walking away — speed wins over completeness.
 
-## Step 6: Save + publish (PARALLEL via helper)
+## Step 7: PR-number backfill — automatic
 
-Use the helper `bin/handoff-save-publish.sh` which runs memory push and
-artifact publish concurrently (wall-clock = max of the two, not sum), and
-detaches Telegram notify + PR-number backfill so they survive session
-exit without blocking the TUI. Returns ARTIFACT_URL on stdout.
+`handoff-run.sh` calls `bin/repo-state.sh --no-pr` to avoid the `gh pr list` round-trip per managed repo (~400–600ms each) on the hot path, then fires `bin/handoff-pr-backfill.sh` detached. The backfill rewrites `—` → `#N` for each row's open PR and re-commits the memory repo.
+
+You don't do anything here. The orchestrator handles it. If the backfill fails (no `gh`, no open PR, network drop), the `—` stays — cosmetic only, branch names are the primary coordination mechanism.
+
+## Step 8: Reflection prompt — CONNECTED MODE ONLY
+
+After the card and auto-save, check if today's sessions produced no non-tutorial artifacts:
 
 ```bash
-ARTIFACT_URL=$(bash bin/handoff-save-publish.sh "$HANDOFF_FILE_PATH" \
-  "$HANDOFF_TOPIC" \
-  "$AUTHOR" \
-  "$BRIEFING_FIRST_SENTENCE" \
-  --recipient "$RECIPIENT" \
-  --repo-state-section "$REPO_STATE_SECTION")
+ARTIFACT_COUNT=$(bash bin/graph.sh query "
+  MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {name: \$me})
+  WHERE a.created >= datetime({year: $(date +%Y), month: $(date +%-m), day: $(date +%-d)})
+    AND NOT 'tutorial-generated' IN coalesce(a.topics, [])
+  RETURN count(a) AS artifactCount" 2>/dev/null | jq -r '.values[0][0] // 0' 2>/dev/null)
 ```
 
-Show progress:
-```
-[4/4] ✓ Pushed + published (parallel); notify + PR backfill in background
-```
-
-Skip Steps 6.5 and 7 — the helper script handles both as detached
-background work.
-
----
-
-### Legacy description (kept for context if the helper is unavailable)
-
-## Step 6 (legacy): Auto-save
-
-Run the full `/save` flow:
-
-1. Commit changes in memory repo and push directly to main (pull-rebase-push with retry)
-2. Commit any egregore changes and push working branch + PR to develop
-
-This is the same flow as `/save`. Follow its logic exactly.
-
-Show progress:
-```
-[4/5] ✓ Pushed + PR created
-```
-
-## Step 6.5: Backfill PR numbers into Repo State — CONNECTED MODE ONLY
-
-**Skip this step in local mode.** Leave PR column as `—`.
-
-After auto-save completes (which creates branches and PRs), query each touched repo for its open PR number:
-
-```bash
-GITHUB_ORG=$(jq -r '.github_org // empty' egregore.json 2>/dev/null)
-for each touched repo in REPO_STATE:
-  PR_NUM=$(gh pr list --repo "$GITHUB_ORG/$REPO_NAME" --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || echo "")
-```
-
-Then update the handoff file's `## Repo State` table: replace the `—` in the PR column with `#N` for each repo that now has a PR.
-
-If a PR was already merged (branch no longer has an open PR), leave `—`. The branch name in the table is the primary coordination mechanism; the PR number is supplementary.
-
-## Step 7: Publish artifact + Notify recipient
-
-### 7a: Publish artifact (synchronous, before notification)
-
-Generate and publish the handoff as a branded HTML artifact **before** sending the notification, so the Telegram message includes the artifact URL with OG link preview.
-
-```bash
-ARTIFACT_URL=$(bash bin/publish-artifact.sh handoff "$HANDOFF_FILE_PATH" \
-  --title "$HANDOFF_TOPIC" \
-  --author "$AUTHOR" \
-  --description "$BRIEFING_FIRST_TWO_SENTENCES" 2>/dev/null)
-```
-
-This takes ~2-3s (HTML generation + upload). The script outputs the URL on success, or nothing on failure.
-
-- **Connected** (API key present): publishes to `egregore.xyz/view/{org}/{id}` (permanent)
-- **OSS** (no API key): publishes to `egregore.xyz/view/_/{id}` (ephemeral, 7-day TTL)
-- **If publish fails**: `ARTIFACT_URL` is empty — fall back to the GitHub entry point link in the notification.
-
-### 7b: Notify recipient
-
-**Only if a recipient was specified.**
-
-**Connected mode:** Send via DM (falls back to group automatically):
-```bash
-bash bin/notify.sh send "$RECIPIENT" "$MESSAGE"
-```
-
-**Local mode:** Send to group (DMs not available without API):
-```bash
-bash bin/notify.sh group "$MESSAGE"
-```
-
-If `telegram_chat_id` is not set in `egregore.json`, skip silently — Telegram isn't configured.
-
-**Telegram message format**:
-
-```
-Handoff from [Author]: [Topic]
-
-"[2-3 sentence briefing from the session]"
-
-[If repos touched (REPO_STATE non-empty):]
-Repos:
-  - [repo]: [branch] → PR #[N] to [base]
-  - [repo]: [branch] → [base]
-
-[If artifacts found:]
-Session included N artifacts:
-  - [Type]: [Title]
-  - [Type]: [Title]
-
-[If ARTIFACT_URL is set:]
-View: [ARTIFACT_URL]
-[else:]
-Entry point: https://github.com/{org}/{memory-repo}/blob/main/[handoff file path]
-```
-
-**The artifact URL is preferred** — it renders a branded page with OG link preview in Telegram. Only fall back to the GitHub entry point link if artifact publishing failed.
-
-Derive the GitHub fallback URL from `egregore.json`: read `memory_repo` (strip `.git` suffix and extract `{org}/{repo}` from the URL), then append `/blob/main/` + the file path relative to the memory root.
-
-Example (with artifact URL):
-```
-Handoff from Bob: Defensibility architecture
-
-"Analyzed five-layer moat framework. Server-side intelligence is the biggest gap. Full artifact in knowledge/decisions/."
-
-Session included 2 artifacts:
-  - Decision: Defensibility architecture framework
-  - Finding: Harvest flywheel as training surface
-
-View: https://egregore.xyz/view/curvelabs/a7xK3mP9qw0
-```
-
-Show progress:
-```
-[5/5] ✓ [Recipient] notified
-```
-
-**If no recipient**: step 5 becomes "✓ Team sees this on /activity" and no notification is sent (show only 4 progress steps total, renumbered). The artifact is still published (available via `/view` and the listing page).
-
-## Step 8: Display sender TUI confirmation
-
-~72 char width. Sigil: `⇌ HANDOFF SENT`.
-
-### Boundary handling (CRITICAL)
-
-**No sub-boxes. No inner `┌─┐`/`└─┘` borders.** Sub-boxes break because the model can't count character widths precisely enough.
-
-Only **4 line patterns** exist:
-
-1. **Top**: `┌` + 70×`─` + `┐` (72 chars)
-2. **Separator**: `├` + 70×`─` + `┤` (72 chars)
-3. **Content**: `│` + 2 spaces + text + pad spaces to 68 chars + `│` (72 chars)
-4. **Bottom**: `└` + 70×`─` + `┘` (72 chars)
-
-The separator lines are ALWAYS identical — copy-paste the same 72-char string. Content lines have ONLY the outer frame `│` as borders. Pad every content line with trailing spaces so the closing `│` is at position 72.
-
-### Content priority
-
-The briefing is the primary content — what was actually handed off. The progress checklist is already shown incrementally during execution; repeating it wastes space. Collapse progress to a single status line.
-
-### With recipient, artifacts, and repos:
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                     bob · Feb 07     │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: Defensibility architecture                                   │
-│  To: Alice                                                           │
-│                                                                      │
-│  Analyzed five-layer moat framework for Egregore. Server-side        │
-│  intelligence is the biggest gap and biggest opportunity.             │
-│  Defined pricing tiers and go-to-market sequence.                    │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
-│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
-├──────────────────────────────────────────────────────────────────────┤
-│  ◉ Decision: Defensibility architecture framework                    │
-│  ◉ Finding: Harvest flywheel as training surface                     │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · graphed · pushed · Alice notified                            │
-│  Team sees this on /activity.                                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### Without recipient, no artifacts, with repos (local mode):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                      alice · Feb 07     │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: MCP auth flow                                                │
-│                                                                      │
-│  Implemented OAuth device flow for MCP authentication.               │
-│  Token refresh works end-to-end. Needs error handling                │
-│  for expired sessions.                                               │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ egregore: dev/alice/mcp-auth → develop                            │
-│  ◈ egregore-site: dev/alice/mcp-auth → main                         │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · pushed                                                    │
-│  Team sees this on /activity.                                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### TUI rules
-
-- Header row: `⇌ HANDOFF SENT` left, `author · Mon DD` right — both inside the 72-char frame
-- `├───┤` separator between header and content
-- Topic always shown
-- "To:" line only if recipient specified
-- **Briefing** — 2-4 sentences from Step 2, wrapped at ~60 chars. This is the primary content.
-- **Repos section** (between `├───┤` dividers): `◈` for each touched repo. Format: `◈ {repo}: {branch} → PR #{N} to {base}` (connected mode) or `◈ {repo}: {branch} → {base}` (local mode, no PR numbers). Omit entirely if `REPO_STATE` is empty.
-- Artifacts section (between `├───┤` dividers): `◉` for each artifact. Omit entirely if no artifacts.
-- **Status line** — single line collapsing all progress: `✓ Saved · graphed · pushed` (add `· {Recipient} notified` if recipient)
-- Footer: "Team sees this on /activity." + if artifacts package exists: "Open in browser? /view handoff {filename}"
-- Truncate topic at 45 chars with `...` if needed
-- **No sub-boxes** — only outer frame `│` borders and `├────┤` separators
-
-## Receiver View (for /activity integration)
-
-When a recipient reads a handoff directed at them (e.g., from an `/activity` action item), display this format.
-
-Same boundary rules apply — 4 line patterns only, no sub-boxes, 72-char outer width.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF FROM BOB                                     Feb 07       │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: Defensibility architecture                                   │
-│                                                                      │
-│  Analyzed Egregore defensibility — five-layer moat from              │
-│  convenience to network effects. Server-side intelligence            │
-│  is the biggest gap and biggest opportunity.                         │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
-│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
-├──────────────────────────────────────────────────────────────────────┤
-│  OPEN THREADS                                                        │
-│  ○ API proxy architecture — before or after org #2?                  │
-│  ○ Person node schema — org-scoped vs platform-level                 │
-│  ○ First premium agent design                                        │
-├──────────────────────────────────────────────────────────────────────┤
-│  ◉ Decision: Defensibility architecture framework                    │
-│  ◉ Finding: Harvest flywheel as training surface                     │
-├──────────────────────────────────────────────────────────────────────┤
-│  → memory/knowledge/decisions/2026-02-07-defensibility-...           │
-│  → memory/handoffs/2026-02/07-bob-defensibility-...             │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### Receiver TUI rules
-
-- Header: `⇌ HANDOFF FROM [AUTHOR uppercase]` left, `Mon DD` right
-- Briefing: wrap at ~60 chars — the primary content
-- **Repos section** (between `├───┤` dividers): `◈` for each repo in `## Repo State`. Format: `◈ {repo}: {branch} → PR #{N} to {base}` (if PR exists) or `◈ {repo}: {branch} → {base}` (no PR). Omit entirely if no `## Repo State` section in the handoff file.
-- Open Threads section (between `├───┤` dividers): `○` for each thread. Omit entirely if none.
-- Artifacts section: `◉` for each artifact. Omit entirely if none.
-- Entry points: `→` for file paths, shortened to last 2-3 segments with `...` if needed
-- Omit empty sections entirely
-- **No sub-boxes** — only outer frame `│` borders and `├────┤` separators
-
-### When /activity shows handoffs
-
-In `/activity`, handoffs directed at the current user use the three-icon status system:
-```
-[1] ● alice → you: Infra fix after sync (yesterday)    ← pending (unread)
-[2] ◐ carol → you: Slash command testing (2d ago)      ← read but open
-    ○ alice → you: Setup flow (done)                   ← resolved (unnumbered)
-```
-
-When the user selects a numbered item, display the receiver view above by reading the handoff file from the path in the Session node's `filePath` property.
-
-## Step 9: Reflection prompt — CONNECTED MODE ONLY
-
-**Skip this entire step in local mode.** Do not run the artifact count query.
-
-After displaying the TUI confirmation, check if today's sessions produced no non-tutorial artifacts. Query:
-
-```cypher
-MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {name: $me})
-WHERE a.created >= datetime({year: $year, month: $month, day: $day})
-  AND NOT 'tutorial-generated' IN coalesce(a.topics, [])
-RETURN count(a) AS artifactCount
-```
-
-If `artifactCount = 0`, show a one-line suggestion (not a blocker — no AskUserQuestion):
+If `ARTIFACT_COUNT == 0`, show one line (NOT an AskUserQuestion — a soft nudge):
 
 ```
 This session had insights worth capturing. Quick /reflect?
 ```
 
-If artifacts exist, skip this step silently.
+If artifacts exist, skip silently.
+
+## Receiver View (for triage + /activity integration)
+
+When a recipient reads a handoff directed at them — during Step 0.5 Route A, or when `/activity` shows a handoff — display this format.
+
+Same boundary rules as Step 5 (72-char outer width, four line patterns, no sub-boxes).
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ⇌ HANDOFF FROM {AUTHOR uppercase}                      {Mon DD}     │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Topic: {topic}                                                      │
+│                                                                      │
+│  {briefing wrapped at ~64 chars}                                     │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  REPOS                                                               │
+│  ◈ {repo}: {branch} → PR #{N} to {base}                              │
+├──────────────────────────────────────────────────────────────────────┤
+│  OPEN THREADS                                                        │
+│  ○ {thread 1}                                                        │
+│  ○ {thread 2}                                                        │
+├──────────────────────────────────────────────────────────────────────┤
+│  ◉ {Type}: {Title}                                                   │
+├──────────────────────────────────────────────────────────────────────┤
+│  → {shortened entry-point path}                                      │
+│  → {shortened entry-point path}                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Rules:**
+- Header left: `⇌ HANDOFF FROM {AUTHOR uppercase}`. Header right: `Mon DD`.
+- Briefing: wrap at ~64 chars.
+- **REPOS** section (between `├───┤`): `◈` for each row in the handoff file's `## Repo State` table. Omit section entirely if no table.
+- **OPEN THREADS** section: `○` for each item in `## Open Threads`. Omit if none.
+- **Artifacts** section: `◉` for each item in `## Session Artifacts`. Omit if none.
+- **Entry points**: `→` for file paths from `## Entry Points`, shortened to last 2–3 segments with `…` if needed.
+- Omit empty sections entirely. No sub-boxes.
+
+### Where /activity uses this
+
+`/activity` shows handoffs directed at the current user with three-icon status (`●` pending, `◐` read, `○` done). When the user selects a numbered handoff, `/activity` reads the file from the Session's `filePath` and renders the receiver view above.
 
 ## Edge cases
 
 | Scenario | Handling |
-|----------|----------|
-| Neo4j unavailable (connected mode) | Still create handoff file and index. Show warning: "Graph offline — file saved, will sync on next /save". Skip artifact query. |
-| Local mode | Skip all graph/notify calls silently — no warnings, no "graph offline" messaging. File creation + index update + auto-save work normally. TUI shows `✓ Saved · pushed`. No notification. |
-| No artifacts today | Omit Session Artifacts sub-box from TUI and Telegram message |
-| Notification fails | Show warning but don't fail the handoff: "Notification failed — [recipient] can see this on /activity" |
-| Memory symlink missing | Error: "Run /setup first — memory not linked" |
-| Recipient not a known Person | **Connected mode:** Warn: "[name] not found in graph — handoff saved but not directed. Create them with /invite?" **Local mode:** Warn: "[name] not found in memory/people/ — handoff saved but not directed. Add them with /invite?" |
-| No topic in $ARGUMENTS | If open handoffs exist → triage mode (Step 0.5). Otherwise, summarize the session and generate a topic from conversation context |
-| Empty session (nothing happened) | Ask: "Nothing to hand off yet. Want to leave a note instead?" |
-| Scoped briefing is very short | Fine — focused handoffs are better than muddled ones |
-| File already exists at path | Append timestamp to slug to avoid collision |
-| No repos touched (all on base branch) | Omit `## Repo State` section from file, omit REPOS from TUI, omit repos from Telegram notification |
-| Managed repo dir missing | Skip that repo silently — it may not be cloned locally |
-| Recipient auto-checkout branch gone | Report: `◐ {repo}: PR #{N} merged — on {base}` |
+|---|---|
+| `handoff-run.sh` exits non-zero | Show last ~10 lines of its stderr plus "Run with `GRAPH_OP_VERBOSE=1` to debug." Do not retry automatically. |
+| `graphStatus == "offline"` in connected mode | Warning line above box: `⚠ graph indexing failed — will sync on next /save`. Skip the reflection prompt (Step 8). |
+| `memoryStatus == "failed"` | Warning line above box. Do not silently swallow. |
+| `notifyStatus == "failed"` | Warning line above box. Do not block the card. |
+| `notifyStatus == "unknown"` | Status bit reads `{recipient} relayed to group` (DM fell back to group chat). No warning. |
+| Local mode + recipient specified | Notify goes to the Telegram group via relay (DMs not available without API). Card's status bit reads `{recipient} notified` if `sent`. If `telegram_chat_id` is unset, notify is skipped silently. |
+| Self-handoff (no recipient) | Notify ALWAYS fires — posts to the Telegram group so the handoff is visible. Card's status bit reads `group notified`. A handoff without a Telegram beat is invisible, which defeats the point. |
+| Local mode + artifact publish | Falls through to the public OSS relay with 7-day TTL. Handoff body is uploaded there. Acceptable fallback but surfaced via `published` bit. |
+| Empty session (nothing happened) | Ask "Nothing to hand off yet. Want to leave a note instead?" — don't create an empty file. |
+| File already exists at path | `handoff-run.sh` appends `-N` to the slug to avoid collision. |
+| No repos touched (all on base branch) | `bin/repo-state.sh` returns empty → `## Repo State` section omitted → REPOS omitted from TUI. |
+| Recipient auto-checkout branch gone (triage Route A, "still open") | Report `◐ {repo}: PR #{N} merged — on {base}`. |
+| Managed repo dir missing | Skip silently in both triage auto-checkout and `bin/repo-state.sh` output. |
+| Mid-session `/handoff` (not end-of-session) | Same flow. Briefing is whatever was in scope. Auto-save (Step 6) still fires. |
+| Scoped briefing is very short | Fine — focused handoffs are better than muddled ones. |
 
-## Full example: with recipient (connected mode, cross-repo)
+## Status-line bits
 
-```
-> /handoff defensibility architecture to alice
+| Bit | Present when |
+|---|---|
+| `saved` | Always — file is on disk. |
+| `graphed` | `graphStatus == "ok"` — Session node created in Neo4j (connected mode only). |
+| `pushed` | `memoryStatus == "ok"` — memory repo committed and pushed to main. |
+| `{name} notified` | `notifyStatus == "sent"` AND recipient set — Telegram DM delivered. |
+| `group notified` | `notifyStatus == "sent"` AND recipient empty — posted to Telegram group (self-handoff or local mode). |
+| `{name} relayed to group` | `notifyStatus == "unknown"` — DM fell back to group chat. |
+| `published` | `artifactUrl` non-empty — branded HTML artifact published. |
 
-Creating handoff...
-
-Summarizing session...
-
-  [1/5] ✓ Conversation file
-        → memory/handoffs/2026-02/07-bob-defensibility-architecture.md
-
-  [2/5] ✓ Index updated
-
-  [3/5] ✓ Session -> knowledge graph
-
-  [4/5] ✓ Pushed + PR created
-
-  [5/5] ✓ Alice notified
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                     bob · Feb 07     │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: Defensibility architecture                                   │
-│  To: Alice                                                           │
-│                                                                      │
-│  Analyzed five-layer moat framework for Egregore. Server-side        │
-│  intelligence is the biggest gap and biggest opportunity.             │
-│  Defined pricing tiers and go-to-market sequence.                    │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ egregore: dev/bob/topic → PR #435 to develop               │
-│  ◈ egregore-site: dev/bob/topic → PR #12 to main                    │
-├──────────────────────────────────────────────────────────────────────┤
-│  ◉ Decision: Defensibility architecture framework                    │
-│  ◉ Finding: Harvest flywheel as training surface                     │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · graphed · pushed · Alice notified                            │
-│  Team sees this on /activity.                                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-## Full example: no recipient (local mode, cross-repo)
-
-```
-> /handoff mcp auth flow
-
-Creating handoff...
-
-Summarizing session...
-
-  [1/3] ✓ Conversation file
-        → memory/handoffs/2026-02/07-alice-mcp-auth-flow.md
-
-  [2/3] ✓ Index updated
-
-  [3/3] ✓ Pushed + PR created
-
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                      alice · Feb 07     │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: MCP auth flow                                                │
-│                                                                      │
-│  Implemented OAuth device flow for MCP authentication.               │
-│  Token refresh works end-to-end. Needs error handling                │
-│  for expired sessions.                                               │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ egregore: dev/alice/mcp-auth → develop                            │
-│  ◈ egregore-site: dev/alice/mcp-auth → main                         │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Saved · pushed                                                    │
-│  Team sees this on /activity.                                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
+Missing bits are informative, not errors. `graphed` missing in local mode is normal. `pushed` missing under `--no-push` is normal. A notify bit is ALWAYS present — every handoff posts somewhere; a handoff with no Telegram beat is invisible.
