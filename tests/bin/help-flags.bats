@@ -69,6 +69,12 @@ SCRIPT_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
   [[ "$output" == *"Usage"* ]]
 }
 
+@test "agent.sh --help exits 0" {
+  run bash "$SCRIPT_DIR/bin/agent.sh" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage"* ]]
+}
+
 @test "test-oss-release.sh --help exits 0" {
   run bash "$SCRIPT_DIR/bin/test-oss-release.sh" --help
   [ "$status" -eq 0 ]
