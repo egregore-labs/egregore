@@ -65,15 +65,24 @@ jobs:
       - name: Commands have valid structure
         run: |
           FAIL=0
-          for cmd in .claude/commands/*.md; do
+          COMMAND_FILES=$(find .claude/commands -name '*.md' -type f 2>/dev/null || true)
+          if [ -z "$COMMAND_FILES" ]; then
+            COMMAND_FILES=$(find .claude/skills -name 'SKILL.md' -type f 2>/dev/null || true)
+          fi
+          if [ -z "$COMMAND_FILES" ]; then
+            echo "FAIL: no Claude command or skill files found"
+            exit 1
+          fi
+          while IFS= read -r cmd; do
+            [ -n "$cmd" ] || continue
             # Every command should have content (not empty)
             LINES=$(wc -l < "$cmd" | tr -d ' ')
             if [ "$LINES" -lt 3 ]; then
               echo "FAIL: $cmd is too short ($LINES lines)"
               FAIL=1
             fi
-          done
-          echo "Checked $(ls .claude/commands/*.md | wc -l | tr -d ' ') commands"
+          done <<< "$COMMAND_FILES"
+          echo "Checked $(echo "$COMMAND_FILES" | wc -l | tr -d ' ') command/skill files"
           exit $FAIL
 
   worktree-tests:
@@ -86,3 +95,6 @@ jobs:
 
       - name: Run worktree tests
         run: bash tests/test-worktree.sh
+
+      - name: Run agent protocol smoke test
+        run: bash tests/test-agent-protocol.sh

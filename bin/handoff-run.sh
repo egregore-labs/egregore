@@ -203,13 +203,14 @@ PID_GRAPH=$!
   ARTIFACTS_JSON="[]"
   if [ "$MODE" = "connected" ]; then
     YY=$(date +%Y); MM=$(date +%-m); DD_NUM=$(date +%-d)
+    PARAMS=$(jq -nc --arg gh "$AUTHOR" '{gh:$gh}')
     RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
       MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {github: \$gh})
       WHERE a.created >= datetime({year: $YY, month: $MM, day: $DD_NUM})
         AND NOT 'tutorial-generated' IN coalesce(a.topics, [])
       RETURN a.title AS title, a.type AS type, a.filePath AS path
       ORDER BY a.created DESC
-      LIMIT 5" "{\"gh\":\"$AUTHOR\"}" 2>/dev/null || echo '{}')
+      LIMIT 5" "$PARAMS" 2>/dev/null || echo '{}')
     # Response shape: {"fields":[...], "values":[[...], ...]}. Convert to
     # an array of {title, type, path} objects.
     ARTIFACTS_JSON=$(echo "$RAW" | jq -c '
