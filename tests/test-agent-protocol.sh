@@ -66,7 +66,7 @@ setup_instance() {
 }
 
 # Seed the shared memory remote.
-git init --bare --quiet "$TMP/memory.git"
+git init --bare --initial-branch=main --quiet "$TMP/memory.git"
 git init --quiet "$TMP/seed"
 git -C "$TMP/seed" config user.name seed
 git -C "$TMP/seed" config user.email seed@example.test
