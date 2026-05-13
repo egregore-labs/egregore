@@ -58,25 +58,30 @@ git -C "$REPO_ROOT" worktree add "$WT_PATH" "$BRANCH" --quiet 2>/dev/null || {
 }
 
 # --- Symlinks (same as worktree.sh setup) ---
-# Memory
-if [ -L "$REPO_ROOT/memory" ]; then
-  MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null)
-  if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
-    ln -sfn "$MEMORY_TARGET" "$WT_PATH/memory"
+# Guard: never symlink files onto themselves (creates circular symlinks)
+if [ "$(cd "$WT_PATH" && pwd)" = "$(cd "$REPO_ROOT" && pwd)" ]; then
+  echo "Warning: worktree path equals repo root, skipping symlinks" >&2
+else
+  # Memory
+  if [ -L "$REPO_ROOT/memory" ]; then
+    MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null)
+    if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
+      ln -sfn "$MEMORY_TARGET" "$WT_PATH/memory"
+    fi
   fi
+
+  # .env
+  [ -f "$REPO_ROOT/.env" ] && ln -sfn "$REPO_ROOT/.env" "$WT_PATH/.env"
+
+  # .egregore-state.json
+  [ -f "$REPO_ROOT/.egregore-state.json" ] && ln -sfn "$REPO_ROOT/.egregore-state.json" "$WT_PATH/.egregore-state.json"
+
+  # .egregore-session-id
+  [ -f "$REPO_ROOT/.egregore-session-id" ] && ln -sfn "$REPO_ROOT/.egregore-session-id" "$WT_PATH/.egregore-session-id"
+
+  # egregore.json
+  [ -f "$REPO_ROOT/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ] && ln -sfn "$REPO_ROOT/egregore.json" "$WT_PATH/egregore.json"
 fi
-
-# .env
-[ -f "$REPO_ROOT/.env" ] && ln -sfn "$REPO_ROOT/.env" "$WT_PATH/.env"
-
-# .egregore-state.json
-[ -f "$REPO_ROOT/.egregore-state.json" ] && ln -sfn "$REPO_ROOT/.egregore-state.json" "$WT_PATH/.egregore-state.json"
-
-# .egregore-session-id
-[ -f "$REPO_ROOT/.egregore-session-id" ] && ln -sfn "$REPO_ROOT/.egregore-session-id" "$WT_PATH/.egregore-session-id"
-
-# egregore.json
-[ -f "$REPO_ROOT/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ] && ln -sfn "$REPO_ROOT/egregore.json" "$WT_PATH/egregore.json"
 
 # --- Compute boundary for worktree (so isolation hook works) ---
 # session-start.sh doesn't re-run for worktrees, so we compute it here.
