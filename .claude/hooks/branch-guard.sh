@@ -179,6 +179,11 @@ case "$TOOL_NAME" in
       if targets_other_repo "$COMMAND"; then
         exit 0
       fi
+      # Allow handoff/save scripts — they operate on memory, which has its own
+      # branch model (always pushes to main).
+      if echo "$COMMAND" | grep -qE 'bin/(handoff-run|handoff-save-egregore)\.sh' 2>/dev/null; then
+        exit 0
+      fi
       # Allow framework updates from upstream (not user work — safe on develop)
       if echo "$COMMAND" | grep -qF 'EGREGORE_FRAMEWORK_UPDATE=1' 2>/dev/null; then
         exit 0
