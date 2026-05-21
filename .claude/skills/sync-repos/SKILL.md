@@ -42,7 +42,7 @@ git fetch origin develop:develop --quiet
 # If on dev/* branch, rebase onto develop
 BRANCH=$(git branch --show-current)
 if [[ "$BRANCH" == dev/* ]]; then
-  git rebase develop --quiet || (git rebase --abort && git merge develop -m "Sync with develop")
+  git rebase develop --quiet --empty=drop || (git rebase --abort && git merge develop -m "Sync with develop")
 fi
 ```
 

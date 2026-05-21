@@ -78,7 +78,7 @@ if [ -d "$MEMORY_DIR" ]; then
     cd "$MEMORY_DIR" || exit 0
     git add -A >/dev/null 2>&1
     git commit -m "Backfill PR numbers for handoff: $TOPIC" >/dev/null 2>&1 || exit 0
-    git pull --rebase origin main --quiet >/dev/null 2>&1
+    git -c rebase.empty=drop pull --rebase origin main --quiet >/dev/null 2>&1
     git push origin main --quiet >/dev/null 2>&1
   ) || true
 fi

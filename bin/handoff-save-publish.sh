@@ -54,7 +54,7 @@ trap 'rm -f "$SAVE_OUT" "$PUB_OUT"' EXIT
   git add -A
   git commit -m "Handoff: $TOPIC" >/dev/null 2>&1 || true
   for _ in 1 2 3; do
-    git pull --rebase origin main --quiet 2>/dev/null \
+    git -c rebase.empty=drop pull --rebase origin main --quiet 2>/dev/null \
       && git push origin main --quiet 2>/dev/null && break
     sleep 1
   done
@@ -124,7 +124,7 @@ if [ -n "$REPO_STATE" ] && command -v gh >/dev/null 2>&1; then
       cd memory 2>/dev/null || exit 0
       git add -A
       git commit -m "Backfill PR numbers for handoff: $TOPIC" >/dev/null 2>&1 || true
-      git pull --rebase origin main --quiet 2>/dev/null
+      git -c rebase.empty=drop pull --rebase origin main --quiet 2>/dev/null
       git push origin main --quiet 2>/dev/null
     )
   ) >/dev/null 2>&1 &

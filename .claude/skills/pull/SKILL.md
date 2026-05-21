@@ -20,7 +20,7 @@ git fetch origin develop:develop --quiet
 # 2. If on a working branch, rebase onto the base branch
 CURRENT=$(git branch --show-current)
 if [[ "$CURRENT" == dev/* ]]; then
-  git rebase develop --quiet || (git rebase --abort && git merge develop -m "Sync with develop")
+  git rebase develop --quiet --empty=drop || (git rebase --abort && git merge develop -m "Sync with develop")
 fi
 
 # 3. Memory — derive directory from egregore.json, never hardcode

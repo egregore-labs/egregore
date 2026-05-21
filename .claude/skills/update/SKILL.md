@@ -70,7 +70,7 @@ if [ "$IN_WORKTREE" = "true" ]; then
   # Rebase worktree branch onto updated base
   git stash --quiet 2>/dev/null || true
   git fetch origin "$BASE_BRANCH" --quiet
-  if ! git rebase "origin/$BASE_BRANCH" --quiet 2>/dev/null; then
+  if ! git rebase "origin/$BASE_BRANCH" --quiet --empty=drop 2>/dev/null; then
     git rebase --abort 2>/dev/null || true
     echo "⚠ Rebase had conflicts — aborted. Run: git rebase origin/$BASE_BRANCH and resolve manually."
   fi
@@ -130,7 +130,7 @@ if [ "$IN_WORKTREE" = "false" ]; then
   # Switch back to working branch, rebase, restore user's work
   if [ "$SWITCHED" = "true" ]; then
     git checkout "$CURRENT_BRANCH" --quiet 2>/dev/null
-    if ! git rebase "$BASE_BRANCH" --quiet 2>/dev/null; then
+    if ! git rebase "$BASE_BRANCH" --quiet --empty=drop 2>/dev/null; then
       git rebase --abort 2>/dev/null || true
       echo "⚠ Rebase had conflicts — aborted. Run: git rebase $BASE_BRANCH and resolve manually."
     fi
