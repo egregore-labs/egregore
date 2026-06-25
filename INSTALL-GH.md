@@ -70,7 +70,7 @@ curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join
 bash join-gh.sh <org>/<egregore-repo>
 
 # or npx path (requires running code from npm)
-npx create-egregore join <org>/<egregore-repo>
+npx -y create-egregore@latest join <org>/<egregore-repo>
 ```
 
 Both paths:

@@ -41,9 +41,10 @@ case "$CMD" in
       SRC="$MAIN_DIR/$FILE"
       DST="$WT_PATH/$FILE"
       if [ "$FILE" = "memory" ]; then
-        # Follow the symlink to get absolute path
-        [ -L "$SRC" ] || continue
-        SRC=$(realpath "$SRC" 2>/dev/null) || continue
+        # memory may be a symlink (follow to its target) or a real directory.
+        if [ -L "$SRC" ]; then
+          SRC=$(realpath "$SRC" 2>/dev/null) || continue
+        fi
         [ -d "$SRC" ] || continue
       else
         [ -f "$SRC" ] || continue

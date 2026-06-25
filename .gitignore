@@ -48,3 +48,14 @@ node_modules/
 # Claude Code worktrees (session-isolated working directories)
 .claude/worktrees/
 .pulse/
+
+# A/B eval rig — local Anthropic API key
+.env
+.vision-input/
+.venv*/
+
+# Encrypted local dashboard build (priority/session command center).
+# build.mjs holds the decryption password as a default and *-data.js hold
+# the plaintext source data — never commit these. Host the encrypted
+# dist.html via publish-artifact if needed, not via git.
+dashboards/

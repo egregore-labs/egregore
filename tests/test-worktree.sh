@@ -34,6 +34,12 @@ setup_test_repo() {
   echo "GITHUB_TOKEN=fake" > .env
   echo '{"onboarding_complete":true,"github_username":"testuser"}' > .egregore-state.json
   echo "test-session-id" > .egregore-session-id
+  cat > .gitignore <<'EOF'
+memory
+.env
+.egregore-state.json
+.egregore-session-id
+EOF
   echo "# test memory" > memory/README.md
 
   # Copy the actual worktree.sh into the test repo
@@ -90,6 +96,19 @@ if [ -L "$WT_PATH/.egregore-session-id" ]; then
   pass ".egregore-session-id symlinked"
 else
   fail ".egregore-session-id not symlinked"
+fi
+
+if [ -L "$WT_PATH/memory" ]; then
+  TARGET=$(readlink "$WT_PATH/memory")
+  RESOLVED=$(realpath "$WT_PATH/memory" 2>/dev/null || echo "")
+  EXPECTED_MEMORY=$(realpath "$MAIN_REPO/memory" 2>/dev/null || echo "$MAIN_REPO/memory")
+  if [ "$RESOLVED" = "$EXPECTED_MEMORY" ]; then
+    pass "memory symlinked to shared directory"
+  else
+    fail "memory symlink points to '$TARGET' instead of '$EXPECTED_MEMORY'"
+  fi
+else
+  fail "memory not created as symlink"
 fi
 
 # --- Test 1.2: setup symlinks egregore.json ---

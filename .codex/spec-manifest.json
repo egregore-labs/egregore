@@ -1,0 +1,108 @@
+{
+  "generatedBy": "bin/codex-render-spec.mjs",
+  "source": "CLAUDE.md",
+  "sections": [
+    {
+      "section": "(intro)",
+      "action": "replace",
+      "sourceHash": "3992e3abfcdd",
+      "note": "Reframed for Codex: names AGENTS.md as the delivery surface and the manifest; \"organizations using Claude Code\" generalized."
+    },
+    {
+      "section": "Identity & Upstream",
+      "action": "keep",
+      "sourceHash": "4acbf9bc2866",
+      "note": "Kept; /update, /contribute, /save tokens rendered as $skill tokens."
+    },
+    {
+      "section": "On Launch — MANDATORY FIRST ACTION",
+      "action": "replace",
+      "sourceHash": "d2f6595756c8",
+      "note": "Claude SessionStart hook does not run on Codex; the egregore launcher renders the card via bin/codex-session-start.sh before the session. Greeting-replay instruction dropped (card is already on screen)."
+    },
+    {
+      "section": "After Greeting — BRANCH ON FIRST RESPONSE",
+      "action": "replace",
+      "sourceHash": "09c2618759bd",
+      "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout kept verbatim (pure git)."
+    },
+    {
+      "section": "Config Files",
+      "action": "keep",
+      "sourceHash": "81b7bf09901b",
+      "note": "Kept verbatim — shell facts, runtime-neutral."
+    },
+    {
+      "section": "Knowledge Graph",
+      "action": "keep",
+      "sourceHash": "5c0953aee955",
+      "note": "Kept verbatim — bin/graph.sh is runtime-neutral."
+    },
+    {
+      "section": "Notifications",
+      "action": "keep",
+      "sourceHash": "e155d669f5bd",
+      "note": "Kept verbatim — bin/notify.sh is runtime-neutral."
+    },
+    {
+      "section": "Onboarding",
+      "action": "keep",
+      "sourceHash": "ee3ecb296252",
+      "note": "Kept; /onboarding rendered as $onboarding."
+    },
+    {
+      "section": "Transparency Beat",
+      "action": "keep",
+      "sourceHash": "e06da653d3ad",
+      "note": "Kept verbatim."
+    },
+    {
+      "section": "Memory",
+      "action": "keep",
+      "sourceHash": "d75dc9f6d88c",
+      "note": "Kept verbatim."
+    },
+    {
+      "section": "Git Workflow",
+      "action": "keep",
+      "sourceHash": "d058d1f8da11",
+      "note": "Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence)."
+    },
+    {
+      "section": "Working Conventions",
+      "action": "keep",
+      "sourceHash": "37a5318e9ee0",
+      "note": "Kept verbatim."
+    },
+    {
+      "section": "Command Awareness",
+      "action": "keep",
+      "sourceHash": "d3ea48ebf938",
+      "note": "Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
+    },
+    {
+      "section": "Socratic Questioning (MANDATORY)",
+      "action": "replace",
+      "sourceHash": "febe45868016",
+      "note": "AskUserQuestion -> numbered plain-text question batches with explicit stop-and-wait; multiSelect -> \"pick any that apply\"."
+    },
+    {
+      "section": "Telemetry",
+      "action": "keep",
+      "sourceHash": "f8b242d0fd64",
+      "note": "Kept verbatim — bin/telemetry.sh is runtime-neutral."
+    },
+    {
+      "section": "Mode",
+      "action": "keep",
+      "sourceHash": "ae5cbb9c5d30",
+      "note": "Kept; /env and /checkup rendered as $skill tokens."
+    },
+    {
+      "section": "Environment Isolation",
+      "action": "replace",
+      "sourceHash": "ed47e96248bd",
+      "note": "boundary-check is a Claude PreToolUse hook with no .codex equivalent — behavior stated as a standing instruction; AskUserQuestion remediation -> numbered options."
+    }
+  ]
+}

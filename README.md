@@ -58,21 +58,6 @@ or, if configured:
 Memory syncs. Identity resolves. The session picks up the accumulated context
 from every session before it.
 
-## Agent-agnostic use
-
-Claude Code is the integrated runtime, but the shared-memory protocol can be
-used by other agents too. Any runtime that can run shell commands inside the
-checkout can call:
-
-```bash
-bin/agent.sh sync
-bin/agent.sh activity --for <person>
-bin/agent.sh handoff --from <person> --to <person> --topic "<topic>" --body "<briefing>"
-bin/agent.sh ask --from <person> --to <person> --topic "<topic>" --question "<question>"
-```
-
-See [AGENTS.md](AGENTS.md) and [docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md).
-
 ## The substrate
 
 Three structural pieces. Everything else is built on them.

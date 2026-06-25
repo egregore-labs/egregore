@@ -14,6 +14,7 @@ copy_runtime() {
   local dest="$1"
   mkdir -p "$dest/bin" "$dest/bin/lib"
   cp "$ROOT/bin/agent.sh" "$dest/bin/agent.sh"
+  cp "$ROOT/bin/worktree.sh" "$dest/bin/worktree.sh"
   cp "$ROOT/bin/handoff-run.sh" "$dest/bin/handoff-run.sh"
   cp "$ROOT/bin/repo-state.sh" "$dest/bin/repo-state.sh"
   cp "$ROOT/bin/index-handoff.sh" "$dest/bin/index-handoff.sh"
@@ -55,9 +56,18 @@ setup_instance() {
   mkdir -p "$core"
   copy_runtime "$core"
   write_config "$core"
+  cat > "$core/.gitignore" <<'EOF'
+memory
+.env
+.egregore-state.json
+.egregore-session-id
+EOF
   git -C "$core" init --quiet
   git -C "$core" config user.name "$person"
   git -C "$core" config user.email "$person@example.test"
+  git -C "$core" add bin egregore.json .gitignore
+  git -C "$core" commit -m "Init portable agent runtime" --quiet
+  git -C "$core" branch develop
 
   git clone --quiet "$TMP/memory.git" "$memory"
   git -C "$memory" config user.name "$person"
@@ -96,11 +106,45 @@ setup_instance "agent-b" "codex-b"
 A="$TMP/agent-a/egregore"
 B="$TMP/agent-b/egregore"
 
-bash "$A/bin/agent.sh" handoff \
+git -C "$A" branch raw-codex-worktree HEAD
+RAW_WT="$TMP/raw-codex-worktree"
+git -C "$A" worktree add "$RAW_WT" raw-codex-worktree --quiet
+RAW_SYNC="$(bash "$RAW_WT/bin/agent.sh" sync)"
+echo "$RAW_SYNC" | grep -q "synced:"
+[ -L "$RAW_WT/memory" ]
+[ -L "$RAW_WT/.egregore-state.json" ]
+
+BRANCH_OUT="$(bash "$A/bin/agent.sh" branch --topic "codex branch smoke")"
+echo "$BRANCH_OUT" | grep -q "branch: dev/codex/codex-branch-smoke"
+BRANCH_WT="$(echo "$BRANCH_OUT" | sed -n 's/^worktree: //p' | head -1)"
+[ -d "$BRANCH_WT" ]
+[ -L "$BRANCH_WT/memory" ]
+[ "$(git -C "$BRANCH_WT" branch --show-current)" = "dev/codex/codex-branch-smoke" ]
+
+printf 'portable save smoke\n' > "$BRANCH_WT/save-smoke.txt"
+SAVE_OUT="$(bash "$BRANCH_WT/bin/agent.sh" save --message "Save: codex branch smoke" --topic "codex branch smoke" --no-pr)"
+echo "$SAVE_OUT" | grep -q "branch: dev/codex/codex-branch-smoke"
+echo "$SAVE_OUT" | grep -q "commit: true"
+git -C "$BRANCH_WT" log -1 --format=%s | grep -q "Save: codex branch smoke"
+
+WRAP_OUT="$(bash "$A/bin/agent.sh" wrap \
+  --from codex-a \
+  --topic "wrap smoke" \
+  --summary "codex-a verified portable wrap." \
+  --body "The wrap command writes to memory/wraps and pushes through the shared memory repo.")"
+echo "$WRAP_OUT" | grep -q "wrap: memory/wraps/"
+[ -n "$(find "$A/memory/wraps" -type f -name '*wrap-smoke.md' | head -1)" ]
+
+HANDOFF_OUT="$(bash "$A/bin/agent.sh" handoff \
   --from codex-a \
   --to codex-b \
   --topic "relay smoke" \
-  --body "codex-a leaves a runtime-neutral handoff for codex-b."
+  --body "codex-a leaves a runtime-neutral handoff for codex-b." \
+  --no-publish \
+  --no-notify)"
+echo "$HANDOFF_OUT" | grep -q "status: ⇌ saved"
+echo "$HANDOFF_OUT" | grep -q "handoff: memory/handoffs/"
+echo "$HANDOFF_OUT" | grep -q "result: "
 
 bash "$B/bin/agent.sh" sync
 ACTIVITY_B="$(bash "$B/bin/agent.sh" activity --for codex-b)"

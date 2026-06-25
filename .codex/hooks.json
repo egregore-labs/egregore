@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/branch-guard.js\"",
+            "timeout": 5,
+            "statusMessage": "Checking Egregore branch policy"
+          }
+        ]
+      }
+    ]
+  }
+}

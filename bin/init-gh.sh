@@ -869,7 +869,7 @@ EOF
   echo
   info "Tell $INV_USER to run either:"
   info "  $(bold "curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh && bash join-gh.sh $GITHUB_ORG/$REPO_NAME")"
-  info "  $(bold "npx create-egregore join $GITHUB_ORG/$REPO_NAME")"
+  info "  $(bold "npx -y create-egregore@latest join $GITHUB_ORG/$REPO_NAME")"
   info "Both accept the invite, clone core + memory + managed repos as siblings,"
   info "symlink memory, write .env, install a shell alias, and run /onboarding."
   info "The gh path has no third-party App and no manual PAT."
