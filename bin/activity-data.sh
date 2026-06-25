@@ -154,6 +154,26 @@ wait $API_PID $GIT_PID $LOCAL_PID 2>/dev/null || true
 # --- Read results ---
 PRS=$(cat "$TMPDIR/prs.json" 2>/dev/null || echo "[]")
 echo "$PRS" | jq . >/dev/null 2>&1 || PRS="[]"
+
+# Resolve PR author GitHub logins -> egregore display names. `gh pr list` returns
+# the raw github login (e.g. "fcdagdelen"); without this it leaks into activity
+# instead of the person's display name ("cem"). Map via the graph when connected;
+# fall back to the github profile name, then the login. Author becomes a string.
+if [ -n "$PRS" ] && [ "$PRS" != "[]" ]; then
+  AUTHOR_MAP='{}'
+  if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
+    MAP_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
+      "MATCH (p:Person) WHERE p.github IS NOT NULL RETURN p.github AS gh, p.name AS name" 2>/dev/null)
+    AUTHOR_MAP=$(printf '%s' "$MAP_RAW" | jq -c \
+      'reduce (.values[]?) as $v ({}; .[($v[0]|ascii_downcase)] = $v[1])' 2>/dev/null || echo '{}')
+  fi
+  PRS=$(printf '%s' "$PRS" | jq -c --argjson map "$AUTHOR_MAP" '
+    map(
+      (if (.author|type)=="object" then .author else {login: (.author|tostring), name: null} end) as $a
+      | .author = ([$map[(($a.login // "") | ascii_downcase)], $a.name, $a.login]
+                   | map(select(. != null and . != "")) | first // "unknown")
+    )' 2>/dev/null || printf '%s' "$PRS")
+fi
 DISK_HANDOFFS=$(cat "$TMPDIR/disk_handoffs.txt" 2>/dev/null || echo "")
 DISK_DECISIONS=$(cat "$TMPDIR/disk_decisions.txt" 2>/dev/null || echo "")
 LOCAL_SESSIONS=$(cat "$TMPDIR/local_sessions.json" 2>/dev/null || echo '{"my_sessions":[],"team_sessions":[]}')

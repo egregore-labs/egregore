@@ -72,14 +72,17 @@ If on develop after two messages, create a branch immediately from whatever cont
 
 ### Branch-guard protocol
 
-The `branch-guard.sh` PreToolUse hook blocks writes and commits on `develop`/`main`/`master`. When it fires (you'll see a `Protected branch (...)` message in the tool error), choose between two paths based on how clear the topic is:
+The `branch-guard.sh` PreToolUse hook defers to consent on `develop`/`main`/`master`. When it fires (you'll see a `Protected branch (...)` message in the tool error), **do NOT auto-branch silently and do NOT just proceed** — ask the user with `AskUserQuestion`, offering exactly:
 
-- **Topic is obvious from the last turn** (user said "fix X", "add Y feature") → auto-branch silently. Derive the slug, run `git checkout -b dev/{author}/{slug} origin/develop`, continue. Don't interrupt the user for something they already implicitly answered.
-- **Topic is ambiguous** (open-ended exploration, "let's look at...", user didn't specify what we're building yet) → use AskUserQuestion **before** branching, with 2–3 suggested slugs derived from context plus a "rename it" option. Only branch after they confirm.
+- **Branch off** (default/recommended) — derive a slug from context, run `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`, then retry the write. (Offer 2–3 candidate slugs + a "rename it" option when the topic is ambiguous.)
+- **Proceed on `{branch}`** — the user explicitly wants to work on the protected branch. Record consent, then retry: `echo '{branch}' > .egregore-branch-consent`. Writes on `{branch}` are then allowed for the rest of this session (the token is branch-scoped and cleared on next session start, so consent is asked once per session, not per write).
+- **Cancel** — stop; don't write.
 
-The hook's block message is aimed at you, not the user. The user sees nothing unless you surface it — so when you do auto-branch, say one sentence ("Creating `dev/{author}/{slug}`.") so the user isn't confused about why a new branch appeared.
+This is the softened guard: the user can always choose to work directly on `develop` — you just have to ask first, once per session. Never write the consent token without an explicit "Proceed on `{branch}`" answer.
 
-Plan mode is **not** blocked by branch-guard — you can enter plan mode on develop without branching first. The branch gets created when you actually try to Edit/Write/commit.
+Note: the **"branch on first work message"** rule above still stands — on the user's first work-related message you auto-create a worktree (no need to ask). The consent flow here is only for when a write later lands on a protected branch (e.g., back on `develop` after a PR merged, or work that never branched).
+
+Plan mode is **not** blocked by branch-guard — you can enter plan mode on develop without branching first. The guard only engages when you actually try to Edit/Write/commit.
 
 ### Onboarding exception
 

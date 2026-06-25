@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  An adaptive intelligence layer for teams.
+  A shared intelligence layer for teams using Claude Code.
 </p>
 
 <p align="center">
@@ -14,8 +14,9 @@
 
 ---
 
-Egregore is the adaptive cognition layer for AI-native collaboration. It makes the agent you already run — whatever the harness — an inhabitable production environment, where every session, handoff, and decision accumulates into a living memory owned by your organization.
-The context compounds: continuity across multi-agent workflows, visibility into how your organization actually decides, collective intelligence that persists across people, sessions, and time.
+Egregore is a shared cognition layer for AI-native collaboration. It turns Claude Code into an inhabitable production environment where every session, handoff, and decision accumulates into a living memory owned by your organization.
+With use, the deep context that accumulates enables seamless continuity across multi-agent workflows, visibility into organizational patterns and decision-making, and persistence of collective intelligence across people, sessions, and time.
+
 
 https://github.com/user-attachments/assets/71a690fb-8a4e-4d0b-9a61-e6cdc7595430
 
@@ -29,8 +30,6 @@ npx create-egregore@latest --open
 This walks you through GitHub auth, names your egregore, creates the repos
 (instance + shared memory), clones everything locally, and adds a shell
 command to your profile.
-
-Setup asks which agent you run (Claude Code, Codex, Hermes, and more) and lays down the matching runtime.
 
 To join an existing egregore:
 
@@ -106,10 +105,9 @@ onboards them.
 
 ## What runs
 
-Egregore is harness-independent — it runs wherever your agent runs (Claude Code, Codex, Hermes, and more), and the protocol, the memory, and the commands stay the same.
-
-Under Claude Code, it works through [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) — shell scripts that fire on session events, sourced in `bin/` and `.claude/hooks/`. 
-Under Codex, the same protocol lives in `AGENTS.md` and `.codex/`: `bin/codex-session-start.sh` renders the session, `.codex/hooks/branch-guard.js` holds the branch line. Beneath every harness runs `bin/agent.sh` — a runtime-neutral bridge that speaks the git-backed memory protocol directly.
+Egregore uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks)
+— shell scripts that fire on session events. All source is in `bin/` and
+`.claude/hooks/`. Read them directly.
 
 | Hook | What it does |
 |------|-------------|

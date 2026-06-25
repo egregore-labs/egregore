@@ -26,6 +26,15 @@ case "$BRANCH" in
   *) exit 0 ;;
 esac
 
+# --- Consent bypass: the user explicitly chose to work on this protected branch ---
+# Set by the agent (per CLAUDE.md branch-guard protocol) only after the user
+# picks "Proceed on <branch>" in an AskUserQuestion. Scoped to the branch name
+# and cleared on session start, so consent is asked once per session, not per write.
+CONSENT_FILE="$PROJECT_DIR/.egregore-branch-consent"
+if [ -f "$CONSENT_FILE" ] && [ "$(cat "$CONSENT_FILE" 2>/dev/null)" = "$BRANCH" ]; then
+  exit 0
+fi
+
 # --- Read tool input from stdin (before fast-path so we can check tool) ---
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || true
@@ -141,12 +150,14 @@ targets_other_repo() {
 # When the topic is obvious from the last turn, Claude may skip the question and
 # auto-branch. When it's ambiguous, Claude MUST use AskUserQuestion before
 # creating the branch (see CLAUDE.md "Branch-guard protocol").
-BLOCK_MSG="Protected branch (${BRANCH}). Before writing, create a working branch for this work.
+BLOCK_MSG="Protected branch (${BRANCH}). Ask the user how to proceed — do NOT auto-branch silently.
 
-If the topic is clear from the conversation, auto-branch:
-  git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop
+Use AskUserQuestion with these options:
+  • Branch off (default) — git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop
+  • Proceed on ${BRANCH} — record consent, then continue: echo '${BRANCH}' > .egregore-branch-consent
+  • Cancel
 
-If the topic is ambiguous, use AskUserQuestion to confirm the slug with the user first (offer 2-3 suggestions + a rename option), then branch."
+If they choose 'Proceed on ${BRANCH}', write that consent file and retry; writes on ${BRANCH} are then allowed for the rest of this session. (Cleared on next session start.)"
 
 # --- Check based on tool type ---
 case "$TOOL_NAME" in

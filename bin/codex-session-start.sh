@@ -18,6 +18,10 @@ if [ -f "$SCRIPT_DIR/.git" ]; then
   MAIN_PROJECT_DIR=$(cd "$WT_GITDIR/../../.." 2>/dev/null && pwd)
 fi
 
+# Clear any branch-guard consent from a previous session — consent to write on
+# a protected branch is asked fresh each session (see AGENTS.md branch-guard protocol).
+rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch-consent" 2>/dev/null
+
 if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
   source "$SCRIPT_DIR/bin/lib/worktree-links.sh" >/dev/null 2>/dev/null || true
   egregore_link_shared_state "$SCRIPT_DIR" "$MAIN_PROJECT_DIR" >/dev/null 2>/dev/null || true

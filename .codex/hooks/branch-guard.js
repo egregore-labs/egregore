@@ -198,16 +198,24 @@ function main() {
   const branch = currentBranch(projectDir);
   if (!isProtectedBranch(branch)) return;
 
+  // Consent bypass: the user explicitly chose to work on this protected branch.
+  // Written only after they pick "Proceed on <branch>"; cleared on session start,
+  // so consent is asked once per session, not per write.
+  try {
+    const consent = fs.readFileSync(path.join(projectDir, ".egregore-branch-consent"), "utf-8").trim();
+    if (consent === branch) return;
+  } catch {}
+
   const toolName = input.tool_name || "";
   const toolInput = input.tool_input || {};
   const memoryDir = realish(path.join(projectDir, "memory"));
   const author = currentAuthor(projectDir);
   const reason = [
-    `Protected branch (${branch}).`,
-    "Create an Egregore work branch before writing:",
-    `  bin/agent.sh branch --topic "<work topic>"`,
-    "Then continue from the printed worktree: path.",
-    `Default branch prefix for this user: dev/${author}/...`,
+    `Protected branch (${branch}). Ask the user how to proceed — do NOT auto-branch silently.`,
+    "Offer a choice (numbered or structured): Branch off (default) / Proceed on this branch / Cancel.",
+    `  • Branch off:        bin/agent.sh branch --topic "<work topic>"  (prefix dev/${author}/...)`,
+    `  • Proceed on ${branch}: echo '${branch}' > .egregore-branch-consent  then retry`,
+    "Proceeding records consent for this branch for the rest of the session (cleared on next session start).",
   ].join("\n");
 
   if (toolName === "apply_patch") {
