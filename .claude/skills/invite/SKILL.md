@@ -112,7 +112,7 @@ Invited {username} to {org_name}.
 
 Tell them to run:
 
-  npx create-egregore@latest join {github_org}/{repo_name}
+  npx -y create-egregore@latest join {github_org}/{repo_name}
 ```
 
 **Telegram group link:** After the join command, check `egregore.json` for `telegram_group_link`. If present, append:

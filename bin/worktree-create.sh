@@ -58,12 +58,15 @@ git -C "$REPO_ROOT" worktree add "$WT_PATH" "$BRANCH" --quiet 2>/dev/null || {
 }
 
 # --- Symlinks (same as worktree.sh setup) ---
-# Memory
+# Memory — may be a symlink (follow to its target) or a real directory.
+MEMORY_TARGET=""
 if [ -L "$REPO_ROOT/memory" ]; then
   MEMORY_TARGET=$(realpath "$REPO_ROOT/memory" 2>/dev/null)
-  if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
-    ln -sfn "$MEMORY_TARGET" "$WT_PATH/memory"
-  fi
+elif [ -d "$REPO_ROOT/memory" ]; then
+  MEMORY_TARGET="$REPO_ROOT/memory"
+fi
+if [ -n "$MEMORY_TARGET" ] && [ -d "$MEMORY_TARGET" ]; then
+  ln -sfn "$MEMORY_TARGET" "$WT_PATH/memory"
 fi
 
 # .env

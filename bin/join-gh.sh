@@ -212,7 +212,7 @@ if [ "$CONFIG_MODE" = "connected" ]; then
   warn "needs EGREGORE_API_KEY — skills calling bin/graph.sh or bin/notify.sh"
   warn "will fail until the admin provisions one for you."
   info "To get full connected-mode access, use npx instead:"
-  info "  $(bold "npx create-egregore join $OWNER/$REPO")"
+  info "  $(bold "npx -y create-egregore@latest join $OWNER/$REPO")"
   info "Or ask the admin for a setup token."
   echo
   if ! ANSWER="$(prompt "Continue anyway (local-only access to memory/managed repos)? [y/N]" "n")" \

@@ -151,6 +151,15 @@ If the remote branch is gone:
          ```
          Tell the developer: `⚠ Preflight found issues — fix before merging. See violations above.`
        - Preflight never blocks the save — work is always preserved. It warns.
+     - **Release-safety check** — if the diff touches `packages/**` or `api/**`, run the release preflight (supply-chain, version-bump, infra-boundary, blast-radius):
+       ```bash
+       if git diff develop --name-only | grep -qE '^(packages|api)/'; then
+         bash bin/release-safety.sh --mode warn --base origin/develop
+       fi
+       ```
+       - **warn mode never blocks the save** — it surfaces findings only. Relay them to the user in plain language, especially the **blast radius** (which packages will publish to npm / whether `api/` will deploy to Railway on merge to main) so non-technical teammates understand the consequence of merging.
+       - If it reports **critical** findings (e.g. an install lifecycle script, missing `files` whitelist, sensitive files in the tarball), call them out clearly — the CI `safety` gate will hard-block the publish on these, so they must be resolved before the release reaches main.
+       - Reminder to surface: a changed package with **no version bump** publishes nothing; bump the version in the same PR.
      - **Cypher query check** — after preflight, detect if changed files contain Cypher blocks:
        ```bash
        git diff develop --name-only | xargs grep -l '```cypher' 2>/dev/null | head -1

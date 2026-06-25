@@ -1,0 +1,15 @@
+[features]
+hooks = true
+
+[tui]
+status_line = [
+  "model-with-reasoning",
+  "git-branch",
+  "current-dir",
+  "context-remaining",
+  "five-hour-limit",
+  "weekly-limit",
+  "permissions",
+  "approval-mode",
+]
+status_line_use_colors = true
