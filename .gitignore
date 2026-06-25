@@ -25,6 +25,7 @@ mcp.shared.*.json
 # Runtime files (session-specific, never commit)
 .transcript-retry-queue
 .egregore-session-id
+.egregore-branch-consent
 
 # Personal notes — never shared, never committed
 .egregore/notes/

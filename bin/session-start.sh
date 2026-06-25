@@ -18,6 +18,10 @@ if [ -f "$SCRIPT_DIR/.git" ]; then
   MAIN_PROJECT_DIR=$(cd "$WT_GITDIR/../../.." 2>/dev/null && pwd)
 fi
 
+# Clear any branch-guard consent from a previous session — consent to write on
+# a protected branch is asked fresh each session (see CLAUDE.md branch-guard protocol).
+rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch-consent" 2>/dev/null
+
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
 HEALTH_GIT="skip"
