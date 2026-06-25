@@ -11,7 +11,7 @@ If even `gh` is blocked, see [INSTALL.md](./INSTALL.md) for the pure-PAT path.
 - **`git`** (any recent version)
 - **`gh`** — [install](https://cli.github.com/)
 - **`jq`** — `brew install jq` / `apt-get install jq`
-- **Claude Code** — installed locally
+- **Claude Code or Codex** — installed locally (pick your assistant during setup)
 
 Authenticate `gh` once:
 
