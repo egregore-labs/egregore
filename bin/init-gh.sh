@@ -86,6 +86,51 @@ slugify() {
     | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//'
 }
 
+# Run a command in the background and animate a spinner on STDERR until it
+# finishes, so long network calls (e.g. listing repos in a huge org) never
+# look like a hang. The command's STDOUT is forwarded verbatim, so this is
+# safe inside `VAR="$(run_with_spinner ... )"`.
+run_with_spinner() {
+  local msg="$1"; shift
+  local tmp; tmp="$(mktemp)"
+  "$@" >"$tmp" 2>/dev/null &
+  local pid=$!
+  if [ -t 2 ]; then
+    local frames='|/-\' i=0
+    while kill -0 "$pid" 2>/dev/null; do
+      printf '\r  %s %s' "$(color 36 "${frames:$((i++ % 4)):1}")" "$msg" >&2
+      sleep 0.1
+    done
+    printf '\r\033[K' >&2
+  fi
+  wait "$pid" 2>/dev/null || true
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+# Fetch repos for an owner, newest-first, bounded to MAX_REPO_PAGES pages so a
+# huge org (thousands of repos) doesn't trigger hundreds of sequential API
+# calls. Emits newline-delimited compact JSON objects (filtered by $3). Each
+# page's raw JSON is fetched ONCE and filtered locally — no double requests.
+MAX_REPO_PAGES=5   # 5 × 100 = up to 500 most-recently-updated repos
+fetch_org_repos() {
+  local owner="$1" is_org="$2" jqf="$3" base page=1 raw n
+  if [ "$is_org" = "1" ]; then
+    base="orgs/$owner/repos?per_page=100&sort=updated&type=all"
+  else
+    base="users/$owner/repos?per_page=100&sort=updated&type=owner"
+  fi
+  while [ "$page" -le "$MAX_REPO_PAGES" ]; do
+    raw="$(gh api "${base}&page=${page}" 2>/dev/null || true)"
+    [ -z "$raw" ] && break
+    n="$(printf '%s' "$raw" | jq 'length' 2>/dev/null || echo 0)"
+    [ "${n:-0}" -eq 0 ] && break
+    printf '%s' "$raw" | jq -c "$jqf" 2>/dev/null || true
+    [ "$n" -lt 100 ] && break   # short page → last page
+    page=$((page + 1))
+  done
+}
+
 # ── Pre-flight ─────────────────────────────────────────────────────
 
 banner() {
@@ -288,15 +333,13 @@ SELECTED_REPOS_JSON="[]"
 
 if [ "$IS_NEW_PROJECT" = "0" ]; then
   step "Existing repos to manage"
-  info "Fetching repos from $GITHUB_ORG..."
-  REPO_LIST_RAW=""
+
   REPO_JQ='.[] | select(.archived | not) | select(.name | test("-memory$") | not) | select(.name != "egregore" and .name != "egregore-core") | {name: .name, description: (.description // ""), default_branch: (.default_branch // "main")}'
-  if [ "$IS_ORG" = "1" ]; then
-    REPO_LIST_RAW="$(gh api "orgs/$GITHUB_ORG/repos?per_page=100&sort=updated&type=all" --paginate --jq "$REPO_JQ" 2>/dev/null || true)"
-  else
-    REPO_LIST_RAW="$(gh api "users/$GITHUB_ORG/repos?per_page=100&sort=updated&type=owner" --paginate --jq "$REPO_JQ" 2>/dev/null || true)"
-  fi
-  # Slurp streamed objects into a single array; fall back to [] on any jq error
+
+  # Bounded, spinner-backed fetch (see fetch_org_repos). Big orgs no longer
+  # block on hundreds of silent --paginate calls.
+  REPO_LIST_RAW="$(run_with_spinner "Fetching repos from $GITHUB_ORG (most recent first)…" \
+    fetch_org_repos "$GITHUB_ORG" "$IS_ORG" "$REPO_JQ")"
   if [ -n "$REPO_LIST_RAW" ]; then
     REPO_LIST="$(echo "$REPO_LIST_RAW" | jq -s '.' 2>/dev/null || echo '[]')"
   else
@@ -310,32 +353,109 @@ if [ "$IS_NEW_PROJECT" = "0" ]; then
 
   COUNT="$(echo "$REPO_LIST" | jq 'length' | head -1 | tr -d '[:space:]')"
   [ -z "$COUNT" ] && COUNT=0
+
+  # Read repo fields into parallel arrays (bash 3.2 compatible — no mapfile).
+  REPO_NAMES=(); REPO_BRANCHES=(); REPO_DESCS=()
   if [ "$COUNT" -gt 0 ] 2>/dev/null; then
-    echo
-    info "Which other repos should Egregore manage? (enter comma-separated numbers, or Enter for none)"
-    # Portable: read into arrays without mapfile (bash 3.2 compat)
-    REPO_NAMES=(); REPO_BRANCHES=(); REPO_DESCS=()
     while IFS= read -r line; do REPO_NAMES+=("$line"); done < <(echo "$REPO_LIST" | jq -r '.[].name')
     while IFS= read -r line; do REPO_BRANCHES+=("$line"); done < <(echo "$REPO_LIST" | jq -r '.[].default_branch')
     while IFS= read -r line; do REPO_DESCS+=("$line"); done < <(echo "$REPO_LIST" | jq -r '.[].description')
-    for i in "${!REPO_NAMES[@]}"; do
-      d="${REPO_DESCS[$i]}"
-      [ -n "$d" ] && d=" — $(dim "$d")"
-      printf "  %2d) %s%s\n" "$((i + 1))" "${REPO_NAMES[$i]}" "$d"
-    done
-    PICKS="$(prompt "Numbers")"
-    if [ -n "$PICKS" ]; then
+  fi
+
+  ok "Found $COUNT repo$([ "$COUNT" = "1" ] || echo s)"
+  if [ "$COUNT" -ge $((MAX_REPO_PAGES * 100)) ]; then
+    info "$(dim "Showing the $COUNT most recently updated. To manage an older repo, just type its name.")"
+  fi
+
+  # Already-selected check (keeps the loop idempotent across rounds).
+  repo_already_selected() {
+    echo "$SELECTED_REPOS_JSON" | jq -e --arg n "$1" 'any(.[]; .name == $n)' >/dev/null 2>&1
+  }
+  add_selected_repo() {
+    SELECTED_REPOS_JSON="$(echo "$SELECTED_REPOS_JSON" \
+      | jq --arg name "$1" --arg branch "${2:-main}" '. += [{name: $name, base_branch: $branch}]')"
+  }
+
+  DISPLAY_CAP=40
+  if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+    echo
+    info "Add repos to manage. You can do this in rounds; press Enter alone when done."
+    # Selection loop: each round optionally filters by a search term, lists up
+    # to DISPLAY_CAP matches, and accepts comma-separated numbers and/or repo
+    # names (names reach repos beyond the listed window).
+    while true; do
+      VIEW_IDX=()
+      TERM=""
+      if [ "$COUNT" -gt "$DISPLAY_CAP" ]; then
+        TERM="$(prompt "Search repos by name (Enter to list the $DISPLAY_CAP most recent)")"
+      fi
+      TERM_LC="$(echo "$TERM" | tr '[:upper:]' '[:lower:]')"
+      shown=0
+      for i in "${!REPO_NAMES[@]}"; do
+        if [ -n "$TERM_LC" ]; then
+          name_lc="$(echo "${REPO_NAMES[$i]}" | tr '[:upper:]' '[:lower:]')"
+          case "$name_lc" in *"$TERM_LC"*) ;; *) continue ;; esac
+        fi
+        VIEW_IDX+=("$i")
+        shown=$((shown + 1))
+        [ "$shown" -ge "$DISPLAY_CAP" ] && break
+      done
+
+      if [ "${#VIEW_IDX[@]}" -eq 0 ]; then
+        if [ -n "$TERM" ]; then
+          warn "No repos match \"$TERM\" in the fetched list — type the exact name to add it anyway."
+        fi
+      else
+        echo
+        disp=1
+        for i in "${VIEW_IDX[@]}"; do
+          d="${REPO_DESCS[$i]}"
+          [ -n "$d" ] && d=" — $(dim "$d")"
+          mark=" "
+          repo_already_selected "${REPO_NAMES[$i]}" && mark="$(color 32 '✓')"
+          printf "  %s %2d) %s%s\n" "$mark" "$disp" "${REPO_NAMES[$i]}" "$d"
+          disp=$((disp + 1))
+        done
+        [ "$shown" -ge "$DISPLAY_CAP" ] && info "$(dim "(showing first $DISPLAY_CAP — refine your search to narrow)")"
+      fi
+
+      echo
+      PICKS="$(prompt "Numbers and/or repo names (comma-separated; Enter to finish)")"
+      [ -z "$PICKS" ] && break
+
       IFS=',' read -ra PICK_ARR <<< "$PICKS"
       for raw in "${PICK_ARR[@]}"; do
-        n="$(echo "$raw" | xargs)"
-        [[ ! "$n" =~ ^[0-9]+$ ]] && continue
-        [ "$n" -lt 1 ] || [ "$n" -gt "${#REPO_NAMES[@]}" ] && continue
-        idx=$((n - 1))
-        SELECTED_REPOS_JSON="$(echo "$SELECTED_REPOS_JSON" \
-          | jq --arg name "${REPO_NAMES[$idx]}" --arg branch "${REPO_BRANCHES[$idx]}" \
-            '. += [{name: $name, base_branch: $branch}]')"
+        tok="$(echo "$raw" | xargs)"
+        [ -z "$tok" ] && continue
+        sel_name=""; sel_branch=""
+        if [[ "$tok" =~ ^[0-9]+$ ]]; then
+          if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#VIEW_IDX[@]}" ]; then
+            warn "Ignoring out-of-range #$tok"
+            continue
+          fi
+          idx="${VIEW_IDX[$((tok - 1))]}"
+          sel_name="${REPO_NAMES[$idx]}"
+          sel_branch="${REPO_BRANCHES[$idx]}"
+        else
+          sel_name="$tok"
+          # Validate a typed name against GitHub so a typo doesn't add a ghost repo.
+          sel_branch="$(gh api "repos/$GITHUB_ORG/$sel_name" --jq '.default_branch // "main"' 2>/dev/null || true)"
+          if [ -z "$sel_branch" ]; then
+            warn "No repo $GITHUB_ORG/$sel_name — skipping"
+            continue
+          fi
+        fi
+        if repo_already_selected "$sel_name"; then
+          info "$(dim "$sel_name already added")"
+          continue
+        fi
+        add_selected_repo "$sel_name" "$sel_branch"
+        ok "Added $sel_name"
       done
-    fi
+
+      SOFAR="$(echo "$SELECTED_REPOS_JSON" | jq 'length')"
+      info "$(bold "$SOFAR") selected so far."
+    done
   else
     info "No existing repos found under $GITHUB_ORG (or all are archived/memory repos)."
     info "Continuing — you can add managed repos later by editing egregore.json."
@@ -831,18 +951,35 @@ fi
 step "Shell alias"
 install_shell_alias "$EGREGORE_DIR" "$SLUG"
 
-# ── Optional teammate invite ───────────────────────────────────────
+# ── Optional teammate invites (loop — add as many as you like) ─────
 
-step "Invite a teammate"
+step "Invite teammates"
 
-INV_USER="$(prompt "Teammate's GitHub username (Enter to skip)")"
-if [ -n "$INV_USER" ]; then
-  invite_to_repo() {
-    local repo="$1" username="$2"
-    gh api --method PUT "repos/$GITHUB_ORG/$repo/collaborators/$username" -f permission=push >/dev/null 2>&1 \
-      && ok "Invited $username → $repo" \
-      || warn "Could not invite $username to $repo"
-  }
+invite_to_repo() {
+  local repo="$1" username="$2"
+  gh api --method PUT "repos/$GITHUB_ORG/$repo/collaborators/$username" -f permission=push >/dev/null 2>&1 \
+    && ok "Invited $username → $repo" \
+    || warn "Could not invite $username to $repo"
+}
+
+INVITED_USERS=()
+while true; do
+  if [ "${#INVITED_USERS[@]}" -eq 0 ]; then
+    INV_USER="$(prompt "Teammate's GitHub username (Enter to skip)")"
+  else
+    INV_USER="$(prompt "Another teammate's GitHub username (Enter to finish)")"
+  fi
+  INV_USER="$(echo "$INV_USER" | xargs)"
+  [ -z "$INV_USER" ] && break
+
+  # Skip anyone already invited this run.
+  already=0
+  for u in "${INVITED_USERS[@]}"; do [ "$u" = "$INV_USER" ] && already=1 && break; done
+  if [ "$already" = "1" ]; then
+    info "$(dim "$INV_USER already invited")"
+    continue
+  fi
+
   invite_to_repo "$REPO_NAME" "$INV_USER"
   invite_to_repo "$MEMORY_REPO_NAME" "$INV_USER"
   if [ "$MANAGED_COUNT" -gt 0 ]; then
@@ -866,8 +1003,12 @@ EOF
     git -C "$MEMORY_DIR" commit -m "Invite $INV_USER" >/dev/null 2>&1 || true
     git -C "$MEMORY_DIR" push >/dev/null 2>&1 || true
   fi
+  INVITED_USERS+=("$INV_USER")
+done
+
+if [ "${#INVITED_USERS[@]}" -gt 0 ]; then
   echo
-  info "Tell $INV_USER to run either:"
+  info "Tell your $([ "${#INVITED_USERS[@]}" = "1" ] && echo teammate || echo teammates) ($(IFS=', '; echo "${INVITED_USERS[*]}")) to run either:"
   info "  $(bold "curl -sLO https://raw.githubusercontent.com/egregore-labs/egregore/main/bin/join-gh.sh && bash join-gh.sh $GITHUB_ORG/$REPO_NAME")"
   info "  $(bold "npx -y create-egregore@latest join $GITHUB_ORG/$REPO_NAME")"
   info "Both accept the invite, clone core + memory + managed repos as siblings,"

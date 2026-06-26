@@ -134,7 +134,7 @@ DASHBOARD_URL=$(echo "$_DB_PUBLISH_OUT" | grep -o 'https://[^ ]*' | tail -1)
 if [ -z "$DASHBOARD_URL" ]; then
   _DB_HTML="/tmp/egregore-artifacts/dashboard-${EGREGORE_SESSION_ID}.html"
   mkdir -p /tmp/egregore-artifacts
-  if npx egregore-artifacts document "$_DB_MD" --output "$_DB_HTML" --no-open >/dev/null 2>&1 && [ -f "$_DB_HTML" ]; then
+  if npx egregore-artifacts@latest document "$_DB_MD" --output "$_DB_HTML" --no-open >/dev/null 2>&1 && [ -f "$_DB_HTML" ]; then
     DASHBOARD_URL="file://${_DB_HTML}"
   fi
 fi

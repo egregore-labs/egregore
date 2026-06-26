@@ -69,17 +69,17 @@ find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort 
 
 For typed artifacts with a file:
 ```bash
-npx egregore-artifacts <type> <resolved-file-path>
+npx egregore-artifacts@latest <type> <resolved-file-path>
 ```
 
 For auto-detected (just a file path):
 ```bash
-npx egregore-artifacts <resolved-file-path>
+npx egregore-artifacts@latest <resolved-file-path>
 ```
 
 For activity (no file):
 ```bash
-npx egregore-artifacts activity
+npx egregore-artifacts@latest activity
 ```
 
 **For board (connected mode only — publish to stable URL):**
@@ -141,7 +141,7 @@ When the input is a prompt or topic rather than a file name — or when file res
 
 1. **Read relevant files** — search memory/, codebase, and conversation context for material matching the prompt. Read as many files as needed.
 2. **Write a temporary markdown file** — synthesize the findings into a well-structured document at `/tmp/egregore-artifacts/synthesized-{slug}.md`. Use headings, lists, code blocks — the renderer handles all standard markdown.
-3. **Render it** — `npx egregore-artifacts document /tmp/egregore-artifacts/synthesized-{slug}.md`
+3. **Render it** — `npx egregore-artifacts@latest document /tmp/egregore-artifacts/synthesized-{slug}.md`
 4. **Report** — same as normal: `✓ Artifact opened in browser`
 
 This is the default fallback — don't ask the user if they want synthesis. If `/view auth architecture` doesn't match a file, just do the research and render it.
