@@ -109,7 +109,7 @@ else
       exit 0
     fi
   else
-    if ! npx egregore-artifacts "${RENDER_ARGS[@]}" >/dev/null 2>&1; then
+    if ! npx egregore-artifacts@latest "${RENDER_ARGS[@]}" >/dev/null 2>&1; then
       exit 0
     fi
   fi
