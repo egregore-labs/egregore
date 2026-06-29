@@ -8,6 +8,8 @@ Not this: casual question → just answer · survey/form → different tool · u
 
 Arguments: $ARGUMENTS (Optional: [topic] [--respondents name1,name2] [--seed path])
 
+**Rendered surface:** `/harvest` is the only command. When a round's findings are decision-shaped (each a real fork with 2–4 distinct options), `/harvest` renders them as an interactive Meridian **decision surface** the respondent decides *on* and pastes back, instead of asking inline. *Decision surface* is the rendered format `/harvest` produces — not a separate command. See the rendered-surface section below.
+
 ## What to do
 
 **This command is a thin entry point.** The intelligence lives in `skills/harvest/SKILL.md`. Load and apply it.
@@ -123,6 +125,40 @@ Footer varies based on graph availability:
 ### Self-harvest (solo)
 
 When someone runs `/harvest` alone or on themselves — "I need to think through my position on X" — skip cascade logic. The model interviews them directly, goes deep, and produces a structured artifact of their thinking. Same process, one respondent.
+
+### Decision surface — harvest's rendered mode
+
+`/harvest` is the only command. When a round's findings are **decision-shaped** — each a real fork with 2–4 distinct options — render them as an interactive Meridian **decision surface** (the rendered format) instead of asking inline. The respondent decides *on* the page — clicking an option per card, noting reasoning — and hits **copy decisions**, which emits a stable paste-back block:
+
+```
+#{slug}-decisions:v1
+surface: {surface_id}
+harvest: {harvest_id}      # directed surfaces only
+date: {YYYY-MM-DD}
+
+Q1 {decision-id}: {option-key}  ("{label}")
+   note: {reasoning}
+Q2 {decision-id}: UNDECIDED
+```
+
+**Design the surface strategically — this is where harvest's craft shows.** A flat verdict form wastes the surface. Instead:
+- A card earns its place only as a genuine fork (≥3 interrelated forks → a surface; 1–2 quick choices → ask inline).
+- Each option carries a structural **visual** of what it *means* (mono mock / diagram / badges), honest `+/−` tradeoffs (every option needs ≥1 real minus — an option with no minus is propaganda), and at most one recommendation that's a position to push on.
+- **Order for cascade**: open with the choice that frames the rest; let later cards build on earlier ones. Surface the real tension instead of flattening it — the goal is to extract sharp judgment and its *why* (the note rides back), not collect a checklist.
+
+**Render** the data model (JSON) — see `packages/egregore-artifacts/lib/parsers/decision-surface.js` for the shape:
+```bash
+node packages/egregore-artifacts/bin/cli.js decision-surface {surface}.json --output {out}.html
+# published form (post-publish): npx egregore-artifacts decision-surface {surface}.json
+```
+Renderer type: `decision-surface` (meridian-locked). Visuals use a **safe structured schema** (`mono`/`badges`/`diagram`) — never raw HTML/SVG, since directed surfaces are sent to others.
+
+- **Self** (no `--to`): render, open locally, fill, paste back into this session.
+- **Directed** (`--to <name>`): render + publish, deliver the link via `/ask` with the async-harvest frontmatter (`harvest_id`, `harvest_session_id`, `context_mode`); mark the HarvestSession `pending`.
+
+**Absorb on `--resume`:** re-key the pasted block by `surface`/`harvest`, record each choice as a `HarvestTurn` answer (the `note` is the rationale), apply the resolved decisions to `source`, log to `memory/knowledge/decisions/` if others will build on them, then synthesize. `UNDECIDED` lines stay open — never force a pick.
+
+The block is the **transport-agnostic return contract**: `/harvest --resume` absorbs it today; an emissary response (`kind: decision`) will carry the identical payload for people without egregore (designed, not built — AUDIT §14).
 
 ### Async harvest (multi-person, not all present)
 

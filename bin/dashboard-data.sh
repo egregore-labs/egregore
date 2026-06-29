@@ -44,12 +44,16 @@ SESSION_ID=$(cat "$HOME/.egregore/session-${PROJ_HASH}.id" 2>/dev/null || echo "
   if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
     GRAPH_REASON="missing_config"
   else
+    # Keep curl's transport status separate from %{http_code}; otherwise a
+    # failed request can concatenate 000 + fallback text and look like an
+    # unexpected API response.
+    CURL_STATUS=0
     HTTP_CODE=$(curl -s -o "$TMPDIR/dashboard_raw.json" -w "%{http_code}" \
       "${API_URL}/api/personal/dashboard?github_username=$(printf '%s' "$GH_USER" | jq -sRr @uri)&time_range=$(printf '%s' "$TIME_RANGE" | jq -sRr @uri)&session_id=$(printf '%s' "$SESSION_ID" | jq -sRr @uri)" \
       -H "Authorization: Bearer $API_KEY" \
-      --connect-timeout 5 --max-time 15 2>/dev/null || echo "000")
+      --connect-timeout 5 --max-time 15 2>/dev/null) || CURL_STATUS=$?
 
-    if [ "$HTTP_CODE" = "000" ]; then
+    if [ "$CURL_STATUS" -ne 0 ] || [ "$HTTP_CODE" = "000" ] || ! [[ "$HTTP_CODE" =~ ^[0-9][0-9][0-9]$ ]]; then
       GRAPH_REASON="unreachable"
     elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
       GRAPH_REASON="auth_error"

@@ -5,7 +5,7 @@
     {
       "section": "(intro)",
       "action": "replace",
-      "sourceHash": "3992e3abfcdd",
+      "sourceHash": "a33ca691aacf",
       "note": "Reframed for Codex: names AGENTS.md as the delivery surface and the manifest; \"organizations using Claude Code\" generalized."
     },
     {
@@ -23,7 +23,7 @@
     {
       "section": "After Greeting — BRANCH ON FIRST RESPONSE",
       "action": "replace",
-      "sourceHash": "09c2618759bd",
+      "sourceHash": "c71340e68c9e",
       "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout kept verbatim (pure git)."
     },
     {

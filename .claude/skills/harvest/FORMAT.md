@@ -157,7 +157,7 @@ modalities. They compose; sections pick whichever fit.
 | **quote** | Verbatim words from a respondent, attributed by handle | Distinctive framing, strong conviction, language worth carrying as-is |
 | **context** | What the synthesizer brings to make the quote legible — background, what was happening before, what assumption the respondent was responding to | When the quote is sharp but its meaning depends on context the reader may not have |
 | **reflection** | Interpretation: what this position *does* to the broader picture; what mental model it implies | When a position has implications beyond what the respondent said directly |
-| **decision surface** | A concrete choice or commitment a respondent named, or a choice a divergence implies | When the harvest produced something actionable; *not* the same as a recommendation — it surfaces the choice without forcing its resolution |
+| **decision surface** | A concrete choice or commitment a respondent named, or a choice a divergence implies. **Has a rendered form**: when decisions are forks with 2–4 distinct options, `/harvest` emits them as an interactive Meridian *decision surface* the respondent decides *on* and pastes back, rather than prose to read | When the harvest produced something actionable; *not* the same as a recommendation — it surfaces the choice without forcing its resolution |
 | **open question** | An unresolved tension, ambiguity, or follow-up worth a future harvest | When the harvest opened more than it closed; explicitly named so it doesn't get lost |
 | **pattern** | A knowledge / action / antipattern the harvest extracted, ready for `/reflect` to consume | When a finding generalizes — not just *"Oz said X"*, but *"the pattern is Y, evidenced by X"* |
 
@@ -178,7 +178,14 @@ modalities are a palette, not a checklist.
   *"this implies..."*, *"the move underneath this is..."* — never
   attribute interpretation back to the respondent.
 - `decision surface` — describe the choice, not which side to pick
-  (unless a respondent named the side themselves).
+  (unless a respondent named the side themselves). **Rendered form:**
+  when ≥3 interrelated forks each have 2–4 distinct options, `/harvest`
+  renders them as an interactive *decision surface* instead of prose.
+  Each option carries a structural *visual*, honest `+/−` tradeoffs,
+  and at most one recommendation; the respondent's pasted choices
+  (`#{slug}-decisions:v1`) are absorbed on `--resume`. Shape + render:
+  harvest's rendered-surface section (SKILL.md) and
+  `packages/egregore-artifacts` (`decision-surface` type).
 - `open question` — phrase as a question or as *"unresolved: …"*.
 - `pattern` — name the pattern type (knowledge / action /
   antipattern) and cite the turn(s) it was extracted from.

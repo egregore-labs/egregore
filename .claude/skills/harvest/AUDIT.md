@@ -460,3 +460,99 @@ remains as the empirical proof the rebuild reproduces the gold fixtures.
 The Olivier and Oz harvests are the bar. The product already knows what
 good looks like; the rebuild is making the command reliably reproduce it
 without the operator carrying the form.
+
+---
+
+## 14. Decision surface — rendered mode + round-trip
+
+The `decision surface` modality (§8, FORMAT.md) gained a **rendered, fillable
+form**. `/harvest` is the only command: when its findings are decision-shaped, it
+renders them as a *decision surface* — the rendered format/artifact the respondent
+decides on and pastes back. *Decision surface* names the **format**, not a command;
+there is no `/decision-surface` command (everything merges into `/harvest` — one
+verb, one grammar).
+
+**Resolution** — matches the original directed-vs-self intent:
+- Invoked on yourself (no `--to`) → **self-harvest**, rendered: surface your own
+  decisions, fill, paste back into the session.
+- Sent to someone (`--to <name>`) → **directed harvest**: render + deliver; their
+  filled-in choices return as the answer.
+
+### Renderer
+
+`decision-surface` is a first-class artifact type in `packages/egregore-artifacts`
+(`lib/parsers/decision-surface.js`, `lib/templates/decision-surface.js`, registered
+in `lib/index.js`; `decision-surface` added to `bin/cli.js` known types). It renders
+the data model — `decisions[] → {id, title, context, options[{key, label, visual,
+tradeoffs[{t,text}], recommended}]}` — as an interactive surface: option cards, a
+structural visual per option, honest `+/−` tradeoffs, at most one recommendation,
+selection state, a progress bar, and a copy-back button. Locked to the **meridian**
+palette by the design-system route. Styled with **role tokens only** (`--t1` decided,
+`--t2` plus, `--t3` minus, `--ink/--paper/--line/--card`) — dark-mode-safe, no
+resolved hex. The output is fully self-contained (CSS + behavior inlined): fillable
+from a file, a published URL, or embedded in an emissary, with **no egregore runtime
+needed to fill it** — only to absorb.
+
+### Round-trip — the return contract
+
+The paste-back block is the **transport-agnostic return contract**:
+
+```
+#{slug}-decisions:v1
+surface: {surface_id}
+harvest: {harvest_id}      # directed surfaces only — re-keys to the HarvestSession
+source: {source}
+date: {YYYY-MM-DD}
+
+Q1 {decision-id}: {option-key}  ("{label}")
+   note: {reasoning}
+Q2 {decision-id}: UNDECIDED
+```
+
+This is the same shape already in field use (`#…-decisions:v1`). It self-identifies
+the surface/harvest it answers, so it re-keys deterministically over *any* channel.
+On `--resume`: re-key, record each choice as a `HarvestTurn` answer (`note` = the
+rationale), apply resolved decisions to `source`, log to
+`memory/knowledge/decisions/` if others will build on them, synthesize. `UNDECIDED`
+stays open — never forced.
+
+### Two transports — one payload
+
+| Transport | For | Status |
+|---|---|---|
+| **Copy-back → harvest channel** | egregore users, local-first | **Built.** Block returns via `/ask`→`/answer`→`/harvest --resume`. Works offline; no server. |
+| **Emissary respond (`kind: decision`)** | people **without** egregore who want to pass surfaces back and forth | **Designed, not built.** Carries the *identical* paste-back payload as an emissary response (`packages/egregore-emissary` `respond`, threaded via `parents`). Because the surface and the return contract are transport-agnostic, this is a delivery/return swap — **no renderer rework**. |
+
+**Invariant — transport-neutral:** the renderer and the return contract must stay
+transport-neutral. A change that couples the surface or the paste-back block to the
+harvest channel specifically (rather than to the abstract "selections + notes,
+re-keyed by surface/harvest") breaks the deferred emissary path and must be rejected.
+
+**Invariant — no author markup:** a directed surface is published and sent to other
+people, so the renderer must never inject author-supplied HTML/SVG. Visuals use a
+closed, structured schema (`mono` token spans, `badges`, `diagram` primitives)
+rendered as escaped React elements with allowlisted tones — no `dangerouslySetInnerHTML`
+for any data-derived content. The only `dangerouslySetInnerHTML` permitted is the
+static CSS/behavior strings and the config object (`JSON.stringify`, with every
+`<` escaped to its unicode form so a malicious value can't break out of the
+`</script>` tag), whose values are only ever written back via `textContent`.
+Re-introducing a raw-HTML/SVG visual path is a security regression and must be
+rejected.
+
+### Rollout (this change)
+
+1. ✓ `decision-surface` renderer added to `packages/egregore-artifacts` (parser,
+   template, index + CLI registration), role-token / dark-mode-safe, meridian-locked.
+2. ✓ Verified end-to-end (object + JSON-file + markdown-embedded paths) and
+   screenshotted in light + dark.
+3. ✓ Rendered-surface mode folded into `/harvest` SKILL.md (the only command;
+   `decision surface` is the rendered format, not a command — no
+   `/decision-surface` command).
+4. ✓ `SKILL.md` + `FORMAT.md` updated: rendered mode, absorb-on-resume,
+   strategic surface-design guidance, promoted modality.
+5. ◻ **Deferred:** emissary `kind: decision` + `respond` extension for the
+   non-egregore transport.
+6. ◻ **Deferred:** publish `egregore-artifacts` with the new type so
+   `npx egregore-artifacts decision-surface` resolves (prototype renders via the
+   local package). This is a framework change — land it via `/contribute`, not a
+   local edit, before relying on the published path.
