@@ -36,13 +36,16 @@ EMPTY='{"fields":[],"values":[]}'
   if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
     GRAPH_REASON="missing_config"
   else
-    # Store HTTP status code alongside response body
+    # Store HTTP status code alongside response body. curl already emits 000
+    # on transport failure; keep the exit status separate so it cannot become
+    # 000000 and fall through as an invalid JSON response.
+    CURL_STATUS=0
     HTTP_CODE=$(curl -s -o "$TMPDIR/activity_raw.json" -w "%{http_code}" \
       "${API_URL}/api/activity/dashboard?github_username=$(printf '%s' "$GH_USER" | jq -sRr @uri)" \
       -H "Authorization: Bearer $API_KEY" \
-      --connect-timeout 5 --max-time 15 2>/dev/null || echo "000")
+      --connect-timeout 5 --max-time 15 2>/dev/null) || CURL_STATUS=$?
 
-    if [ "$HTTP_CODE" = "000" ]; then
+    if [ "$CURL_STATUS" -ne 0 ] || [ "$HTTP_CODE" = "000" ] || ! [[ "$HTTP_CODE" =~ ^[0-9][0-9][0-9]$ ]]; then
       GRAPH_REASON="unreachable"
     elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
       GRAPH_REASON="auth_error"

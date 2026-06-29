@@ -37,6 +37,64 @@ const MANIFEST = path.join(ROOT, '.codex', 'spec-manifest.json');
 const BEGIN = '<!-- BEGIN GENERATED EGREGORE CODEX SPEC — derived from CLAUDE.md by bin/codex-render-spec.mjs; do not edit by hand -->';
 const END = '<!-- END GENERATED EGREGORE CODEX SPEC -->';
 
+// Hand-authored top of AGENTS.md, owned by this script so it can never be lost
+// on regeneration. Opens with the runtime-precedence guard: Claude Code reads
+// CLAUDE.md (and now loads root AGENTS.md automatically), so the first thing it
+// must see here is an instruction to defer. Codex / shell-only agents read past
+// the guard into the thin protocol and the generated spec below.
+const AGENTS_PREAMBLE = `# Egregore Agent Protocol
+
+> **Runtime precedence — read this first.**
+>
+> **If you are Claude Code** (or any agent that loads \`.claude/\`): **stop here.**
+> Your authoritative instructions are \`CLAUDE.md\` and \`.claude/\`. Follow the
+> SessionStart greeting and the branch-on-first-message rule there. Do **not**
+> follow the startup steps below and do **not** use \`bin/agent.sh\` for work an
+> Egregore skill already covers. This file exists only for runtimes that cannot
+> read \`CLAUDE.md\`.
+>
+> **If you are Codex or another shell-only agent:** this file is yours — continue.
+
+Egregore is no longer only a Claude Code workspace. Claude Code remains the
+first-class integrated runtime through \`.claude/\` and \`CLAUDE.md\`; any other
+agent that can run shell commands in this checkout participates through the
+portable memory protocol below.
+
+## Startup
+
+1. Read \`egregore.json\` for the instance name, GitHub owner, and managed repos.
+2. Run \`bin/agent.sh sync\` to pull the latest shared memory.
+3. Read \`memory/people/\` to learn collaborator handles.
+4. Run \`bin/agent.sh activity --for <your-handle>\` to inspect handoffs and
+   pending questions addressed to you.
+
+## Communication
+
+Use the runtime-neutral bridge instead of Claude Code slash commands:
+
+\`\`\`bash
+bin/agent.sh handoff --from alice --to bob --topic "auth review" \\
+  --body "Implemented the OAuth callback parser. Bob should review error cases."
+
+bin/agent.sh ask --from bob --to alice --topic "auth review" \\
+  --question "Should invalid state redirect to login or return 400?"
+
+bin/agent.sh answer --from alice \\
+  --question memory/knowledge/questions/2026-04-26-bob-to-alice-auth-review.md \\
+  --body "Return 400 in the API path; redirect only in browser routes."
+\`\`\`
+
+Each command writes to the existing Git-backed \`memory/\` repository and pushes
+when the memory repo has an \`origin\` remote. Agents that cannot run shell may
+write the same markdown files directly, following \`docs/AGENT-PROTOCOL.md\`.
+
+## Compatibility
+
+Claude Code users continue using \`/handoff\`, \`/activity\`, \`/ask\`, \`/save\`, and
+other skills — driven by \`CLAUDE.md\`, not this file. Non-Claude agents use
+\`bin/agent.sh\` and the file protocol, with the full Codex behavioral spec in the
+generated block below. Both paths converge on the same \`memory/\` files.`;
+
 function sha(text) {
   return crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
 }
@@ -271,13 +329,12 @@ function render() {
   return { block, manifest };
 }
 
-function spliceAgentsMd(agentsMd, block) {
-  const beginIdx = agentsMd.indexOf(BEGIN);
-  const endIdx = agentsMd.indexOf(END);
-  if (beginIdx !== -1 && endIdx !== -1) {
-    return agentsMd.slice(0, beginIdx) + block + agentsMd.slice(endIdx + END.length);
-  }
-  return `${agentsMd.replace(/\n+$/, '')}\n\n${block}\n`;
+// AGENTS.md is fully owned by this script: the guard preamble plus the generated
+// spec block. Reconstructing it deterministically (rather than splicing into the
+// existing file) guarantees the runtime-precedence guard is always present and
+// correct — it cannot be stripped by an upstream sync or a hand edit.
+function assembleAgentsMd(block) {
+  return `${AGENTS_PREAMBLE.trim()}\n\n${block}\n`;
 }
 
 const check = process.argv.includes('--check');
@@ -285,7 +342,7 @@ const { block, manifest } = render();
 const manifestJson = `${JSON.stringify({ generatedBy: 'bin/codex-render-spec.mjs', source: 'CLAUDE.md', sections: manifest }, null, 2)}\n`;
 
 const currentAgents = fs.existsSync(AGENTS_MD) ? fs.readFileSync(AGENTS_MD, 'utf-8') : '';
-const nextAgents = spliceAgentsMd(currentAgents, block);
+const nextAgents = assembleAgentsMd(block);
 
 const CODEX_DOC_BUDGET = 32 * 1024;
 if (Buffer.byteLength(nextAgents, 'utf-8') > CODEX_DOC_BUDGET) {
