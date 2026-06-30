@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  A shared intelligence layer for teams using Claude Code.
+  An agentic operating system for organizations.
 </p>
 
 <p align="center">
