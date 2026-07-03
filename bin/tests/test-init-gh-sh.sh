@@ -64,9 +64,9 @@ grep -q '^set -euo pipefail$' "$INIT" \
   && pass "never sources .env (per project convention)" \
   || fail "sources .env — use grep|cut per bin/ convention"
 
-! grep -q '…' "$INIT" \
-  && pass "no Unicode ellipsis (bash 3.2 parser issue)" \
-  || fail "Unicode ellipsis present — bash 3.2 may include bytes in identifiers"
+/bin/bash -n "$INIT" 2>/dev/null \
+  && pass "Unicode UI text is parser-safe" \
+  || fail "Unicode UI text breaks bash parsing"
 
 # ── Origin URL regex coverage ─────────────────────────────────────
 
@@ -272,7 +272,7 @@ grep -q 'gh auth refresh' "$INIT" \
   && pass "invitee instructions don't reference unimplemented --join" \
   || fail "invitee instructions still reference --join (not implemented)"
 
-grep -q 'npx create-egregore join' "$INIT" \
+grep -q 'npx -y create-egregore@latest join' "$INIT" \
   && pass "invitee instructions reference working npx join path" \
   || fail "invitee instructions missing working join path"
 
