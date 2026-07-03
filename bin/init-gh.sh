@@ -114,8 +114,10 @@ run_with_spinner() {
 # page's raw JSON is fetched ONCE and filtered locally — no double requests.
 MAX_REPO_PAGES=5   # 5 × 100 = up to 500 most-recently-updated repos
 fetch_org_repos() {
-  local owner="$1" is_org="$2" jqf="$3" base page=1 raw n
-  if [ "$is_org" = "1" ]; then
+  local owner="$1" is_org="$2" jqf="$3" team="${4:-}" base page=1 raw n
+  if [ -n "$team" ]; then
+    base="orgs/$owner/teams/$team/repos?per_page=100"
+  elif [ "$is_org" = "1" ]; then
     base="orgs/$owner/repos?per_page=100&sort=updated&type=all"
   else
     base="users/$owner/repos?per_page=100&sort=updated&type=owner"
@@ -165,8 +167,10 @@ for tool in git gh jq; do
 done
 ok "git, gh, jq present"
 
-# gh auth — gh auth status exits non-zero when not logged in
-if ! gh auth status >/dev/null 2>&1; then
+# gh auth — check the ACTIVE account's token, not `gh auth status`'s exit
+# code: on multi-account setups status exits non-zero when ANY configured
+# account has a revoked token, even though the active one is fine.
+if ! gh auth token >/dev/null 2>&1; then
   warn "gh is not authenticated."
   info "Running: gh auth login"
   echo
@@ -179,7 +183,12 @@ fi
 # Check required scopes upfront so we fail fast with a clear fix, not deep in
 # the flow with an opaque 403. `repo` is always needed. `admin:org` is only
 # needed when creating under an organization — we'll re-check after owner pick.
-AUTH_STATUS="$(gh auth status 2>&1 || true)"
+# Prefer --active (gh ≥ 2.61) so stale sibling accounts don't pollute the
+# output; older gh prints "unknown flag" and we fall back to the plain form.
+AUTH_STATUS="$(gh auth status --active 2>&1 || true)"
+case "$AUTH_STATUS" in
+  *"unknown flag"*|"") AUTH_STATUS="$(gh auth status 2>&1 || true)" ;;
+esac
 # Extract the scopes line (format: "  - Token scopes: 'scope1', 'scope2', ...")
 SCOPES_LINE="$(echo "$AUTH_STATUS" | grep -i "Token scopes" | head -1 || true)"
 has_scope() { echo "$SCOPES_LINE" | grep -q "'$1'"; }
@@ -336,10 +345,36 @@ if [ "$IS_NEW_PROJECT" = "0" ]; then
 
   REPO_JQ='.[] | select(.archived | not) | select(.name | test("-memory$") | not) | select(.name != "egregore" and .name != "egregore-core") | {name: .name, description: (.description // ""), default_branch: (.default_branch // "main")}'
 
+  # Team narrowing: the org-wide listing is capped at the 500 most recently
+  # updated repos, so in a big org a team's repos can be unreachable from the
+  # picker. Offer the user's teams in this org as a narrower scope.
+  TEAM_SLUG=""
+  if [ "$IS_ORG" = "1" ]; then
+    TEAMS="$(run_with_spinner "Checking your teams in $GITHUB_ORG…" \
+        gh api 'user/teams?per_page=100' \
+      | jq -c --arg org "$GITHUB_ORG" \
+          '[.[] | select((.organization.login // "") | ascii_downcase == ($org | ascii_downcase)) | {name, slug}]' \
+        2>/dev/null || echo '[]')"
+    TEAM_COUNT="$(echo "$TEAMS" | jq 'length' 2>/dev/null || echo 0)"
+    if [ "${TEAM_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+      echo
+      info "Narrow to one of your teams? (org-wide only shows the $((MAX_REPO_PAGES * 100)) most recent repos)"
+      echo "   0) All of $GITHUB_ORG"
+      for i in $(seq 0 $((TEAM_COUNT - 1))); do
+        printf "  %2d) %s\n" "$((i + 1))" "$(echo "$TEAMS" | jq -r ".[$i].name")"
+      done
+      TPICK="$(prompt "Choose" "0")"
+      if [[ "$TPICK" =~ ^[0-9]+$ ]] && [ "$TPICK" -ge 1 ] && [ "$TPICK" -le "$TEAM_COUNT" ]; then
+        TEAM_SLUG="$(echo "$TEAMS" | jq -r ".[$((TPICK - 1))].slug")"
+        ok "Browsing team $(bold "$(echo "$TEAMS" | jq -r ".[$((TPICK - 1))].name")")"
+      fi
+    fi
+  fi
+
   # Bounded, spinner-backed fetch (see fetch_org_repos). Big orgs no longer
   # block on hundreds of silent --paginate calls.
-  REPO_LIST_RAW="$(run_with_spinner "Fetching repos from $GITHUB_ORG (most recent first)…" \
-    fetch_org_repos "$GITHUB_ORG" "$IS_ORG" "$REPO_JQ")"
+  REPO_LIST_RAW="$(run_with_spinner "Fetching repos from ${TEAM_SLUG:-$GITHUB_ORG} (most recent first)…" \
+    fetch_org_repos "$GITHUB_ORG" "$IS_ORG" "$REPO_JQ" "$TEAM_SLUG")"
   if [ -n "$REPO_LIST_RAW" ]; then
     REPO_LIST="$(echo "$REPO_LIST_RAW" | jq -s '.' 2>/dev/null || echo '[]')"
   else
@@ -493,8 +528,18 @@ if [ "$GH_PREFIX" = "$NAME_SLUG" ]; then
 else
   SLUG="${GH_PREFIX}-${NAME_SLUG}"
 fi
-REPO_NAME="$NAME_SLUG"
-MEMORY_REPO_NAME="${NAME_SLUG}-memory"
+# Let the founder edit the derived repo names before anything is created —
+# silently derived names were a repeated field complaint.
+echo
+info "Two repos will be created in $(bold "$GITHUB_ORG"): the Egregore repo (config +"
+info "skills) and its shared-memory repo. Enter keeps the defaults."
+REPO_NAME="$(slugify "$(prompt "Egregore repo name" "$NAME_SLUG")")"
+[ -z "$REPO_NAME" ] && REPO_NAME="$NAME_SLUG"
+MEMORY_REPO_NAME="$(slugify "$(prompt "Memory repo name" "${REPO_NAME}-memory")")"
+if [ -z "$MEMORY_REPO_NAME" ] || [ "$MEMORY_REPO_NAME" = "$REPO_NAME" ]; then
+  MEMORY_REPO_NAME="${REPO_NAME}-memory"
+  info "Using $(bold "$MEMORY_REPO_NAME") for memory."
+fi
 
 # If new-project repo collides with core/memory names, force a different slug
 if [ -n "$NEW_PROJECT_REPO" ]; then

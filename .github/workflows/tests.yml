@@ -98,3 +98,33 @@ jobs:
 
       - name: Run agent protocol smoke test
         run: bash tests/test-agent-protocol.sh
+
+  # Functional gate for the npm-published renderer packages. Previously these
+  # tests ran in NO workflow — a broken egregore-artifacts could reach every
+  # `npx egregore-artifacts@latest` consumer (i.e. every /view). This job runs
+  # the suite on PRs to develop/main; release.yml runs the same gate before publish.
+  artifacts-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install egregore-artifacts deps
+        working-directory: packages/egregore-artifacts
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Re-vendor design-system (build dist + copy into the package)
+        working-directory: packages/egregore-artifacts
+        run: npm run vendor
+
+      - name: Test egregore-artifacts
+        working-directory: packages/egregore-artifacts
+        run: npm test
+
+      - name: Test design-system
+        working-directory: packages/design-system
+        run: npm test
