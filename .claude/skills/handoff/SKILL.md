@@ -9,6 +9,16 @@ Topic: $ARGUMENTS
 User says: "I'm done", "wrapping up", "leave a handoff", "pass this to [name]", "hand off", "done for now", "signing off"
 Not this: user wants to push but keep working → `/save`
 
+**Scope:** `/handoff` is the **team session-handoff** — internal recap addressed to a teammate or future-you, indexed in Neo4j, posted to Telegram, written to `memory/handoffs/`, auto-PR'd to develop. It is NOT a portable capsule.
+
+**Portable, executable capsules** — the kind you share with someone outside the team via an `egregore.xyz/emissary/e/<id>` link — live in `/emissary`. If the user pastes such a link, asks to "make/send/run an emissary", or wants capsule lifecycle (receive, reply, run), route to `/emissary` and stop. Do not handle capsules here.
+
+## Disambiguation
+
+- "Show me my handoffs" → team handoffs (`/activity`). For capsules sent externally, that's `/emissary` territory.
+- "I'm done", "wrap this up", "hand off to alice", `/handoff <topic>` → AUTHOR flow below.
+- "Let's make an emissary", "send an emissary to alice", pasted `egregore.xyz/emissary/e/<id>` → `/emissary`.
+
 ## Mode detection
 
 ```bash
@@ -159,13 +169,16 @@ Then the same "Handing off this session?" fall-through as Route A.
 
 Extract from `$ARGUMENTS`:
 - **Topic** — the thing being handed off (may include "to <person>" which you strip from the topic).
-- **Recipient** — optional, derived from "to <name>" or "for <name>". Leave empty if not specified or if the user wrote "to self".
+- **Recipient** — optional, derived from "to <name>" or "for <name>". Leave empty only if no "to" clause at all.
+
+**"to self" / "to me" / "to myself" → recipient = author handle.** These phrases mean "DM future-me the link", not "broadcast to the group". Set `--recipient` to the author handle (lowercase first word of `git config user.name`) so notify routes as a personal DM. Strip the self-phrase from the topic.
 
 Examples:
 - `auth flow to alice` → topic: `auth flow`, recipient: `alice`
 - `mcp debugging for cem to pick up` → topic: `mcp debugging`, recipient: `cem`
 - `research pipeline writeup` → topic: `research pipeline writeup`, recipient: (none)
-- `tui cleanup to self` → topic: `tui cleanup`, recipient: (none — "self" is implicit)
+- `tui cleanup to self` → topic: `tui cleanup`, recipient: `{author handle}` (DM to author)
+- `tui cleanup to myself` → topic: `tui cleanup`, recipient: `{author handle}` (DM to author)
 
 **Recipient matching:** case-insensitive against the team directory from Step 0. Match display name OR GitHub handle. Display name wins on conflict.
 
@@ -173,22 +186,42 @@ Examples:
 
 **Recipient not in the team directory** → don't burn an AskUserQuestion. Proceed without `--recipient` and note it in the final card footer: `◐ {name} not in team directory — handoff saved without direct address.`
 
-## Step 2: Draft the briefing (no tool call)
+## Step 2: COMPOSE the handoff into the house-kit — then confirm
 
-Synthesize the session into a briefing. Actively interpret — this is not a transcript. Situate the work in team context (active quests, recent handoffs, known priorities). Tell the reader what matters and why.
+A handoff renders through the **shared composer** (the same one emissaries use), so it comes out looking like a flagship artifact — the way cem's Decision Surface does — **not a wall of prose**. The beauty comes from *composing*: you read the session and **choose a component per section**. A dumb markdown→render converter can't invent structure; you can. This is the whole difference between "themed" and "beautiful."
 
-Produce (omit any section that is genuinely empty — don't ship placeholder bullets):
+You produce **two things**, both in your head:
 
-1. **Briefing** — 2–4 sentences. What happened, why it matters, how it connects.
-2. **Key Decisions** — decisions with rationale and implications.
-3. **Current State** — working / in progress / blocked.
-4. **Open Threads** — unfinished items with enough context to pick up.
-5. **Next Steps** — clear actions with entry points.
-6. **Entry Points** — specific files/commands for the next session.
+**1. The house-kit render spec — a JSON (this is the beautiful artifact).**
+```json
+{
+  "kind":"handoff", "kicker":"Handoff", "topic":"<topic>",
+  "claim":"<one line — what this handoff is>",
+  "chips":[{"text":"From <author>"},{"text":"For <recipient>"},{"text":"<date>"},{"text":"<status>","tone":"brass"}],
+  "highlights":[{"v":"<stat>","l":"<label>","tone":"teal"}],
+  "agent":{"ask":"<what the receiving agent should do>","receiverInstructions":"<optional directive>","core":[{"k":"topic","v":"..."},{"k":"ask","v":"..."},{"k":"for","v":"..."}]},
+  "repoState":[{"repo":"...","branch":"...","pr_number":0,"base":"develop"}],
+  "sections":[ { "label":"<short>", "title":"<statement>", "component":"<pick>", "...": "..." } ],
+  "tags":["<author>","<date>"]
+}
+```
 
-If `$ARGUMENTS` narrows scope, constrain the briefing to that scope; don't include unrelated threads from the session.
+**Pick the component that fits each section's SHAPE** — do NOT default to prose:
+- `claims` — a stat/outcome band → `items:[{v,l,tone}]`. Pull 2–3 key numbers/results into `highlights` (a top band) or a section.
+- `steps` — a sequence / "here's what landed" → `items:[{title,body}]` (body is markdown); `after:"<wrap-up line>"` for a trailing summary.
+- `tagcards` — decisions / disclosures / findings → `items:[{tag,tone,title,body,verdict}]` (tone: teal/brass/rose).
+- `panels` — 2–3 options/comparison → `items:[{head,tone,body,points:[...]}]`.
+- `compare` — before/after → `items:[{k:"// before",title,body,tone}]`.
+- `ledger` — Q&A → `items:[{q,a}]`.
+- `flow` — a staged loop → `items:[{tag,tone,title,body,conn}]`.
+- `pullquote` — one sharp line → `{body}`.  `note` — a caveat/aside → `{body}`.
+- `prose` — genuine narrative only → `{body}` (markdown). Use it sparingly.
 
-**This is drafted in your head**, not via a tool call. The resulting markdown is the heredoc payload to `handoff-run.sh` in Step 4.
+**2. The markdown record — the memory/grep copy** (frontmatter + the material as plain markdown). This becomes the memory file + graph index and stays greppable; the JSON is what renders.
+
+If `$ARGUMENTS` narrows scope, constrain to that scope.
+
+**Then CONFIRM before sending (the gate).** `handoff-run.sh` publishes + notifies. Show the user the composed shape — each section's label + the component you chose, plus `claim`/`ask` — and get a quick OK. If they edit, apply and re-show. (Skip only if they said "just send it".)
 
 ## Step 3: Session Artifacts — automatic
 
@@ -200,59 +233,58 @@ Local mode: skipped silently (no graph). `artifacts` in the JSON will be an empt
 
 ## Step 4: Call handoff-run.sh
 
-One bash call. Briefing content on stdin via heredoc.
+Write the house-kit JSON to a temp file, then one bash call — the markdown record on stdin, the JSON via `--composed`:
 
 ```bash
+cat > "${TMPDIR:-/tmp}/handoff-composed.json" <<'JSONEOF'
+{ ...the Step 2 house-kit render spec... }
+JSONEOF
+
 bash bin/handoff-run.sh \
   --author <lowercase-handle> \
   --topic "<topic>" \
   [--recipient <name>] \
   [--project <name>] \
+  --composed "${TMPDIR:-/tmp}/handoff-composed.json" \
   <<'HANDOFFEOF'
-# Handoff: <topic>
+---
+from: <lowercase-handle>
+addressed_to: <recipient, if any>
+date: YYYY-MM-DD
+topic: <topic>
+claim: <one line — what this handoff is>
+ask: <what the receiving agent should do>
+receiver_instructions: <optional — a directive to the receiving agent>
+---
 
-**Date**: YYYY-MM-DD
-**Author**: <Display Name>
-**To**: <recipient, if any>
-**Project**: <project, if identifiable>
+<THE MATERIAL — plain markdown, the memory/grep record. Its own `## sections`,
+its own prose. This is the record; the JSON is what renders.>
+HANDOFFEOF
+```
 
+`--composed` makes the pipeline render the **house-kit JSON** (rich components, `render_mode:custom`, never falls back to letterhead). The markdown stays the memory record + graph index. **Omit `--composed`** only for a bare recap with nothing worth composing — the markdown floor renders instead.
+
+**Fallback body (only when nothing was prepared)** — replace the material with synthesized recipe sections:
+
+```markdown
 ## Briefing
 
-<2-4 sentences>
-
-## Key Decisions
-
-- **<Decision>**: <rationale>
+<2–4 sentences>
 
 ## Current State
 
-<what's working / in progress / blocked>
-
-## Open Threads
-
-- [ ] <unfinished item with context>
+<working / in progress / blocked>
 
 ## Next Steps
 
 1. <clear action with entry point>
-
-## Entry Points
-
-For the next session, start by:
-- Reading: <specific file>
-- Running: <specific command>
-
-## Session Artifacts
-
-- <Type>: <Title> -> <path>
-HANDOFFEOF
 ```
 
-**`--author`**: lowercase handle only (see Step 0). **`**Author**:`** in the file body: display name (e.g. `Oz`).
+**`--author`**: lowercase handle only (see Step 0) — must match `from:`.
 
 **`--project`**: derive from conversation context. Omit the flag if unclear.
 
-**Omit optional body sections** (Key Decisions, Open Threads, Session Artifacts, etc.) entirely if empty.
+**Frontmatter, not `**Key**:` lines.** The constrained core (`claim`/`ask`/`receiver_instructions`) drives the agent face and MUST be frontmatter — inline `**Key**:` lines leak into the reader body. Omit `receiver_instructions` if there's no specific directive. **Do NOT hand-write `## Repo State` or `## Session Artifacts`** — `handoff-run.sh` appends both, and the renderer routes Repo State into the agent face.
 
 `handoff-run.sh` handles, in one process:
 1. File write to `memory/handoffs/YYYY-MM/DD-author-slug.md`
@@ -261,150 +293,22 @@ HANDOFFEOF
 4. Index to Neo4j via `bin/index-handoff.sh` (connected mode only — Session node, BY/HANDED_TO/ABOUT edges, auto-resolve of old `read` handoffs from this author)
 5. Memory commit + pull-rebase-push to main (in parallel with 4)
 6. Publish branded HTML artifact via `bin/publish-artifact.sh` (which also detaches a depth-1 publish of backtick-referenced `memory/**/*.md` paths)
-7. Send Telegram notification via `bin/notify.sh` — **always**, even for self-handoffs. With `--recipient` in connected mode → DM; otherwise → group (includes self-handoffs and local mode). A handoff without a Telegram beat is invisible.
+7. Send Telegram notification via `bin/notify.sh` — **always**. Routing: `--recipient` set (incl. self via "to self/me/myself" → author handle) and connected mode → DM. No recipient (bare `/handoff` with no "to" clause) → group. Local mode → group regardless. A handoff without a Telegram beat is invisible.
 8. Emit one status line to stdout, write full result to `$TMPDIR/handoff-run-result.json`
 
 ## Step 5: Render the rich card
 
-Read `$TMPDIR/handoff-run-result.json`:
+Call the deterministic renderer directly:
 
-```json
-{
-  "mode": "connected|local",
-  "file": "handoffs/YYYY-MM/DD-author-slug.md",
-  "absFile": "/absolute/path/...",
-  "sessionId": "...",
-  "resolved": 0,
-  "graphStatus": "ok|offline|skipped",
-  "memoryStatus": "ok|failed|skipped (--no-push)",
-  "notifyStatus": "sent|failed|skipped|unknown",
-  "artifactUrl": "https://...",
-  "recipient": "...",
-  "topic": "...",
-  "author": "...",
-  "subgraph": { ... },
-  "artifacts": [ {"title": "...", "type": "Decision|Finding|...", "path": "memory/..."} ]
-}
+```bash
+bash bin/render-card.sh --result "${TMPDIR:-/tmp}/handoff-run-result.json"
 ```
 
-### The box
+The renderer reads the briefing from the written handoff file's `## Briefing` section via `absFile` in the result JSON. `--briefing-file` and stdin remain supported as explicit overrides.
 
-Wrap in a ` ``` ` code fence so the chat renderer preserves monospace alignment. Outer width 72 chars. Only four line patterns:
+Output the renderer stdout VERBATIM — no reformatting, no re-drawing, no preamble, no sign-off sentence. The renderer owns degraded warnings, the fenced 72-column card, repo/artifact sections, status bits, and the link line below the fence.
 
-1. **Top**: `┌` + 70×`─` + `┐`
-2. **Separator**: `├` + 70×`─` + `┤`
-3. **Content**: `│` + 2 spaces + text + trailing spaces padding to 68 chars + `│` (70 chars between borders)
-4. **Bottom**: `└` + 70×`─` + `┘`
-
-Copy the top/separator/bottom lines verbatim — don't recount dashes each time.
-
-**Never use `&nbsp;` or other HTML entities** — this renderer doesn't convert them. Use real space characters inside the box (monospace, reliable), and plain markdown below.
-
-**Em-dashes (`—`), arrows (`→`), and other multi-byte UTF-8 characters each count as one display column** — don't double-count them.
-
-Shape (no recipient, no artifacts):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                      {Author} · {MMM DD}  │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: {topic}                                                      │
-│                                                                      │
-│  {briefing line 1, wrapped at ~64 chars}                             │
-│  {briefing line 2}                                                   │
-│  {briefing line 3}                                                   │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ {status bits joined with " · "}                                   │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-Shape (with recipient, repos, and artifacts):
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⇌ HANDOFF SENT                                      {Author} · {MMM DD}  │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: {topic}                                                      │
-│  To:    {Recipient}                                                  │
-│                                                                      │
-│  {briefing line 1}                                                   │
-│  {briefing line 2}                                                   │
-│  {briefing line 3}                                                   │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  REPOS                                                               │
-│  ◈ {repo}: {branch} → PR #{N} to {base}                              │
-│  ◈ {repo}: {branch} → {base}                                         │
-├──────────────────────────────────────────────────────────────────────┤
-│  ◉ {Type}: {Title}                                                   │
-│  ◉ {Type}: {Title}                                                   │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ {status bits}                                                     │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-**Repos section** — populate by re-reading the written handoff file's `## Repo State` table (its path is `absFile` from the JSON). Omit the section entirely if no table. PR number `—` means no open PR yet (backfill may populate later).
-
-**Artifacts section** — populate from the `artifacts` array in the result JSON (filled by Branch D of `handoff-run.sh`). Each entry: `◉ {type}: {title}`. Omit the section entirely if the array is empty.
-
-### Filling in the fields
-
-- **`{Author}`** — from `author` in JSON. Prefer the display name (from `memory/people/{handle}.md`'s `# <name>` header) if you have it; otherwise capitalize the handle (`oguzhan` → `Oguzhan`).
-- **`{MMM DD}`** — today formatted like `Apr 24`.
-- **`{topic}`** — from JSON. Truncate at 58 chars with `…` if longer.
-- **`{Recipient}`** — only if `recipient` in JSON is non-empty. Title-case.
-- **`{briefing}`** — the 2–4 sentences from Step 2, wrapped hard at ~64 chars. Use what you drafted — no need to re-read the file.
-- **Status bits** — build from JSON flags, join with ` · `:
-  - Always: `saved`
-  - If `graphStatus == "ok"`: `graphed`
-  - If `memoryStatus == "ok"`: `pushed`
-  - If `notifyStatus == "sent"` AND `recipient` non-empty: `{recipient} notified` (lowercase recipient)
-  - If `notifyStatus == "sent"` AND `recipient` empty: `group notified` (self-handoff posted to Telegram group)
-  - If `notifyStatus == "unknown"`: `{recipient} relayed to group` (DM-to-group fallback)
-  - If `artifactUrl` non-empty: `published`
-
-### Links below the box
-
-After the closing ` ``` `, render two links on one line — the hosted artifact and the local /view command:
-
-```markdown
-[view this handoff →]({artifactUrl})  ·  `/view handoff {slug}` (open locally)
-```
-
-- **Hosted link** (`[view this handoff →]({artifactUrl})`) — only include if `artifactUrl` in the JSON is non-empty. This is the branded egregore.xyz URL with OG preview.
-- **Local /view hint** (`` `/view handoff {slug}` ``) — ALWAYS include. The slug is the filename stem after `DD-{author}-`, e.g. for `memory/handoffs/2026-04/24-oguzhan-auth-refactor.md` the slug is `auth-refactor`. Extract it from the `file` field in the result JSON: strip the directory and `.md` suffix, then drop the `DD-{author}-` prefix. This lets the user open the handoff locally in the browser without copy-pasting a URL.
-
-If `artifactUrl` is empty, collapse to just the local hint:
-
-```markdown
-`/view handoff {slug}` (open locally)
-```
-
-Then, if natural, add ONE short sentence of sign-off — a human beat telling the recipient what the state is for them. Examples:
-- `Renc has the link, the WIP note, and everything else. Ready when you want to move on.`
-- `Ping me if the rebase conflicts.`
-- `Nothing needed from you — just capturing state.`
-
-Keep it to one sentence. Skip if there's nothing meaningful to add.
-
-### Padding content lines — critical
-
-Every content line is exactly 72 chars wide including borders: `│  {text}{pad to 68}│`. If a line looks visually short, it wasn't padded — fix it.
-
-### Degraded states (warnings ABOVE the box)
-
-| Flag | Render (markdown line, above the code fence) |
-|---|---|
-| `graphStatus == "offline"` in connected mode | `⚠ graph indexing failed — will sync on next /save` |
-| `memoryStatus == "failed"` | `⚠ memory push failed — commits are local` |
-| `notifyStatus == "failed"` | `⚠ notification to {recipient} failed — they can see this on /activity` |
-
-`memoryStatus == "skipped (--no-push)"` is NOT a failure — no warning. `notifyStatus == "unknown"` reflects a DM-to-group fallback — no warning; the status bit conveys it.
-
-### What NOT to render
+### What NOT to output
 
 - **No `&nbsp;`** or other HTML entities.
 - **No raw JSON** — ever.
@@ -541,7 +445,8 @@ Same boundary rules as Step 5 (72-char outer width, four line patterns, no sub-b
 | `graphed` | `graphStatus == "ok"` — Session node created in Neo4j (connected mode only). |
 | `pushed` | `memoryStatus == "ok"` — memory repo committed and pushed to main. |
 | `{name} notified` | `notifyStatus == "sent"` AND recipient set — Telegram DM delivered. |
-| `group notified` | `notifyStatus == "sent"` AND recipient empty — posted to Telegram group (self-handoff or local mode). |
+| `group notified` | `notifyStatus == "sent"` AND recipient empty — posted to Telegram group (no "to" clause, or local mode). |
+| `{author} notified` | Self-handoff ("to self/me/myself") — recipient = author handle, DM to the author in connected mode. |
 | `{name} relayed to group` | `notifyStatus == "unknown"` — DM fell back to group chat. |
 | `published` | `artifactUrl` non-empty — branded HTML artifact published. |
 
