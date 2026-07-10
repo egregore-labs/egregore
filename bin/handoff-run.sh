@@ -48,6 +48,7 @@ PROJECT=""
 NO_PUSH=0
 NO_NOTIFY=0
 NO_PUBLISH=0
+COMPOSED=""    # optional house-kit JSON — the agent-composed render spec
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,12 +56,23 @@ while [ $# -gt 0 ]; do
     --topic)      TOPIC="${2:?}";     shift 2 ;;
     --recipient)  RECIPIENT="${2:-}"; shift 2 ;;
     --project)    PROJECT="${2:-}";   shift 2 ;;
+    --composed)   COMPOSED="${2:-}";  shift 2 ;;
     --no-push)    NO_PUSH=1;          shift ;;
     --no-notify)  NO_NOTIFY=1;        shift ;;
     --no-publish) NO_PUBLISH=1;       shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+
+# The render source: the agent-composed house-kit JSON when supplied (rich
+# component render), else the markdown handoff (deterministic floor). The
+# markdown file is ALWAYS the memory record + graph index either way.
+RENDER_TYPE="handoff"
+RENDER_SRC=""   # resolved to $ABS_FILE after the file is written, unless composed
+if [ -n "$COMPOSED" ] && [ -f "$COMPOSED" ]; then
+  RENDER_TYPE="composed"
+  RENDER_SRC="$COMPOSED"
+fi
 
 [ -z "$AUTHOR" ] && { echo "Missing --author" >&2; exit 1; }
 [ -z "$TOPIC" ]  && { echo "Missing --topic"  >&2; exit 1; }
@@ -203,14 +215,13 @@ PID_GRAPH=$!
   ARTIFACTS_JSON="[]"
   if [ "$MODE" = "connected" ]; then
     YY=$(date +%Y); MM=$(date +%-m); DD_NUM=$(date +%-d)
-    PARAMS=$(jq -nc --arg gh "$AUTHOR" '{gh:$gh}')
     RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
       MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {github: \$gh})
       WHERE a.created >= datetime({year: $YY, month: $MM, day: $DD_NUM})
         AND NOT 'tutorial-generated' IN coalesce(a.topics, [])
       RETURN a.title AS title, a.type AS type, a.filePath AS path
       ORDER BY a.created DESC
-      LIMIT 5" "$PARAMS" 2>/dev/null || echo '{}')
+      LIMIT 5" "$(jq -nc --arg gh "$AUTHOR" '{gh:$gh}')" 2>/dev/null || echo '{}')
     # Response shape: {"fields":[...], "values":[[...], ...]}. Convert to
     # an array of {title, type, path} objects.
     ARTIFACTS_JSON=$(echo "$RAW" | jq -c '
@@ -282,24 +293,145 @@ PID_ARTIFACTS=$!
 PID_MEMORY=$!
 
 # --- Branch C: Publish artifact → Notify ---
+#
+# Strategy: handoffs publish ONCE, through the emissary write API, using
+# `render_mode: "custom"` so the server serves OUR pre-rendered HTML
+# verbatim (the same egregore-artifacts handoff template /view/ has
+# always used). This gives us:
+#   - one artifact, one URL (no legacy + new double-publish)
+#   - permanent egregore.xyz/emissary/e/<id> URL with /raw endpoint
+#   - handoff design fully owned client-side (egregore-artifacts) — the
+#     emissary server template is never invoked for handoffs and remains
+#     completely untouched
+#
+# Fallback: if emissary publish fails (token missing, network, size cap,
+# rendering failure), fall back to the legacy publish-artifact.sh path so
+# a handoff still gets a Telegram-able URL.
 (
+  V1URL=""
   AURL=""
-  if [ "$NO_PUBLISH" = "0" ] && [ -x "$SCRIPT_DIR/bin/publish-artifact.sh" ]; then
-    AURL=$(bash "$SCRIPT_DIR/bin/publish-artifact.sh" handoff "$ABS_FILE" \
+  if [ "$NO_PUBLISH" = "0" ]; then
+    EMISSARY_CONFIG="$HOME/.egregore/emissary-config.json"
+    EMISSARY_TOKEN=""
+    if [ -f "$EMISSARY_CONFIG" ]; then
+      EMISSARY_TOKEN=$(jq -r '.auth_token // empty' "$EMISSARY_CONFIG" 2>/dev/null)
+    fi
+    EMISSARY_API_URL="${EMISSARY_API_URL:-https://egregore-production-55f2.up.railway.app/api/v1/emissary}"
+
+    if [ -n "$EMISSARY_TOKEN" ]; then
+      # Step 1: render the handoff to HTML locally using egregore-artifacts.
+      # Same renderer + template publish-artifact.sh uses today — handoffs
+      # keep their familiar look.
+      RENDERED_HTML="$TMPD/handoff.html"
+      RENDER_OK=0
+      LOCAL_CLI="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
+      if [ "${EGREGORE_USE_PUBLISHED:-0}" != "1" ] && [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
+        if node "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" --output "$RENDERED_HTML" >/dev/null 2>&1; then
+          RENDER_OK=1
+        fi
+      else
+        if npx egregore-artifacts "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" --output "$RENDERED_HTML" >/dev/null 2>&1; then
+          RENDER_OK=1
+        fi
+      fi
+
+      # Step 2: build the emissary payload. If rendering succeeded AND the
+      # HTML fits the server's 100KB cap, send it with render_mode=custom.
+      # If not, fall through to the structured-only path (server-rendered
+      # via the emissary template — undesirable for handoffs but still
+      # better than no URL).
+      if [ "$RENDER_OK" = "1" ] && [ -f "$RENDERED_HTML" ]; then
+        RENDER_SIZE=$(wc -c < "$RENDERED_HTML" | tr -d ' ')
+        if [ "$RENDER_SIZE" -gt 0 ] && [ "$RENDER_SIZE" -lt 100000 ]; then
+          # Author display name
+          DISPLAY_NAME="$AUTHOR"
+          PERSON_FILE="$SCRIPT_DIR/memory/people/${AUTHOR}.md"
+          if [ -f "$PERSON_FILE" ]; then
+            DISPLAY_NAME=$(head -1 "$PERSON_FILE" | sed 's/^# //')
+          fi
+
+          # addressed_to: only set if there's a recipient
+          ADDRESSED_TO="[]"
+          if [ -n "$RECIPIENT" ]; then
+            RECIP_HANDLE=$(echo "$RECIPIENT" | tr '[:upper:]' '[:lower:]' | awk '{print $1}')
+            ADDRESSED_TO=$(jq -nc --arg h "$RECIP_HANDLE" --arg d "$RECIPIENT" '[{"handle":$h,"display":$d}]')
+          fi
+
+          CLAIM=$(echo "$BRIEFING_LEAD" | cut -c1-200)
+
+          # body.prose is schema-required non-empty even when render_mode is
+          # "custom" (server validates structurally regardless of render
+          # mode). The visible page is the custom HTML; prose just needs to
+          # be non-empty plain text for /raw consumers and validation. Use
+          # the briefing lead (which the lead/claim is already derived from).
+          PROSE_TEXT="${BRIEFING_LEAD:-$TOPIC}"
+
+          # Use --rawfile so the rendered HTML is read directly from disk
+          # into a JSON-string. Faster than shell-var roundtrip and avoids
+          # any quoting headaches for HTML.
+          V1JSON=$(jq -nc \
+            --arg topic "$TOPIC" \
+            --arg claim "$CLAIM" \
+            --arg summary "$CLAIM" \
+            --arg prose "$PROSE_TEXT" \
+            --argjson addressed "$ADDRESSED_TO" \
+            --rawfile render_html "$RENDERED_HTML" \
+            '{
+              kind: "continuation",
+              topic: $topic,
+              claim: $claim,
+              summary: $summary,
+              body: { prose: $prose },
+              audience: {
+                addressed_to: $addressed,
+                visible_to: "public",
+                extendable_by: "anyone"
+              },
+              parents: [],
+              render_mode: "custom",
+              render_html: $render_html
+            }')
+
+          V1RESULT=$(curl -sf -X POST "$EMISSARY_API_URL/emissaries" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $EMISSARY_TOKEN" \
+            -d "$V1JSON" 2>/dev/null || echo '{}')
+
+          V1URL=$(echo "$V1RESULT" | jq -r '.url // ""' 2>/dev/null || echo "")
+        fi
+      fi
+    fi
+  fi
+
+  # Fallback: if the emissary publish didn't produce a URL (no token, no
+  # network, size cap, render failure), fire the legacy publish-artifact.sh
+  # so handoffs still get a Telegram-able URL.
+  if [ -z "$V1URL" ] && [ "$NO_PUBLISH" = "0" ] && [ -x "$SCRIPT_DIR/bin/publish-artifact.sh" ]; then
+    AURL=$(bash "$SCRIPT_DIR/bin/publish-artifact.sh" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" \
       --title "$TOPIC" \
       --author "$AUTHOR" \
       --description "$BRIEFING_LEAD" 2>/dev/null || echo "")
   fi
-  echo "$AURL" > "$TMPD/artifact"
+
+  # Prefer v1 (emissary-rendered) URL when available; fall back to the
+  # legacy egregore-artifacts URL only if the v1 publish failed.
+  NOTIFY_URL=""
+  if [ -n "$V1URL" ]; then
+    echo "$V1URL" > "$TMPD/artifact"
+    NOTIFY_URL="$V1URL"
+  else
+    echo "$AURL" > "$TMPD/artifact"
+    NOTIFY_URL="$AURL"
+  fi
 
   NS="skipped"
   if [ "$NO_NOTIFY" = "0" ]; then
-    if [ -n "$AURL" ]; then
+    if [ -n "$NOTIFY_URL" ]; then
       MSG_NOTIFY="Handoff from ${AUTHOR}: ${TOPIC}
 
 \"${BRIEFING_SHORT}\"
 
-View: ${AURL}"
+View: ${NOTIFY_URL}"
     else
       MSG_NOTIFY="Handoff from ${AUTHOR}: ${TOPIC}
 
@@ -345,9 +477,27 @@ if [ -s "$TMPD/graph" ]; then
   GRAPH_STATUS=$(sed -n '3p' "$TMPD/graph")
 fi
 [ -z "$RESOLVED" ] && RESOLVED=0
+# Sanitize: --argjson requires a number. If RESOLVED came back as a slug or
+# anything non-numeric (the index-handoff.sh output format has drifted in
+# the past — defensive guard), fall back to 0 so the result file still builds.
+if ! echo "$RESOLVED" | grep -qE '^[0-9]+$'; then
+  RESOLVED=0
+fi
 
 SUBGRAPH_JSON=$(cat "$TMPD/subgraph" 2>/dev/null || echo "null")
 [ -z "$SUBGRAPH_JSON" ] && SUBGRAPH_JSON="null"
+# Sanitize: --argjson requires valid JSON. Multiple writes to the same
+# tmpfile have produced concatenated values in the past (e.g. "null\n{...}"),
+# which jq rejects on multi-document input. Validate; on failure, take the
+# LAST non-empty line and re-validate; if still bad, fall back to null.
+if ! printf '%s' "$SUBGRAPH_JSON" | jq -s 'length == 1' 2>/dev/null | grep -q '^true$'; then
+  LAST_LINE=$(printf '%s\n' "$SUBGRAPH_JSON" | awk 'NF{last=$0} END{print last}')
+  if printf '%s' "$LAST_LINE" | jq -e '.' >/dev/null 2>&1; then
+    SUBGRAPH_JSON="$LAST_LINE"
+  else
+    SUBGRAPH_JSON="null"
+  fi
+fi
 
 MEMORY_STATUS=$(cat "$TMPD/memory"   2>/dev/null || echo "skipped")
 ARTIFACT_URL=$(cat "$TMPD/artifact"  2>/dev/null || echo "")
