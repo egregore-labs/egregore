@@ -90,7 +90,7 @@ mkdir -p /tmp
       printf '## Team Activity\n\n'
       printf '| Name | Last Seen | Working On |\n'
       printf '|------|-----------|------------|\n'
-      echo "$_DB_TEAM_FILTERED" | jq -r '.[] | "| \(.name) | \(.last_seen) | \(.branches | join(", ")) |"' 2>/dev/null || true
+      echo "$_DB_TEAM_FILTERED" | jq -r '.[] | ((.working_on // "")) as $w | (.branches // []) as $b | "| \(.name) | \(.last_seen) | \(if $w != "" then $w else ($b | join(", ")) end) |"' 2>/dev/null || true
       printf '\n'
     fi
   fi

@@ -131,7 +131,7 @@ if [ "$TEAM_DATA_COUNT" -gt 0 ] 2>/dev/null && [ "$TEAM_DATA_COUNT" != "0" ]; th
   echo "  ◦ around"
   # Presence roster with online/offline dots (hide inactive >3 days)
   STALE_THRESHOLD=$((RECENCY_DAYS * 86400))
-  echo "$TEAM_DATA" | jq -r '.[] | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(.branches | join(", "))"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
+  echo "$TEAM_DATA" | jq -r '.[] | ((.working_on // "")) as $w | (.branches // []) as $b | "\(.name)\t\(.last_seen_sort)\t\(.last_seen)\t\(if $w != "" then $w else ($b | join(", ")) end)"' 2>/dev/null | while IFS=$'\t' read -r P_NAME P_EPOCH P_SEEN P_BRANCHES; do
     [ -z "$P_NAME" ] && continue
     # Skip if no recent activity (within recency window)
     if [ "$P_EPOCH" -le 0 ] 2>/dev/null; then

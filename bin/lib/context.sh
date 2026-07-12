@@ -177,6 +177,29 @@ fi
     )
   fi
 
+  # --- "Working on": latest session/handoff/wrap topic per person (file-based) ---
+  _WM_TAB=$(printf '\t')
+  WORK_MAP=$(
+    {
+      for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/handoffs" "$SCRIPT_DIR/memory/wraps"; do
+        [ -d "$DIR" ] || continue
+        find -L "$DIR" -name '*.md' -not -name 'index*' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -30 | while read -r WFILE; do
+          [ -z "$WFILE" ] && continue
+          W_AUTH=$(grep -m1 '^\*\*Author\*\*:' "$WFILE" 2>/dev/null | sed 's/^\*\*Author\*\*:[[:space:]]*//')
+          W_DATE=$(grep -m1 '^\*\*Date\*\*:' "$WFILE" 2>/dev/null | sed 's/^\*\*Date\*\*:[[:space:]]*//')
+          W_TOPIC=$(grep -m1 '^# ' "$WFILE" 2>/dev/null | sed 's/^#[[:space:]]*//; s/^Session:[[:space:]]*//; s/^Handoff:[[:space:]]*//; s/^Wrap:[[:space:]]*//')
+          [ -z "$W_AUTH" ] && continue
+          [ -z "$W_TOPIC" ] && continue
+          printf '%s%s%s%s%s\n' "$W_AUTH" "$_WM_TAB" "$W_DATE" "$_WM_TAB" "$W_TOPIC"
+        done
+      done
+    } | sort -t"$_WM_TAB" -k1,1 -k2,2r | sort -t"$_WM_TAB" -k1,1 -u | while IFS="$_WM_TAB" read -r WM_NAME WM_DATE WM_TOPIC; do
+      [ -z "$WM_NAME" ] && continue
+      WM_LC=$(echo "$WM_NAME" | tr '[:upper:]' '[:lower:]')
+      printf '%s%s%s\n' "$WM_LC" "$_WM_TAB" "$WM_TOPIC"
+    done | jq -Rn --arg tab "$_WM_TAB" '[inputs | split($tab) | select(length>=2) | {(.[0]): (.[1] // "")}] | add // {}' 2>/dev/null || echo "{}"
+  )
+
   # --- Relative time + epoch helpers (cross-platform) ---
   NOW_EPOCH=$(date +%s)
 
@@ -270,8 +293,9 @@ fi
       BRANCHES_JSON=$(echo "$BRANCHES_JSON" | jq --arg e "+${EXTRA} more" '[.[0:2][], $e]' 2>/dev/null || echo "$BRANCHES_JSON")
     fi
 
-    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" \
-      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches}')
+    WORK=$(echo "$WORK_MAP" | jq -r --arg n "$PNAME" '.[$n] // ""' 2>/dev/null)
+    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" --arg work "$WORK" \
+      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches, working_on: $work}')
     $FIRST || PRESENCE="$PRESENCE,"
     PRESENCE="$PRESENCE$ENTRY"
     FIRST=false
