@@ -43,7 +43,7 @@ payload_write_redirect='{"cwd":"'"$TMPD"'","hook_event_name":"PreToolUse","tool_
 out="$(printf '%s' "$payload_write_redirect" | node "$HOOK")"
 echo "$out" | grep -q '"permissionDecision":"deny"'
 
-git -C "$TMPD" checkout -b dev/oguzhan/codex-guard --quiet
+git -C "$TMPD" checkout -b dev/alice/codex-guard --quiet
 out="$(printf '%s' "$payload_patch" | node "$HOOK")"
 [ -z "$out" ]
 

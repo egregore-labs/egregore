@@ -71,7 +71,7 @@ for skill_dir in "$SOURCE_DIR"/*; do
   [ -f "$skill_dir/SKILL.md" ] || continue
   name="$(basename "$skill_dir")"
   mkdir -p "$TARGET_DIR/$name"
-  cp "$skill_dir/SKILL.md" "$TARGET_DIR/$name/SKILL.md"
+  cp -R "$skill_dir/." "$TARGET_DIR/$name/"
   copied=$((copied + 1))
 done
 

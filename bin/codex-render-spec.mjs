@@ -216,7 +216,7 @@ If this Codex build does not support hooks, follow the same discipline as a stan
 
 If the startup card output contains \`onboarding_needed\`, invoke the \`$onboarding\` skill instead of greeting.`;
 
-const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching \`$name\` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: \`$activity\`, \`$handoff\`, \`$wrap\`, \`$announce\`, \`$harvest\`, \`$the-spiral\`, \`$dashboard\`, \`$deep-reflect\`, \`$quest\`, \`$invite\`, \`$ask\`, \`$save\`. Every other workflow has a generated adapter skill of the same name. \`$save\` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.`;
+const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching \`$name\` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: \`$activity\`, \`$handoff\`, \`$wrap\`, \`$announce\`, \`$harvest\`, \`$the-spiral\`, \`$dashboard\`, \`$deep-reflect\`, \`$quest\`, \`$invite\`, \`$ask\`, \`$save\`, \`$view\`, and \`$scroll\`. Every other workflow has a generated adapter skill of the same name. \`$save\` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.`;
 
 const SOCRATIC_BODY = `**Triggers**: "ask me questions", "question me", "help me think through", or any request to be questioned.
 

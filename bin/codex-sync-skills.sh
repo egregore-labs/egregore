@@ -19,6 +19,8 @@ NATIVE_SKILLS=(
   invite
   ask
   save
+  view
+  scroll
 )
 
 STRUCTURED_UX_SKILLS=(
@@ -54,6 +56,7 @@ STRUCTURED_UX_SKILLS=(
   emissary
   launch-site
   view
+  scroll
   visual-explain
   tui-design
 )

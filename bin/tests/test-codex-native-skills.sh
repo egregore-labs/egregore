@@ -18,6 +18,8 @@ NATIVE_SKILLS=(
   invite
   ask
   save
+  view
+  scroll
 )
 
 STRUCTURED_UX_SKILLS=(
@@ -53,6 +55,7 @@ STRUCTURED_UX_SKILLS=(
   emissary
   launch-site
   view
+  scroll
   visual-explain
   tui-design
 )
@@ -76,11 +79,23 @@ for skill in "${NATIVE_SKILLS[@]}"; do
   }
 done
 
+[ -f "$CODEX_DIR/view/assets/compose-scaffold.html" ] || {
+  echo "missing native view composition scaffold" >&2
+  exit 1
+}
+[ -f "$CODEX_DIR/scroll/assets/shell.html" ] || {
+  echo "missing native scroll shell" >&2
+  exit 1
+}
+grep -q '\$view' "$CODEX_DIR/view/agents/openai.yaml"
+grep -q '\$scroll' "$CODEX_DIR/scroll/agents/openai.yaml"
+! grep -q 'paste into Claude' "$CODEX_DIR/scroll/assets/shell.html"
+
 native_count=0
 for skill in "${NATIVE_SKILLS[@]}"; do
   [ -f "$CODEX_DIR/$skill/SKILL.md" ] && native_count=$((native_count + 1))
 done
-[ "$native_count" -eq 12 ]
+[ "$native_count" -eq 14 ]
 
 adapter_count="$(grep -rl 'generated-by: bin/codex-sync-skills.sh' "$CODEX_DIR"/*/SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
 [ "${adapter_count:-0}" -gt 0 ] || { echo "expected generated adapter skills" >&2; exit 1; }
@@ -123,6 +138,8 @@ echo "$prompt" | grep -q 'adapter skills'
 echo "$prompt" | grep -q '\$activity'
 echo "$prompt" | grep -q '\$deep-reflect'
 echo "$prompt" | grep -q '\$save'
+echo "$prompt" | grep -q '\$view'
+echo "$prompt" | grep -q '\$scroll'
 
 ! grep -q 'UserPromptSubmit' "$ROOT/.codex/hooks.json" || {
   echo "UserPromptSubmit hook must not be installed; it creates visible hook-completed transcript noise" >&2

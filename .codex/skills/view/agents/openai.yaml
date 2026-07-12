@@ -1,0 +1,4 @@
+interface:
+  display_name: "Egregore View"
+  short_description: "Render Egregore artifacts in the browser"
+  default_prompt: "Use $view to render this as a branded browser artifact."
