@@ -159,8 +159,8 @@ PRS=$(cat "$TMPDIR/prs.json" 2>/dev/null || echo "[]")
 echo "$PRS" | jq . >/dev/null 2>&1 || PRS="[]"
 
 # Resolve PR author GitHub logins -> egregore display names. `gh pr list` returns
-# the raw github login (e.g. "fcdagdelen"); without this it leaks into activity
-# instead of the person's display name ("cem"). Map via the graph when connected;
+# the raw github login (e.g. "alice-gh"); without this it leaks into activity
+# instead of the person's display name ("Alice"). Map via the graph when connected;
 # fall back to the github profile name, then the login. Author becomes a string.
 if [ -n "$PRS" ] && [ "$PRS" != "[]" ]; then
   AUTHOR_MAP='{}'
