@@ -290,10 +290,12 @@ compute_boundary() {
   local settings_local="$SCRIPT_DIR/.claude/settings.local.json"
   local deny_rules="[]"
   if [ "$denied_paths_json" != "[]" ]; then
-    deny_rules=$(echo "$denied_paths_json" | jq '[.[] | "Read(" + . + "/**)", "Edit(" + . + "/**)", "Write(" + . + "/**)"]')
+    deny_rules=$(echo "$denied_paths_json" | jq '[.[] | "Read(" + . + "/**)", "Edit(" + . + "/**)"]')
   fi
-  # Deny writing to instance registry (reads allowed for multi-instance features)
-  deny_rules=$(echo "$deny_rules" | jq '. + ["Edit(~/.egregore/instances.json)", "Write(~/.egregore/instances.json)"]')
+  # Deny writing to instance registry (reads allowed for multi-instance features).
+  # Edit() alone covers Write/NotebookEdit too — Write() rules are never matched by
+  # the permission checker and only trigger a startup "not matched" warning if included.
+  deny_rules=$(echo "$deny_rules" | jq '. + ["Edit(~/.egregore/instances.json)"]')
 
   # Merge with existing settings.local.json — only touch permissions.deny
   mkdir -p "$SCRIPT_DIR/.claude"
