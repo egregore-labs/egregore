@@ -7,8 +7,7 @@
       "Edit"
     ],
     "deny": [
-      "Edit(~/.egregore/instances.json)",
-      "Write(~/.egregore/instances.json)"
+      "Edit(~/.egregore/instances.json)"
     ]
   },
   "defaultMode": "acceptEdits",
