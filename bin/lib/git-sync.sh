@@ -116,12 +116,25 @@ setup_develop() {
     # Safe to force-update when not checked out
     git branch -f develop origin/develop 2>/dev/null || true
   else
-    # On develop — try ff merge, fall back to reset only if no unpushed work
+    # On develop — try ff merge, fall back to reset when safe
     git merge --ff-only origin/develop --quiet 2>/dev/null || {
-      # Only reset if there are no unpushed commits on develop
+      # Reset if there are no unpushed commits on develop...
       LOCAL_AHEAD=$(git rev-list origin/develop..develop --count 2>/dev/null || echo "0")
       if [ "$LOCAL_AHEAD" = "0" ]; then
         git reset --hard origin/develop --quiet 2>/dev/null || true
+      else
+        # ...OR when the only divergence is framework paths. The daily
+        # "Auto-update Egregore framework" commit re-derives bin/ .claude/ CLAUDE.md
+        # skills/ from upstream/main every cycle and is never unique org work. On an
+        # unattended runner these commits are never pushed, so without this branch
+        # ff-only can never advance and develop wedges further from origin each cycle
+        # (observed: an isolated runner drifting +7/-12 over ~2 weeks). Genuine work
+        # outside framework paths still blocks the reset and surfaces for a human.
+        NON_FRAMEWORK=$(git diff --name-only origin/develop...develop 2>/dev/null \
+          | grep -vE '^(bin/|\.claude/|skills/|CLAUDE\.md|DEVELOPMENT\.md)' | head -1)
+        if [ -z "$NON_FRAMEWORK" ]; then
+          git reset --hard origin/develop --quiet 2>/dev/null || true
+        fi
       fi
     }
   fi
