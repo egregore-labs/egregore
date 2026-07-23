@@ -81,6 +81,12 @@ if echo "$MSG" | grep -q "AskUserQuestion"; then
 else
   fail "block message missing AskUserQuestion directive" "got: $MSG"
 fi
+if echo "$MSG" | grep -q "create the branch automatically" &&
+   ! echo "$MSG" | grep -q "Ask the user how to proceed"; then
+  pass "clear-topic path auto-branches without a routine Git prompt"
+else
+  fail "block message still interrupts for routine branch permission" "got: $MSG"
+fi
 
 # 5) Write to .claude/ on develop must still be allowed (pre-existing exemption intact)
 set +e
@@ -93,7 +99,29 @@ else
   fail ".claude/ exemption broke" "exit $rc"
 fi
 
-# 6) On a non-protected branch the hook must short-circuit to allow everything
+# 6) The documented consent command must never be blocked by the guard itself
+set +e
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'develop' > .egregore-branch-consent\"}}" | bash "$HOOK" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+  pass "protected-branch consent command → allowed"
+else
+  fail "consent command blocked itself" "exit $rc"
+fi
+
+# 7) Memory-only shell preparation must not force a project branch
+set +e
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir -p memory/knowledge/harvests/test\"}}" | bash "$HOOK" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+  pass "memory-only shell preparation on develop → allowed"
+else
+  fail "memory-only shell preparation unexpectedly blocked" "exit $rc"
+fi
+
+# 8) On a non-protected branch the hook must short-circuit to allow everything
 git checkout -q -b dev/test/topic
 set +e
 echo "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$TMP/src/f.py\"}}" | bash "$HOOK" >/dev/null 2>&1

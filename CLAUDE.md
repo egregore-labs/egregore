@@ -74,13 +74,14 @@ If on develop after two messages, create a branch immediately from whatever cont
 
 ### Branch-guard protocol
 
-The `branch-guard.sh` PreToolUse hook defers to consent on `develop`/`main`/`master`. When it fires (you'll see a `Protected branch (...)` message in the tool error), **do NOT auto-branch silently and do NOT just proceed** — ask the user with `AskUserQuestion`, offering exactly:
+The `branch-guard.sh` PreToolUse hook protects project writes on `develop`/`main`/`master`. Its block message is guidance for you, not a reason to interrupt the user with routine Git choices:
 
-- **Branch off** (default/recommended) — derive a slug from context, run `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`, then retry the write. (Offer 2–3 candidate slugs + a "rename it" option when the topic is ambiguous.)
-- **Proceed on `{branch}`** — the user explicitly wants to work on the protected branch. Record consent, then retry: `echo '{branch}' > .egregore-branch-consent`. Writes on `{branch}` are then allowed for the rest of this session (the token is branch-scoped and cleared on next session start, so consent is asked once per session, not per write).
-- **Cancel** — stop; don't write.
+- **Work topic is clear** — derive the slug, create the task worktree automatically, continue there, and say one short sentence so the branch change is visible. Do not ask the user to approve routine branching.
+- **Work topic is genuinely ambiguous** — use `AskUserQuestion` to ask only for the topic, with 2–3 useful slug suggestions plus a rename option. Branch after they answer.
+- **User explicitly asked to work on the protected branch** — that request is the consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. The token is branch-scoped and cleared on next session start.
+- **User canceled or asked for no changes** — stop; don't write.
 
-This is the softened guard: the user can always choose to work directly on `develop` — you just have to ask first, once per session. Never write the consent token without an explicit "Proceed on `{branch}`" answer.
+Never create the consent token merely to silence the hook. Memory, managed-repo, and runtime-state writes should bypass the project guard; if one triggers it, correct the target/context instead of asking for protected-branch consent.
 
 Note: the **"branch on first work message"** rule above still stands — on the user's first work-related message you auto-create a worktree (no need to ask). The consent flow here is only for when a write later lands on a protected branch (e.g., back on `develop` after a PR merged, or work that never branched).
 
