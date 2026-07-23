@@ -17,11 +17,29 @@ which branch, commit, push, pull request, or memory sync steps are required.
 ```bash
 git status --short
 git status --short memory 2>/dev/null || true
-git branch --show-current
+BRANCH=$(git branch --show-current)
+AHEAD=0
+OPEN_PR=""
+case "$BRANCH" in
+  dev/*|feature/*|bugfix/*)
+    git fetch origin develop --quiet 2>/dev/null || true
+    AHEAD=$(git rev-list --count "origin/develop..HEAD" 2>/dev/null || echo 0)
+    if command -v gh >/dev/null 2>&1; then
+      OPEN_PR=$(gh pr list --head "$BRANCH" --base develop --state open \
+        --json url --jq '.[0].url // empty' 2>/dev/null || true)
+    fi
+    ;;
+esac
 ```
 
-3. If there are no repo or memory changes, say everything is already saved and
-   stop.
+3. A clean working tree alone does **not** mean the work is fully saved:
+   - If there are repo or memory changes, continue.
+   - If the task branch is ahead of `origin/develop` and `OPEN_PR` is empty,
+     continue even when the tree is clean. The bridge must push any committed
+     work and create the missing PR.
+   - Stop with "everything is already saved" only when there are no repo or
+     memory changes and either the branch has no commits to integrate
+     (`AHEAD=0`) or an open integration PR already exists.
 4. Synthesize:
    - a short topic from the work,
    - a clear commit message,

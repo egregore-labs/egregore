@@ -6,11 +6,13 @@ set -euo pipefail
 # Covers:
 #   .claude/hooks/branch-guard.sh
 #   .claude/skills/save/SKILL.md (dedupe pattern via doc inspection)
+#   .codex/skills/save/SKILL.md (clean-tree PR publication guard)
 #   .claude/skills/wrap/SKILL.md (session_duration_ms derivation)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$SCRIPT_DIR/.claude/hooks/branch-guard.sh"
 SAVE_MD="$SCRIPT_DIR/.claude/skills/save/SKILL.md"
+CODEX_SAVE_MD="$SCRIPT_DIR/.codex/skills/save/SKILL.md"
 WRAP_MD="$SCRIPT_DIR/.claude/skills/wrap/SKILL.md"
 CLAUDE_MD="$SCRIPT_DIR/CLAUDE.md"
 
@@ -141,6 +143,22 @@ cd "$SCRIPT_DIR"
 
 echo
 echo "── /save PR dedupe ──"
+
+# Codex must not equate a clean tree with a fully published branch. A task
+# branch can be clean because an attendant already committed it while still
+# lacking the integration PR that makes the work mergeable.
+if grep -qE 'git rev-list --count.*origin/develop\.\.HEAD' "$CODEX_SAVE_MD" &&
+   grep -qE 'gh pr list --head.*--base develop.*--state open' "$CODEX_SAVE_MD"; then
+  pass "Codex /save checks committed work and PR state before stopping"
+else
+  fail "Codex /save can still stop on a clean branch with no PR"
+fi
+if grep -q 'clean working tree alone' "$CODEX_SAVE_MD" &&
+   grep -q 'create the missing PR' "$CODEX_SAVE_MD"; then
+  pass "Codex /save continues clean-but-unpublished branches through the bridge"
+else
+  fail "Codex /save missing clean-but-unpublished continuation rule"
+fi
 
 # Hub flow: dedupe via gh pr list --head --state open, before gh pr create
 if grep -qE 'gh pr list --head.*--state open.*--json number,baseRefName' "$SAVE_MD"; then
