@@ -1,0 +1,4 @@
+interface:
+  display_name: "Roast"
+  short_description: "Summon Egregore's jester to roast a target"
+  default_prompt: "Use $roast to roast this project from its actual Egregore context."
