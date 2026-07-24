@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "participantId": null,
+  "updatedAt": null,
+  "capture": {
+    "entryPoint": "Inbox",
+    "preferredInput": "written",
+    "minimumContext": ["why this matters", "next visible step"]
+  },
+  "resurface": {
+    "dailyNote": "Now",
+    "reentryNote": "Re-entry",
+    "cadence": "when I choose to return"
+  },
+  "support": {
+    "agentStyle": "one concrete question at a time",
+    "overwhelmCue": "offer pause, smaller step, or manual path",
+    "sharingDefault": "private"
+  },
+  "labels": {
+    "inbox": "Inbox",
+    "now": "Now",
+    "reentry": "Re-entry"
+  }
+}

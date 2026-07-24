@@ -1,0 +1,4 @@
+interface:
+  display_name: "Neurodivergent Second-Brain Workshop"
+  short_description: "Build a shared-credit Egregore workshop"
+  default_prompt: "Use $neurodivergent-second-brain-workshop to scaffold and rehearse an accessible Egregore and Obsidian workshop."
