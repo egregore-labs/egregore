@@ -77,7 +77,7 @@
     {
       "section": "Command Awareness",
       "action": "keep",
-      "sourceHash": "d3ea48ebf938",
+      "sourceHash": "89992f774b20",
       "note": "Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
     },
     {

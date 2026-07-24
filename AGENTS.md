@@ -232,7 +232,7 @@ Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Ea
 
 ## Command Awareness
 
-Codex reserves leading `/` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching `$name` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: `$activity`, `$handoff`, `$wrap`, `$announce`, `$harvest`, `$the-spiral`, `$dashboard`, `$deep-reflect`, `$quest`, `$invite`, `$ask`, `$save`. Every other workflow has a generated adapter skill of the same name. `$save` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
+Codex reserves leading `/` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching `$name` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: `$activity`, `$handoff`, `$wrap`, `$announce`, `$harvest`, `$the-spiral`, `$dashboard`, `$deep-reflect`, `$quest`, `$invite`, `$ask`, `$save`, `$view`, and `$scroll`. Every other workflow has a generated adapter skill of the same name. `$save` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
 
 Invoke commands from user intent — don't wait for the slash. Each command file has a `## When to invoke` section. Load it for the full spec.
 
@@ -243,6 +243,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Connectors** — `$telegram-connect` (Telegram group setup)
 **Git** — `$branch` `$commit` `$push` `$pr` `$save` `$review-pr` `$contribute`
 **Spirits** — `$summon` (persistent agent processes)
+**Play** — `$roast` (context-aware court jester)
 **Infra** — `$setup` `$update` `$pull` `$env` `$infra` `$sync-repos` `$release` `$checkup`
 
 **Disambiguation:**
