@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # memory-refresh.sh — UserPromptSubmit hook that keeps the shared memory repo
 # fresh during long-lived sessions.
 #

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Cross-platform time helpers — sourced by scripts that need time formatting.
 
 # Convert ISO timestamp to epoch seconds (macOS + Linux compatible)

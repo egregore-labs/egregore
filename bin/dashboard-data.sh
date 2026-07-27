@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Fetches personal dashboard data: single API call + parallel git ops.
 # Usage: bash bin/dashboard-data.sh [username] [time_range]
 # Returns a single JSON object with all query results.

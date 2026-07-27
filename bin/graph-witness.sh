@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Graph Witness — read-only quality evaluator for the knowledge graph.

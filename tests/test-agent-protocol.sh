@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Reproducible two-agent smoke test for the runtime-neutral protocol.
 #
 # It creates two isolated Egregore checkouts backed by the same local bare

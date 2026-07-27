@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: harvest async-bridge primitives — bin/agent.sh ask + bin/graph-op.sh create-harvest-session

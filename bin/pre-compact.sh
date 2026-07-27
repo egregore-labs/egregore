@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # PreCompact hook — fires before context compaction.
 # Externalizes session knowledge to the graph via WAL, then re-injects
 # a richer summary so Claude has continuity after compaction.

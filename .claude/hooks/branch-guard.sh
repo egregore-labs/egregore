@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # branch-guard.sh — PreToolUse hook blocking modifications on protected branches
 # Receives tool input JSON on stdin from Claude Code.
 # Exit 0 = allow, exit 2 = block (reason on stderr).

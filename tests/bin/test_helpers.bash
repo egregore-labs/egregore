@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # BATS test suite helpers — shared setup/teardown for bin/ tests.
 #
 # Usage: source this in your .bats file via setup_file/teardown_file,

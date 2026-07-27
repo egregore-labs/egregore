@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Fetches org-level analytics data (AM1-AM10) in parallel.
 # Usage: bash bin/analytics-data.sh [username]
 # Returns a single JSON object with all analytics metrics.

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Egregore session report — opt-in feedback from OSS users.
 # Mirrors bin/telemetry.sh patterns.
 #

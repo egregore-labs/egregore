@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: .claude/hooks/memory-refresh.sh — UserPromptSubmit hook for memory

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # onboarding-guard.sh — PreToolUse hook that blocks work until onboarding completes
 # Receives tool input JSON on stdin from Claude Code.
 # Exit 0 = allow, exit 2 = block (reason on stderr).

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # E2E tests for git worktree support.
 # Tests worktree.sh lifecycle + session-start.sh boundary/detection logic.
 #

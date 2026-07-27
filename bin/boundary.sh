@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # boundary.sh — Path validation utility for environment isolation
 # Two modes:
 #   boundary.sh check <path>         — exits 0 if path is within boundary, 1 if not

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # emissary-detect.sh — UserPromptSubmit hook.
 #
 # When the user expresses intent to create or send an Egregore emissary

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Provision a hosted Egregore VPS for an existing org
 TOKEN=$(grep '^GITHUB_TOKEN=' .env | cut -d'=' -f2-)
 API_URL=$(jq -r '.api_url' egregore.json)

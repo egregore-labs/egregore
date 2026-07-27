@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 # handoff-run.sh — atomic orchestrator for /handoff.
 #

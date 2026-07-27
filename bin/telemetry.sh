@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Egregore telemetry — privacy-respecting product analytics.
 # Mirrors bin/graph.sh and bin/notify.sh patterns.
 #
