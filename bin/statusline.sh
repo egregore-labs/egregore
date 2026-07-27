@@ -1,5 +1,5 @@
 #!/bin/bash
-# Egregore statusline — shows branch + unsaved changes count + worktree indicator.
+# Egregore statusline — shows runtime mode, branch, unsaved changes, and worktree.
 # Runs on every assistant turn. Must be fast (<100ms).
 set -euo pipefail
 
@@ -22,13 +22,20 @@ if [ -n "$TOPLEVEL" ] && [ -n "$COMMON" ]; then
   fi
 fi
 
+# Runtime mode. Connected requires both the hosted mode and API endpoint; a
+# partially edited config remains visibly local instead of claiming activation.
+SCRIPT_DIR="${TOPLEVEL:-$REPO_DIR}"
+CONFIG="$SCRIPT_DIR/egregore.json"
+source "$SCRIPT_DIR/bin/lib/config.sh"
+MODE_BADGE="$(_runtime_mode_badge)"
+
 # Count modified/untracked files (fast — no status porcelain)
 CHANGED=$(git -C "$REPO_DIR" diff --name-only 2>/dev/null | wc -l | tr -d ' ')
 STAGED=$(git -C "$REPO_DIR" diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
 TOTAL=$((CHANGED + STAGED))
 
 # Build output
-OUT="⎇ $BRANCH"
+OUT="$MODE_BADGE · ⎇ $BRANCH"
 [ -n "$WORKTREE" ] && OUT="$OUT · ⧉ $WORKTREE"
 [ "$TOTAL" -gt 0 ] && OUT="$OUT · $TOTAL unsaved"
 echo "$OUT"

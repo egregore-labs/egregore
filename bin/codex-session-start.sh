@@ -45,6 +45,7 @@ source "$SCRIPT_DIR/bin/lib/identity.sh" >/dev/null 2>/dev/null
 
 LOCAL_MODE="false"
 [ "$(_detect_mode)" = "local" ] && LOCAL_MODE="true"
+MODE_BADGE="$(_runtime_mode_badge)"
 
 if [ "$LOCAL_MODE" != "true" ]; then
   if [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
@@ -166,7 +167,7 @@ EOF
 render_card() {
   local separator identity_left identity_right line_width pad footer_left footer_right board_url has_failure failed_services
   separator="  ..................................................................."
-  identity_left="  ${GITHUB_ORG:-$ORG_NAME}/${REPO_NAME}"
+  identity_left="  ${GITHUB_ORG:-$ORG_NAME}/${REPO_NAME} · ${MODE_BADGE}"
   identity_right="${DISPLAY_NAME} · ${BRANCH:-?}"
   line_width=67
   pad=$((line_width - ${#identity_left} - ${#identity_right}))
