@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # handoff-pr-backfill.sh — fill in PR numbers in a handoff file's ## Repo State
 # table, then re-commit + push the memory repo. Detached fire-and-forget from
 # /handoff's hot path so user-visible latency doesn't include N × `gh pr list`.

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for ## Repo State parsing in index-handoff.sh and context.sh
 # Verifies: table extraction, edge cases, JSON output validity
 set -euo pipefail

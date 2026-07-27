@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # WorktreeRemove hook — handles cleanup when a worktree is removed.
 # Receives {"worktree_path": "<path>"} on stdin. Best-effort, always exit 0.
 

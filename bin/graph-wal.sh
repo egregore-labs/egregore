@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Graph Write-Ahead Log — resilient graph writes with local buffer.
 # Mirrors bin/telemetry.sh architecture.
 #

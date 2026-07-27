@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -uo pipefail
 
 # Test: boundary-check.sh emits AskUserQuestion guidance when blocking out-of-scope paths

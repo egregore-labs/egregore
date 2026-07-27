@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # publish-artifact.sh — Generate HTML artifact + upload to API

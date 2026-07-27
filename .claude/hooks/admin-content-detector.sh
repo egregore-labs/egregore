@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # admin-content-detector.sh — PostToolUse hook for sensitive-content detection.
 #
 # Fires after Edit/Write to memory/**/*.md. If the file matches sensitive

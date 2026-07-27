@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Fetches all activity dashboard data: single API call + parallel git/disk ops.
 # Usage: bash bin/activity-data.sh [username]
 # Returns a single JSON object with all query results.

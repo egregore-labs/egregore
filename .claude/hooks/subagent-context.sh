@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SubagentStart hook — injects compact organizational context into subagents.
 # Reads pre-cached context from session-start.sh. Falls back to minimal info.
 # No network calls, no graph queries. Always exit 0.

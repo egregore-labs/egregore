@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 # backfill-session-topics.sh — Fill in topics for sessions that never got one.
 #

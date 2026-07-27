@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # bin/init-gh.sh — One-shot Egregore installer that uses the `gh` CLI instead
 # of the GitHub App or a manual PAT.

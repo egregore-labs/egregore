@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Graph maintenance — scan for issues, fix safe ones, report health.

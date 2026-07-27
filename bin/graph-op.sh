@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 # Named graph operations — clean interface over raw Cypher.
 # Keeps implementation details out of the TUI.

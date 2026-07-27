@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Egregore statusline — shows runtime mode, branch, unsaved changes, and worktree.
 # Runs on every assistant turn. Must be fast (<100ms).
 set -euo pipefail

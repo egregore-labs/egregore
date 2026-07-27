@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Post-update migrations for Egregore framework.
 #
 # This script is synced from upstream on every /update. All migration

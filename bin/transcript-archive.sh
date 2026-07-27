@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SessionEnd hook: archive session transcript.
 # Receives JSON on stdin from Claude Code's SessionEnd hook.
 # Works for all orgs:

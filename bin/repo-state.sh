@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # repo-state.sh — Capture current branch state across all repos.
 # Outputs a markdown table (## Repo State) for handoff files.
 # Only includes repos on non-base branches or with uncommitted changes.
