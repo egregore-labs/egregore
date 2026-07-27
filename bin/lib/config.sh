@@ -59,13 +59,22 @@ _get_base_branch() {
 # Detect local vs connected mode
 _detect_mode() {
   local config="${CONFIG:-$SCRIPT_DIR/egregore.json}"
-  local mode
-  mode=$(jq -r '.mode // empty' "$config" 2>/dev/null || true)
-  local api_url
-  api_url=$(jq -r '.api_url // empty' "$config" 2>/dev/null || true)
-  if [ "$mode" = "local" ] || [ -z "$api_url" ]; then
-    echo "local"
-  else
+  if [ -f "$config" ] && jq -e \
+    '(.mode // "") != "local" and ((.api_url // "") | length > 0)' \
+    "$config" >/dev/null 2>&1; then
     echo "connected"
+  else
+    echo "local"
+  fi
+}
+
+# Compact runtime identity shared by terminal surfaces. The sigils deliberately
+# distinguish an active hosted connection from the self-contained local mode
+# without implying that local Egregore is unhealthy.
+_runtime_mode_badge() {
+  if [ "$(_detect_mode)" = "connected" ]; then
+    echo "◆ CONNECTED"
+  else
+    echo "◇ LOCAL"
   fi
 }
