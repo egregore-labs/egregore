@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -uo pipefail
 
 # Test: publish-references.sh self-ref guard + artifact-id.sh extension handling
@@ -101,7 +101,7 @@ cp "$SCRIPT_DIR/bin/publish-references.sh" "$STUB_ROOT/bin/publish-references.sh
 cp "$SCRIPT_DIR/bin/lib/artifact-id.sh" "$STUB_ROOT/bin/lib/artifact-id.sh"
 
 cat > "$STUB_ROOT/bin/publish-artifact.sh" <<STUB
-#!/bin/bash
+#!/usr/bin/env bash
 # Stub: record each invocation so the test can assert which refs got published.
 echo "PUBLISH \$*" >> "$TMP_ROOT/published.log"
 exit 0

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Runtime-neutral Egregore agent bridge.
 #
 # This script exposes the Git-backed memory protocol without requiring

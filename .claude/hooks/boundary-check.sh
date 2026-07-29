@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # boundary-check.sh — PreToolUse hook for environment isolation
 # Receives tool input JSON on stdin from Claude Code.
 # Exit 0 = allow, exit 2 = block (reason on stderr).

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # artifact-id.sh — Deterministic artifact IDs for memory files.
 #
 # Emits `{prefix}-{12 hex}` where prefix is derived from the file extension

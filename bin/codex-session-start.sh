@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -o pipefail
 
 # Codex does not run Claude Code SessionStart hooks. This is the runtime-neutral

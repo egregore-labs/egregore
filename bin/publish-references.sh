@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -uo pipefail
 
 # publish-references.sh — Depth-1 auto-publish for referenced memory files.

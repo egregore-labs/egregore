@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # handoff-save-publish.sh — parallelise memory push + artifact publish; detach notify + PR backfill.
 #
 # Used by the /handoff skill. Moves the parallel/background plumbing out of

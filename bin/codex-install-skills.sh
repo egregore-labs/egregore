@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Make Egregore's project-local Codex skills available without duplicating
 # them in CODEX_HOME.
 set -euo pipefail
