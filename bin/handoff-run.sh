@@ -273,7 +273,7 @@ PID_ARTIFACTS=$!
 
     MEM_OK=0
     for i in 1 2 3; do
-      if git pull --rebase origin main --quiet >/dev/null 2>&1 \
+      if git -c rebase.empty=drop pull --rebase origin main --quiet >/dev/null 2>&1 \
          && git push origin main --quiet >/dev/null 2>&1; then
         MEM_OK=1
         break

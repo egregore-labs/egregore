@@ -68,7 +68,7 @@ If the remote branch is gone:
    git commit -m "$COMMIT_MESSAGE"
    # Retry loop: handles concurrent pushes from other users
    for i in 1 2 3; do
-     git pull --rebase origin main --quiet && git push origin main --quiet && break
+     git -c rebase.empty=drop pull --rebase origin main --quiet && git push origin main --quiet && break
      if [ $i -eq 3 ]; then
        echo "Push failed after 3 attempts. Try /save again."
        exit 1
@@ -92,7 +92,7 @@ If the remote branch is gone:
    - **Rebase onto latest develop before pushing** (prevents stale overwrites):
      ```bash
      git fetch origin develop --quiet
-     git rebase origin/develop --quiet
+     git rebase origin/develop --quiet --empty=drop
      ```
      If rebase conflicts: abort, try merge instead:
      ```bash
@@ -355,7 +355,7 @@ Saving to Egregore...
 
   Pushing to main...
     git commit -m "Add: handoff for infra fix"
-    git pull --rebase origin main
+    git -c rebase.empty=drop pull --rebase origin main
     git push origin main
 
   ✓ Memory pushed

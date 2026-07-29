@@ -81,7 +81,7 @@ fi
 
 # --- Rebase onto develop, fall back to merge if rebase conflicts ---------
 git fetch origin develop --quiet 2>/dev/null || true
-if ! git rebase origin/develop --quiet 2>/dev/null; then
+if ! git rebase origin/develop --quiet --empty=drop 2>/dev/null; then
   git rebase --abort 2>/dev/null || true
   if ! git merge origin/develop --quiet -m "Sync with develop" 2>/dev/null; then
     # Conflicts we can't auto-resolve. Leave the branch as-is; the user will see it

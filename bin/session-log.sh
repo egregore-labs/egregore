@@ -197,7 +197,7 @@ fi
   cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 0
   git add "sessions/$MONTH/$(basename "$SESSION_FILE")" 2>/dev/null || exit 0
   git commit -m "session: ${DISPLAY_NAME:-$AUTHOR} — $TOPIC" --quiet 2>/dev/null || exit 0
-  git pull --rebase origin main --quiet 2>/dev/null || true
+  git -c rebase.empty=drop pull --rebase origin main --quiet 2>/dev/null || true
   git push origin main --quiet 2>/dev/null || true
 ) &
 
