@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # PostToolUse observation hook — fires after Edit, Write, Bash, NotebookEdit.
 # Appends one JSONL line per invocation to a per-session buffer file.
 # No jq, no network, always exit 0. Observe layer — never blocks.

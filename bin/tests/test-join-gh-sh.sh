@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: bin/join-gh.sh — gh CLI joiner for Egregore (companion to init-gh.sh)

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared config helpers — sourced by session-start.sh and other scripts.
 # Expects SCRIPT_DIR to be set by the caller.
 

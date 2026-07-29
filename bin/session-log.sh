@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SessionEnd hook: write a structured session log to memory/sessions/.
 # Receives JSON on stdin from Claude Code's SessionEnd hook.
 # Runs BEFORE transcript-archive.sh (needs obs buffer + worktree intact).

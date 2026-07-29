@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # startup-check.sh — Validate local config and phone home health status.
 # Called by session-start.sh in background. Fire-and-forget.
 set -uo pipefail

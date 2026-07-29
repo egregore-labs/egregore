@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: /checkup mode gating + CLAUDE.md self-awareness/mode sections

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Named graph operations for eval — clean interface over raw Cypher.
 # Keeps implementation details out of the TUI.
 #

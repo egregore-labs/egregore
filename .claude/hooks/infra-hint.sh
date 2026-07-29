@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # infra-hint.sh — PreToolUse hook for infrastructure command awareness
 # When infra-related CLI commands are detected, inject a system hint
 # about the service registry.

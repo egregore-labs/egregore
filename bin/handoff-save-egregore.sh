@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # handoff-save-egregore.sh — background save+auto-merge for the core repo after a handoff.
 #
 # /handoff renders its card first, then fires this detached. The user never waits on git.

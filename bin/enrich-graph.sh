@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Enrich graph: backfill topics, types, timestamps, resolve ghosts, create RELATES_TO edges.

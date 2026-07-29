@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -o pipefail
 
 # Framework version — bumped on greeting/startup changes.

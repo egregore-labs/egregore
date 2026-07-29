@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: branch-guard sibling-repo exemption + plan-mode soften + /save PR dedupe

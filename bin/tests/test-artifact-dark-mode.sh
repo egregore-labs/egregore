@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -uo pipefail
 
 # Test: egregore-artifacts dark mode — regression guard for PR #556.

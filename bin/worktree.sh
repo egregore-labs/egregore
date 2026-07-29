@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Worktree lifecycle management for Egregore sessions.
 # Each session gets an isolated worktree so parallel sessions don't conflict.
 #

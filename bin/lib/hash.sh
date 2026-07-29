@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Cross-platform hash helpers — sourced by scripts that need hashing.
 
 # Compute MD5 hash of a string (macOS + Linux compatible)

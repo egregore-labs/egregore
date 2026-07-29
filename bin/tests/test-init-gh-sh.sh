@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Test: bin/init-gh.sh — gh CLI installer for Egregore (no GitHub App, no manual PAT)

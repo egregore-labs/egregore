@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # bin/join-gh.sh — Join an existing Egregore via the `gh` CLI.
 #

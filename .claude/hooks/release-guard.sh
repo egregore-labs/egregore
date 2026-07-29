@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # release-guard.sh — non-blocking reminder when shippable surfaces are touched.
 #
 # Two trigger points (the script branches on event + tool):

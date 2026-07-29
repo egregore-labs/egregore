@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # WorktreeCreate hook — replaces EnterWorktree's default behavior.
 # Receives {"name": "<slug>"} on stdin. Must print absolute worktree path to stdout.
 # All diagnostic output goes to stderr or /dev/null — stdout is ONLY for the path.

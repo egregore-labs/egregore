@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Pulse Weekly Report — sends the full week's runs to Sonnet for deep synthesis,

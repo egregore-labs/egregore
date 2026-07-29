@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Install egregore shell alias. Called by installers (not session-start).
 #
 # Usage:

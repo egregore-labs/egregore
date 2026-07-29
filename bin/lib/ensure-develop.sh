@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ensure-develop.sh — Ensure a repository has a develop branch.
 #
 # Usage:
