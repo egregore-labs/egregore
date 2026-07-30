@@ -58,7 +58,7 @@ If the surface renders a copy affordance on that block, confirm it copies the ex
    dividers with the brass diamond?
 2. Is the **typographic hierarchy** doing real work?
 3. Does it hold up in **dark mode** with no un-themed element?
-4. Does it feel like the [same family](https://egregore.xyz/view/curvelabs/design-convention)
+4. Does it feel like the [same family](https://example.com/design-convention)
    as the handoff and platform surfaces?
 
 When you've looked it over, run the feedback protocol.

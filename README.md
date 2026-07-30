@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/71a690fb-8a4e-4d0b-9a61-e6cdc7595430
 ## Install
 
 ```bash
-npx create-egregore@latest --open
+npx create-egregore@latest
 ```
 
 This walks you through GitHub auth, names your egregore, creates the repos

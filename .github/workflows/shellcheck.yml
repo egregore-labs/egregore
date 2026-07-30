@@ -3,10 +3,12 @@ name: ShellCheck
 on:
   push:
     paths:
-      - 'bin/**/*.sh'
+      - '**/*.bash'
+      - '**/*.sh'
   pull_request:
     paths:
-      - 'bin/**/*.sh'
+      - '**/*.bash'
+      - '**/*.sh'
 
 jobs:
   shellcheck:
@@ -20,3 +22,15 @@ jobs:
           scandir: './bin'
           severity: error
           format: gcc
+
+      - name: Reject non-portable Bash shebangs
+        shell: bash
+        run: |
+          fail=0
+          while IFS= read -r -d '' file; do
+            if [ "$(head -n 1 "$file")" = '#!/bin/bash' ]; then
+              echo "Non-portable Bash shebang: $file"
+              fail=1
+            fi
+          done < <(git ls-files -z -- '*.bash' '*.sh')
+          exit "$fail"

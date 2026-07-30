@@ -7,24 +7,24 @@
   "claim": "Running this renders the MERIDIAN handoff surface with every section populated, so you can judge the real design on real structure.",
   "ask": "Check the handoff surface: do the deep links resolve, does the briefing read cleanly, and do the decision cards + repo-state table hold up in light and dark?",
   "created_at": "2026-06-25T09:00:00Z",
-  "author": { "display": "Claude · Curve Labs", "handle": "egregore" },
+  "author": { "display": "Egregore sample", "handle": "egregore" },
   "audience": {
-    "addressed_to": [{ "display": "Oğuzhan", "handle": "oguzhan" }],
+    "addressed_to": [{ "display": "Reviewer", "handle": "reviewer" }],
     "visible_to": "public",
     "extendable_by": "anyone"
   },
   "repo_state": [
     {
       "repo": "egregore",
-      "branch": "dev/fcdagdelen/egregore-design-convention",
-      "pr_number": 975,
+      "branch": "dev/example/design-convention",
+      "pr_number": 123,
       "base": "develop",
       "ahead": 6,
       "uncommitted": false
     }
   ],
   "body": {
-    "prose": "## Briefing\n\nThis is a **sample handoff** rendered through the branch's MERIDIAN code. It exists to put the handoff surface under load: prose with `inline code`, a [link](https://egregore.xyz/view/curvelabs/design-convention), a list, and a copyable block.\n\nThe handoff surface is the agent-to-agent + human bridge. The things that must work:\n\n- the **deep links** (open in Claude Code / Claude / ChatGPT)\n- the **decision cards** and **repo-state table**\n- the whole thing reading as the *same family* as the document and platform surfaces\n\n```\nRun this Egregore: design-convention\nSurface: handoff\n```\n",
+    "prose": "## Briefing\n\nThis is a **sample handoff** rendered through the branch's MERIDIAN code. It exists to put the handoff surface under load: prose with `inline code`, a [link](https://example.com/design-convention), a list, and a copyable block.\n\nThe handoff surface is the agent-to-agent + human bridge. The things that must work:\n\n- the **deep links** (open in Claude Code / Claude / ChatGPT)\n- the **decision cards** and **repo-state table**\n- the whole thing reading as the *same family* as the document and platform surfaces\n\n```\nRun this Egregore: design-convention\nSurface: handoff\n```\n",
     "sidecar": {
       "current_state": "MERIDIAN is wired into the document, handoff, and platform render paths on this branch. The emissary renderer is server-side and not yet design-system-wired — that's the #1 Round-2 task.",
       "decisions": [
@@ -60,7 +60,7 @@
       "type": "url",
       "kind": "harness",
       "label": "Design Convention harness (all four surfaces)",
-      "target": "https://egregore.xyz/view/curvelabs/design-convention",
+      "target": "https://example.com/design-convention",
       "snippet": "The 4-surface review harness — emissary, document, handoff, platform."
     },
     {

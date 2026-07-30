@@ -24,7 +24,7 @@ case "$SURFACE" in
     echo "Emissary is harness-only for Round 1 — its renderer is server-side and not"
     echo "design-system-wired yet (that's the #1 Round-2 task). Review it here:"
     echo ""
-    echo "  https://egregore.xyz/view/curvelabs/design-convention   (emissary tab)"
+    echo "  https://example.com/design-convention   (emissary tab)"
     echo ""
     echo "Then give feedback: say to your Egregore → \"Run the Design Convention feedback protocol\""
     exit 0 ;;
