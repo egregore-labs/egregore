@@ -8,7 +8,7 @@ Not this: casual question → just answer · survey/form → different tool · u
 
 Arguments: $ARGUMENTS (Optional: [topic] [--respondents name1,name2] [--seed path])
 
-**Rendered surface:** `/harvest` is the only command. When a round's findings are decision-shaped (each a real fork with 2–4 distinct options), `/harvest` renders them as an interactive Meridian **decision surface** the respondent decides *on* and pastes back, instead of asking inline. *Decision surface* is the rendered format `/harvest` produces — not a separate command. See the rendered-surface section below.
+**Rendered surface:** `/harvest` is the only command. **The trigger is mechanical, not a judgment call:** a round that asks **3 or more questions, each carrying 2+ options, MUST render as an interactive Meridian decision surface** the respondent decides *on* and pastes back. Inline AskUserQuestion is reserved for ≤2 quick picks or purely open-ended probes with no options. *Decision surface* is the rendered format `/harvest` produces — not a separate command. See the rendered-surface section below.
 
 ## What to do
 
@@ -128,7 +128,7 @@ When someone runs `/harvest` alone or on themselves — "I need to think through
 
 ### Decision surface — harvest's rendered mode
 
-`/harvest` is the only command. When a round's findings are **decision-shaped** — each a real fork with 2–4 distinct options — render them as an interactive Meridian **decision surface** (the rendered format) instead of asking inline. The respondent decides *on* the page — clicking an option per card, noting reasoning — and hits **copy decisions**, which emits a stable paste-back block:
+`/harvest` is the only command. **Mechanical trigger — apply it before choosing how to ask:** if the round has **≥3 questions that each carry 2+ options, render a decision surface** (the rendered format); ask inline only for ≤2 quick picks or open-ended probes. "The questions feel elicitation-shaped" is not an exemption — option-carrying questions ARE decision-shaped. The respondent decides *on* the page — clicking an option per card, noting reasoning — and hits **copy decisions**, which emits a stable paste-back block:
 
 ```
 #{slug}-decisions:v1
@@ -146,10 +146,11 @@ Q2 {decision-id}: UNDECIDED
 - Each option carries a structural **visual** of what it *means* (mono mock / diagram / badges), honest `+/−` tradeoffs (every option needs ≥1 real minus — an option with no minus is propaganda), and at most one recommendation that's a position to push on.
 - **Order for cascade**: open with the choice that frames the rest; let later cards build on earlier ones. Surface the real tension instead of flattening it — the goal is to extract sharp judgment and its *why* (the note rides back), not collect a checklist.
 
-**Render** the data model (JSON) — see `packages/egregore-artifacts/lib/parsers/decision-surface.js` for the shape:
+**Render** the data model (JSON) — shape documented in `lib/parsers/decision-surface.js` inside the published `egregore-artifacts` npm package:
 ```bash
-node packages/egregore-artifacts/bin/cli.js decision-surface {surface}.json --output {out}.html
-# published form (post-publish): npx egregore-artifacts decision-surface {surface}.json
+npx --yes egregore-artifacts decision-surface {surface}.json --output {out}.html
+# upstream development only (the packages/ tree is NOT synced to downstream instances):
+# node packages/egregore-artifacts/bin/cli.js decision-surface {surface}.json --output {out}.html
 ```
 Renderer type: `decision-surface` (meridian-locked). Visuals use a **safe structured schema** (`mono`/`badges`/`diagram`) — never raw HTML/SVG, since directed surfaces are sent to others.
 
