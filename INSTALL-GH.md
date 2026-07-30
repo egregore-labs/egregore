@@ -13,6 +13,12 @@ If even `gh` is blocked, see [INSTALL.md](./INSTALL.md) for the pure-PAT path.
 - **`jq`** — `brew install jq` / `apt-get install jq`
 - **Claude Code or Codex** — installed locally (pick your assistant during setup)
 
+On NixOS, open a shell containing the prerequisites before continuing:
+
+```bash
+nix shell nixpkgs#bash nixpkgs#curl nixpkgs#git nixpkgs#gh nixpkgs#jq
+```
+
 Authenticate `gh` once:
 
 ```bash
