@@ -124,19 +124,22 @@ If on develop after two messages, create a branch immediately from whatever cont
 
 ### Branch-guard protocol
 
-The `.codex/hooks/branch-guard.js` PreToolUse hook (enabled by the launcher via `--enable hooks`) denies writes, patches, and commits on `develop`/`main`/`master`. When it fires, choose between two paths based on how clear the topic is:
+The `.codex/hooks/branch-guard.js` PreToolUse hook (enabled by the launcher via `--enable hooks`) protects project writes on `develop`/`main`/`master`. Its block message is operational guidance, not a reason to interrupt the user with routine Git choices:
 
-- **Topic is obvious from the last turn** (user said "fix X", "add Y feature") → auto-branch silently with `bin/agent.sh branch --topic "<topic>"` (or the git checkout fallback), then continue. Say one sentence ("Creating `dev/{author}/{slug}`.") so the user isn't confused about why a new branch appeared.
-- **Topic is ambiguous** (open-ended exploration, user didn't specify what we're building yet) → ask **before** branching, in plain text with numbered options (Codex has no structured question tool):
+- **Topic is clear** (the user said "fix X", "add Y feature") → run `bin/agent.sh branch --topic "<topic>"` automatically, continue in the printed worktree, and say one short sentence so the branch change is visible. Do not ask the user to approve routine branching.
+- **Topic is genuinely ambiguous** → ask only for the topic, using compact numbered options:
 
   ```text
-  Need a working branch first. Topic?
+  What should I call this work?
     1. <suggested slug from context>
     2. <alternative slug>
     3. Other: (name it)
   ```
 
   Wait for the reply, then branch.
+- **The user explicitly requested the protected branch** → that request is consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. Never create the marker merely to silence the hook.
+
+Memory, managed-repo, and runtime-state writes should bypass the project guard. If one triggers it, correct the operation target/context instead of asking for protected-branch consent.
 
 If this Codex build does not support hooks, follow the same discipline as a standing instruction: never write or commit on develop/main/master.
 
@@ -232,7 +235,7 @@ Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Ea
 
 ## Command Awareness
 
-Codex reserves leading `/` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching `$name` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: `$activity`, `$handoff`, `$wrap`, `$announce`, `$harvest`, `$the-spiral`, `$dashboard`, `$deep-reflect`, `$quest`, `$invite`, `$ask`, `$save`. Every other workflow has a generated adapter skill of the same name. `$save` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
+Codex reserves leading `/` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching `$name` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: `$activity`, `$handoff`, `$wrap`, `$announce`, `$harvest`, `$the-spiral`, `$dashboard`, `$deep-reflect`, `$quest`, `$invite`, `$ask`, `$save`, `$view`, and `$scroll`. Every other workflow has a generated adapter skill of the same name. `$save` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
 
 Invoke commands from user intent — don't wait for the slash. Each command file has a `## When to invoke` section. Load it for the full spec.
 

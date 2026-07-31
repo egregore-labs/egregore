@@ -6,11 +6,13 @@ set -euo pipefail
 # Covers:
 #   .claude/hooks/branch-guard.sh
 #   .claude/skills/save/SKILL.md (dedupe pattern via doc inspection)
+#   .codex/skills/save/SKILL.md (clean-tree PR publication guard)
 #   .claude/skills/wrap/SKILL.md (session_duration_ms derivation)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$SCRIPT_DIR/.claude/hooks/branch-guard.sh"
 SAVE_MD="$SCRIPT_DIR/.claude/skills/save/SKILL.md"
+CODEX_SAVE_MD="$SCRIPT_DIR/.codex/skills/save/SKILL.md"
 WRAP_MD="$SCRIPT_DIR/.claude/skills/wrap/SKILL.md"
 CLAUDE_MD="$SCRIPT_DIR/CLAUDE.md"
 
@@ -81,6 +83,12 @@ if echo "$MSG" | grep -q "AskUserQuestion"; then
 else
   fail "block message missing AskUserQuestion directive" "got: $MSG"
 fi
+if echo "$MSG" | grep -q "create the branch automatically" &&
+   ! echo "$MSG" | grep -q "Ask the user how to proceed"; then
+  pass "clear-topic path auto-branches without a routine Git prompt"
+else
+  fail "block message still interrupts for routine branch permission" "got: $MSG"
+fi
 
 # 5) Write to .claude/ on develop must still be allowed (pre-existing exemption intact)
 set +e
@@ -93,7 +101,29 @@ else
   fail ".claude/ exemption broke" "exit $rc"
 fi
 
-# 6) On a non-protected branch the hook must short-circuit to allow everything
+# 6) The documented consent command must never be blocked by the guard itself
+set +e
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo 'develop' > .egregore-branch-consent\"}}" | bash "$HOOK" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+  pass "protected-branch consent command → allowed"
+else
+  fail "consent command blocked itself" "exit $rc"
+fi
+
+# 7) Memory-only shell preparation must not force a project branch
+set +e
+echo "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mkdir -p memory/knowledge/harvests/test\"}}" | bash "$HOOK" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+  pass "memory-only shell preparation on develop → allowed"
+else
+  fail "memory-only shell preparation unexpectedly blocked" "exit $rc"
+fi
+
+# 8) On a non-protected branch the hook must short-circuit to allow everything
 git checkout -q -b dev/test/topic
 set +e
 echo "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$TMP/src/f.py\"}}" | bash "$HOOK" >/dev/null 2>&1
@@ -113,6 +143,22 @@ cd "$SCRIPT_DIR"
 
 echo
 echo "── /save PR dedupe ──"
+
+# Codex must not equate a clean tree with a fully published branch. A task
+# branch can be clean because an attendant already committed it while still
+# lacking the integration PR that makes the work mergeable.
+if grep -qE 'git rev-list --count.*origin/develop\.\.HEAD' "$CODEX_SAVE_MD" &&
+   grep -qE 'gh pr list --head.*--base develop.*--state open' "$CODEX_SAVE_MD"; then
+  pass "Codex /save checks committed work and PR state before stopping"
+else
+  fail "Codex /save can still stop on a clean branch with no PR"
+fi
+if grep -q 'clean working tree alone' "$CODEX_SAVE_MD" &&
+   grep -q 'create the missing PR' "$CODEX_SAVE_MD"; then
+  pass "Codex /save continues clean-but-unpublished branches through the bridge"
+else
+  fail "Codex /save missing clean-but-unpublished continuation rule"
+fi
 
 # Hub flow: dedupe via gh pr list --head --state open, before gh pr create
 if grep -qE 'gh pr list --head.*--state open.*--json number,baseRefName' "$SAVE_MD"; then
