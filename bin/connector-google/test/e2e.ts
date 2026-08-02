@@ -18,6 +18,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { extractMessageContent } from "../src/gmail.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONNECTOR_DIR = resolve(__dirname, "..");
@@ -109,11 +110,43 @@ function execMayFail(cmd: string): { stdout: string; stderr: string; code: numbe
 // =============================================================================
 
 const unitTests = [
+  test("gmail: extracts nested plain-text body and attachment metadata", () => {
+    const encoded = Buffer.from("Nested message body", "utf-8").toString("base64url");
+    const result = extractMessageContent({
+      mimeType: "multipart/mixed",
+      parts: [
+        {
+          mimeType: "multipart/alternative",
+          parts: [{ mimeType: "text/plain", body: { data: encoded } }],
+        },
+        {
+          filename: "decision.pdf",
+          mimeType: "application/pdf",
+          body: { attachmentId: "attachment-123", size: 42 },
+        },
+      ],
+    });
+    assert(result.body === "Nested message body", "Should extract recursively nested text/plain");
+    assert(result.attachments.length === 1, "Should find one attachment");
+    assert(result.attachments[0].id === "attachment-123", "Attachment ID should match");
+    assert(result.attachments[0].filename === "decision.pdf", "Filename should match");
+  }),
+
+  test("gmail: falls back to nested HTML when plain text is absent", () => {
+    const encoded = Buffer.from("<p>HTML message</p>", "utf-8").toString("base64url");
+    const result = extractMessageContent({
+      mimeType: "multipart/alternative",
+      parts: [{ mimeType: "text/html", body: { data: encoded } }],
+    });
+    assert(result.body === "<p>HTML message</p>", "Should fall back to HTML body");
+  }),
+
   test("CLI: help command shows usage", () => {
     const out = exec(`${CLI} help`);
     assertContains(out, "connector-google <command>");
     assertContains(out, "drive list");
     assertContains(out, "gmail list");
+    assertContains(out, "gmail attachment");
     assertContains(out, "calendar list");
     assertContains(out, "docs get");
     assertContains(out, "sheets get");

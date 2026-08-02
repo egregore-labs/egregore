@@ -81,6 +81,23 @@ export interface GmailMessage {
   date?: string;
   labelIds?: string[];
   body?: string;
+  attachments?: GmailAttachment[];
+}
+
+export interface GmailAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+}
+
+export interface GmailAttachmentDownload {
+  messageId: string;
+  attachmentId: string;
+  filename: string;
+  mimeType?: string;
+  size: number;
+  path: string;
 }
 
 export interface GmailListResult {

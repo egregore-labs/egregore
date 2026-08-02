@@ -3,7 +3,7 @@
 
 import { authSetup, authRevoke, printAuthStatus } from "./auth.js";
 import { listFiles, getFile, searchFiles } from "./drive.js";
-import { listMessages, getMessage, searchMessages } from "./gmail.js";
+import { downloadAttachment, listMessages, getMessage, searchMessages } from "./gmail.js";
 import { listEvents, getEvent } from "./calendar.js";
 import { getDoc } from "./docs.js";
 import { getSheet } from "./sheets.js";
@@ -39,6 +39,7 @@ Data:
   gmail list [--label X] [--since DATE] [--max N]
   gmail get <message-id>
   gmail search <query>
+  gmail attachment <message-id> <attachment-id> [--filename NAME] [--mime-type TYPE]
   calendar list [--since DATE] [--until DATE]
   calendar get <event-id>
   docs get <doc-id>
@@ -148,8 +149,16 @@ async function main(): Promise<void> {
     } else if (subcommand === "search" && args[2]) {
       const result = await searchMessages(args.slice(2).join(" "));
       printJson(result);
+    } else if (subcommand === "attachment" && args[2] && args[3]) {
+      const result = await downloadAttachment(
+        args[2],
+        args[3],
+        parseFlag("--filename") ?? "attachment",
+        parseFlag("--mime-type"),
+      );
+      printJson(result);
     } else {
-      console.error("Usage: gmail list|get|search");
+      console.error("Usage: gmail list|get|search|attachment");
       process.exit(1);
     }
     return;
