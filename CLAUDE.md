@@ -171,6 +171,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Connectors** — `/telegram-connect` (Telegram group setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr` `/contribute`
 **Spirits** — `/summon` (persistent agent processes)
+**Play** — `/roast` (context-aware court jester)
 **Infra** — `/setup` `/update` `/pull` `/env` `/infra` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation:**

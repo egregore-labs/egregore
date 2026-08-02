@@ -85,6 +85,9 @@ jobs:
           echo "Checked $(echo "$COMMAND_FILES" | wc -l | tr -d ' ') command/skill files"
           exit $FAIL
 
+      - name: Roast skill contract
+        run: bash bin/tests/test-roast-skill.sh
+
   worktree-tests:
     runs-on: ubuntu-latest
     steps:

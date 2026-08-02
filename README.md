@@ -87,6 +87,7 @@ to learn git workflows or remember conventions.
 | `/todo` | Personal task tracking |
 | `/reflect` | Capture a decision, pattern, or finding |
 | `/deep-reflect` | Cross-reference an insight against accumulated knowledge |
+| `/roast` | Summon a context-aware court jester for a sharp, bounded roast |
 
 ## Invite
 
