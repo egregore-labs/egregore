@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Google Workspace connector CLI entry point. */
 
-import { authSetup, authRevoke, printAuthStatus } from "./auth.js";
+import { authSetup, authRevoke, listConnectedAccounts, printAuthStatus } from "./auth.js";
 import { listFiles, getFile, searchFiles } from "./drive.js";
 import { downloadAttachment, listMessages, getMessage, searchMessages } from "./gmail.js";
 import { listEvents, getEvent } from "./calendar.js";
@@ -9,7 +9,7 @@ import { getDoc } from "./docs.js";
 import { getSheet } from "./sheets.js";
 import { listCachedItems, clearCache, getCachedItem, ensureContextDirs } from "./context.js";
 import { buildPromotionPayload } from "./promote.js";
-import { readState, getConnectorConfig, writeState } from "./config.js";
+import { readState, getConnectorConfig, getLocalEnvValue, writeState } from "./config.js";
 import { authStatus } from "./auth.js";
 import type { GoogleService } from "./types.js";
 
@@ -29,6 +29,7 @@ Setup:
   auth               Run Google OAuth setup (opens browser)
   auth status        Check auth state
   auth revoke        Revoke Google access
+  auth accounts      List connected Google accounts
   enable [services]  Enable services for current user
   status             Show full connector status
 
@@ -36,11 +37,14 @@ Data:
   drive list [--folder NAME] [--max N]
   drive get <file-id>
   drive search <query>
+  drive search-all <query>
   gmail list [--label X] [--since DATE] [--max N]
   gmail get <message-id>
   gmail search <query>
+  gmail search-all <query>
   gmail attachment <message-id> <attachment-id> [--filename NAME] [--mime-type TYPE]
   calendar list [--since DATE] [--until DATE]
+  calendar list-all [--since DATE] [--until DATE]
   calendar get <event-id>
   docs get <doc-id>
   sheets get <sheet-id> [range]
@@ -49,13 +53,43 @@ Context:
   context list               List cached items
   context show <id>          Show a cached item
   context clear [service]    Clear cache
-  promote <service> <id>     Prepare item for promotion (outputs JSON)`);
+  promote <service> <id>     Prepare item for promotion (outputs JSON)
+
+Account selection:
+  --account EMAIL            Run a command as one connected account
+  search-all / list-all      Query every connected account`);
 }
 
 function parseFlag(flag: string): string | undefined {
   const idx = args.indexOf(flag);
   if (idx === -1 || idx + 1 >= args.length) return undefined;
   return args[idx + 1];
+}
+
+const requestedAccount = parseFlag("--account");
+if (requestedAccount) process.env.EGREGORE_GOOGLE_ACCOUNT = requestedAccount;
+
+function queryFrom(start: number): string {
+  const values = args.slice(start);
+  const accountFlag = values.indexOf("--account");
+  if (accountFlag !== -1) values.splice(accountFlag, 2);
+  return values.join(" ");
+}
+
+async function runAcrossAccounts<T>(operation: () => Promise<T>): Promise<Array<{ account: string; result: T | { error: string } }>> {
+  const previous = process.env.EGREGORE_GOOGLE_ACCOUNT;
+  const results: Array<{ account: string; result: T | { error: string } }> = [];
+  for (const account of listConnectedAccounts()) {
+    process.env.EGREGORE_GOOGLE_ACCOUNT = account;
+    try {
+      results.push({ account, result: await operation() });
+    } catch (err: unknown) {
+      results.push({ account, result: { error: (err as { message?: string }).message ?? "Unknown error" } });
+    }
+  }
+  if (previous) process.env.EGREGORE_GOOGLE_ACCOUNT = previous;
+  else delete process.env.EGREGORE_GOOGLE_ACCOUNT;
+  return results;
 }
 
 async function main(): Promise<void> {
@@ -68,7 +102,10 @@ async function main(): Promise<void> {
 
   if (command === "check") {
     // Check if Google OAuth credentials are configured
-    const hasCredentials = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+    const hasCredentials = !!(
+      (process.env.GOOGLE_CLIENT_ID || getLocalEnvValue("GOOGLE_CLIENT_ID")) &&
+      (process.env.GOOGLE_CLIENT_SECRET || getLocalEnvValue("GOOGLE_CLIENT_SECRET"))
+    );
     const status = await authStatus();
     console.log(`OAuth credentials: ${hasCredentials ? "configured" : "not set (need GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in .env)"}`);
     console.log(`Auth status: ${status.connected ? `connected (${status.account})` : "not connected"}`);
@@ -77,9 +114,11 @@ async function main(): Promise<void> {
 
   if (command === "auth") {
     if (subcommand === "status") {
-      await printAuthStatus();
+      await printAuthStatus(requestedAccount);
     } else if (subcommand === "revoke") {
-      await authRevoke();
+      await authRevoke(requestedAccount);
+    } else if (subcommand === "accounts") {
+      printJson({ accounts: listConnectedAccounts(), active: requestedAccount ?? readState().google_account });
     } else {
       await authSetup();
     }
@@ -126,10 +165,12 @@ async function main(): Promise<void> {
       const result = await getFile(args[2]);
       printJson(result);
     } else if (subcommand === "search" && args[2]) {
-      const result = await searchFiles(args.slice(2).join(" "));
+      const result = await searchFiles(queryFrom(2));
       printJson(result);
+    } else if (subcommand === "search-all" && args[2]) {
+      printJson({ ok: true, service: "drive", command: "search-all", data: await runAcrossAccounts(() => searchFiles(queryFrom(2))) });
     } else {
-      console.error("Usage: drive list|get|search");
+      console.error("Usage: drive list|get|search|search-all");
       process.exit(1);
     }
     return;
@@ -147,8 +188,10 @@ async function main(): Promise<void> {
       const result = await getMessage(args[2]);
       printJson(result);
     } else if (subcommand === "search" && args[2]) {
-      const result = await searchMessages(args.slice(2).join(" "));
+      const result = await searchMessages(queryFrom(2));
       printJson(result);
+    } else if (subcommand === "search-all" && args[2]) {
+      printJson({ ok: true, service: "gmail", command: "search-all", data: await runAcrossAccounts(() => searchMessages(queryFrom(2))) });
     } else if (subcommand === "attachment" && args[2] && args[3]) {
       const result = await downloadAttachment(
         args[2],
@@ -158,7 +201,7 @@ async function main(): Promise<void> {
       );
       printJson(result);
     } else {
-      console.error("Usage: gmail list|get|search|attachment");
+      console.error("Usage: gmail list|get|search|search-all|attachment");
       process.exit(1);
     }
     return;
@@ -171,11 +214,18 @@ async function main(): Promise<void> {
         until: parseFlag("--until"),
       });
       printJson(result);
+    } else if (subcommand === "list-all") {
+      printJson({
+        ok: true,
+        service: "calendar",
+        command: "list-all",
+        data: await runAcrossAccounts(() => listEvents({ since: parseFlag("--since"), until: parseFlag("--until") })),
+      });
     } else if (subcommand === "get" && args[2]) {
       const result = await getEvent(args[2]);
       printJson(result);
     } else {
-      console.error("Usage: calendar list|get");
+      console.error("Usage: calendar list|list-all|get");
       process.exit(1);
     }
     return;

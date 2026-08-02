@@ -145,9 +145,13 @@ const unitTests = [
     const out = exec(`${CLI} help`);
     assertContains(out, "connector-google <command>");
     assertContains(out, "drive list");
+    assertContains(out, "drive search-all");
     assertContains(out, "gmail list");
+    assertContains(out, "gmail search-all");
     assertContains(out, "gmail attachment");
     assertContains(out, "calendar list");
+    assertContains(out, "calendar list-all");
+    assertContains(out, "--account EMAIL");
     assertContains(out, "docs get");
     assertContains(out, "sheets get");
     assertContains(out, "promote");
@@ -164,6 +168,13 @@ const unitTests = [
     assertContains(out, "Org enabled:");
     assertContains(out, "User connected:");
     assertContains(out, "Services:");
+  }),
+
+  test("CLI: auth accounts lists connected accounts", () => {
+    const out = exec(`${CLI} auth accounts`);
+    const result = JSON.parse(out);
+    assert(Array.isArray(result.accounts), "Expected accounts array");
+    assert(typeof result.active === "string" || result.active === undefined, "Expected active account");
   }),
 
   test("CLI: unknown command exits with error", () => {

@@ -32,6 +32,7 @@ export interface UserState {
   google_connector?: boolean;
   google_auth_complete?: boolean;
   google_account?: string;
+  google_accounts?: string[];
   google_services?: GoogleService[];
   google_last_sync?: string;
   [key: string]: unknown;
