@@ -32,6 +32,7 @@ export interface UserState {
   google_connector?: boolean;
   google_auth_complete?: boolean;
   google_account?: string;
+  google_accounts?: string[];
   google_services?: GoogleService[];
   google_last_sync?: string;
   [key: string]: unknown;
@@ -81,6 +82,23 @@ export interface GmailMessage {
   date?: string;
   labelIds?: string[];
   body?: string;
+  attachments?: GmailAttachment[];
+}
+
+export interface GmailAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+}
+
+export interface GmailAttachmentDownload {
+  messageId: string;
+  attachmentId: string;
+  filename: string;
+  mimeType?: string;
+  size: number;
+  path: string;
 }
 
 export interface GmailListResult {

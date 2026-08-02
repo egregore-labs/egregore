@@ -1,12 +1,60 @@
 /** Gmail operations via googleapis SDK. */
 
 import { google } from "googleapis";
-import type { CommandResult, GmailListResult, GmailMessage } from "./types.js";
+import { mkdirSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+import type { gmail_v1 } from "googleapis";
+import type {
+  CommandResult,
+  GmailAttachment,
+  GmailAttachmentDownload,
+  GmailListResult,
+  GmailMessage,
+} from "./types.js";
 import { getAuthClient } from "./auth.js";
 import { cacheItem, cacheList } from "./context.js";
 
 async function getGmailClient() {
   return google.gmail({ version: "v1", auth: await getAuthClient() });
+}
+
+function decodeBase64Url(data: string): string {
+  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+}
+
+function walkParts(part: gmail_v1.Schema$MessagePart | undefined): gmail_v1.Schema$MessagePart[] {
+  if (!part) return [];
+  return [part, ...(part.parts ?? []).flatMap(walkParts)];
+}
+
+export function extractMessageContent(payload: gmail_v1.Schema$MessagePart | undefined): {
+  body: string;
+  attachments: GmailAttachment[];
+} {
+  const parts = walkParts(payload);
+  const plain = parts.find((part) => part.mimeType === "text/plain" && part.body?.data);
+  const html = parts.find((part) => part.mimeType === "text/html" && part.body?.data);
+  const selectedBody = plain?.body?.data ?? html?.body?.data ?? payload?.body?.data ?? "";
+
+  const attachments = parts
+    .filter((part) => !!part.body?.attachmentId)
+    .map((part) => ({
+      id: part.body!.attachmentId!,
+      filename: part.filename || "attachment",
+      mimeType: part.mimeType || "application/octet-stream",
+      size: part.body?.size ?? undefined,
+    }));
+
+  return {
+    body: selectedBody ? decodeBase64Url(selectedBody) : "",
+    attachments,
+  };
+}
+
+function safeFilename(filename: string): string {
+  const cleaned = filename.replace(/[\\/\0]/g, "_").replace(/^\.+/, "").trim();
+  return cleaned || "attachment";
 }
 
 export async function listMessages(opts: {
@@ -83,17 +131,7 @@ export async function getMessage(messageId: string): Promise<CommandResult<Gmail
     const headers = resp.data.payload?.headers ?? [];
     const getHeader = (name: string) => headers.find((h) => h.name === name)?.value;
 
-    // Extract body — try plain text part first
-    let body = "";
-    const parts = resp.data.payload?.parts;
-    if (parts) {
-      const textPart = parts.find((p) => p.mimeType === "text/plain");
-      if (textPart?.body?.data) {
-        body = Buffer.from(textPart.body.data, "base64").toString("utf-8");
-      }
-    } else if (resp.data.payload?.body?.data) {
-      body = Buffer.from(resp.data.payload.body.data, "base64").toString("utf-8");
-    }
+    const { body, attachments } = extractMessageContent(resp.data.payload ?? undefined);
 
     const message: GmailMessage = {
       id: resp.data.id ?? messageId,
@@ -105,6 +143,7 @@ export async function getMessage(messageId: string): Promise<CommandResult<Gmail
       date: getHeader("Date"),
       labelIds: resp.data.labelIds ?? undefined,
       body,
+      attachments,
     };
 
     cacheItem("gmail", messageId, { ...message, fetchedAt: new Date().toISOString() });
@@ -116,6 +155,52 @@ export async function getMessage(messageId: string): Promise<CommandResult<Gmail
       service: "gmail",
       command: "get",
       data: { id: messageId, threadId: "", snippet: "" },
+      error: e.message,
+    };
+  }
+}
+
+export async function downloadAttachment(
+  messageId: string,
+  attachmentId: string,
+  filename = "attachment",
+  mimeType?: string,
+): Promise<CommandResult<GmailAttachmentDownload>> {
+  try {
+    const gmail = await getGmailClient();
+    const resp = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId,
+      id: attachmentId,
+    });
+    if (!resp.data.data) throw new Error("Attachment response contained no data");
+
+    const data = Buffer.from(resp.data.data.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+    const targetDir = join(homedir(), ".egregore", "context", "google", "gmail", "attachments", messageId);
+    mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+    const targetPath = join(targetDir, safeFilename(filename));
+    writeFileSync(targetPath, data, { mode: 0o600 });
+
+    return {
+      ok: true,
+      service: "gmail",
+      command: "attachment",
+      data: {
+        messageId,
+        attachmentId,
+        filename: safeFilename(filename),
+        mimeType,
+        size: data.length,
+        path: targetPath,
+      },
+    };
+  } catch (err: unknown) {
+    const e = err as { message?: string };
+    return {
+      ok: false,
+      service: "gmail",
+      command: "attachment",
+      data: { messageId, attachmentId, filename, mimeType, size: 0, path: "" },
       error: e.message,
     };
   }

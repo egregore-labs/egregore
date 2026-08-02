@@ -48,6 +48,14 @@ export function getApiKey(): string {
   return match ? match[1].trim() : "";
 }
 
+export function getLocalEnvValue(key: string): string {
+  const envPath = resolve(PROJECT_ROOT, ".env");
+  if (!existsSync(envPath)) return "";
+  const content = readFileSync(envPath, "utf-8");
+  const match = content.match(new RegExp(`^${key}=(.+)$`, "m"));
+  return match ? match[1].trim() : "";
+}
+
 export function isHosted(): boolean {
   return !!process.env.CODER || !!process.env.CODER_WORKSPACE_NAME;
 }

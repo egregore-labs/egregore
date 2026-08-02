@@ -2,14 +2,27 @@
 
 import { createServer } from "http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { homedir } from "os";
 import { google } from "googleapis";
 import type { AuthStatus } from "./types.js";
-import { writeState, readState, isHosted, getApiUrl, getApiKey } from "./config.js";
+import { writeState, readState, isHosted, getApiUrl, getApiKey, getLocalEnvValue } from "./config.js";
 
 const TOKEN_DIR = join(homedir(), ".egregore", "context", "google");
 const TOKEN_PATH = join(TOKEN_DIR, ".tokens.json");
+
+function selectedAccount(): string | undefined {
+  return process.env.EGREGORE_GOOGLE_ACCOUNT || readState().google_account;
+}
+
+function accountTokenPath(account: string): string {
+  return join(TOKEN_DIR, "accounts", encodeURIComponent(account.toLowerCase()), ".tokens.json");
+}
+
+export function listConnectedAccounts(): string[] {
+  const state = readState();
+  return [...new Set([...(state.google_accounts ?? []), ...(state.google_account ? [state.google_account] : [])])];
+}
 
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
@@ -17,6 +30,7 @@ const SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/documents.readonly",
   "https://www.googleapis.com/auth/spreadsheets.readonly",
+  "https://www.googleapis.com/auth/userinfo.email",
 ];
 
 const REDIRECT_PORT = 8095;
@@ -33,8 +47,8 @@ async function getCredentials(): Promise<{ clientId: string; clientSecret: strin
   if (_cachedCredentials) return _cachedCredentials;
 
   // 1. Check local env vars (self-hosted orgs can override)
-  const envId = process.env.GOOGLE_CLIENT_ID ?? "";
-  const envSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+  const envId = process.env.GOOGLE_CLIENT_ID ?? getLocalEnvValue("GOOGLE_CLIENT_ID");
+  const envSecret = process.env.GOOGLE_CLIENT_SECRET ?? getLocalEnvValue("GOOGLE_CLIENT_SECRET");
   if (envId && envSecret) {
     _cachedCredentials = { clientId: envId, clientSecret: envSecret };
     return _cachedCredentials;
@@ -78,39 +92,49 @@ async function createOAuth2Client() {
  */
 export async function getAuthClient(): Promise<InstanceType<typeof google.auth.OAuth2>> {
   const client = await createOAuth2Client();
-  const tokens = loadTokens();
+  const account = selectedAccount();
+  const tokens = loadTokens(account);
   if (!tokens) {
-    throw new Error("Not authenticated. Run 'auth' first.");
+    throw new Error(`Not authenticated${account ? ` as ${account}` : ""}. Run 'auth' first.`);
   }
   client.setCredentials(tokens);
 
   // Auto-refresh: googleapis handles token refresh automatically when
   // refresh_token is set and access_token is expired.
   client.on("tokens", (newTokens) => {
-    const existing = loadTokens() ?? {};
-    saveTokens({ ...existing, ...newTokens });
+    const existing = loadTokens(account) ?? {};
+    saveTokens({ ...existing, ...newTokens }, account);
   });
 
   return client;
 }
 
-function loadTokens(): Record<string, unknown> | null {
-  if (!existsSync(TOKEN_PATH)) return null;
+function loadTokens(account?: string): Record<string, unknown> | null {
+  const state = readState();
+  const accountPath = account ? accountTokenPath(account) : undefined;
+  const path = accountPath && existsSync(accountPath)
+    ? accountPath
+    : (!account || account === state.google_account) && existsSync(TOKEN_PATH)
+      ? TOKEN_PATH
+      : accountPath ?? TOKEN_PATH;
+  if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(TOKEN_PATH, "utf-8"));
+    return JSON.parse(readFileSync(path, "utf-8"));
   } catch {
     return null;
   }
 }
 
-function saveTokens(tokens: Record<string, unknown>): void {
-  mkdirSync(TOKEN_DIR, { recursive: true });
-  writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+function saveTokens(tokens: Record<string, unknown>, account?: string): void {
+  const path = account ? accountTokenPath(account) : TOKEN_PATH;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(tokens, null, 2), { mode: 0o600 });
 }
 
-function clearTokens(): void {
-  if (existsSync(TOKEN_PATH)) {
-    writeFileSync(TOKEN_PATH, "{}", { mode: 0o600 });
+function clearTokens(account?: string): void {
+  const path = account ? accountTokenPath(account) : TOKEN_PATH;
+  if (existsSync(path)) {
+    writeFileSync(path, "{}", { mode: 0o600 });
   }
 }
 
@@ -174,18 +198,21 @@ export async function authSetup(): Promise<void> {
 
   // Exchange code for tokens
   const { tokens } = await client.getToken(code);
-  saveTokens(tokens as Record<string, unknown>);
   client.setCredentials(tokens);
 
   // Get user email
   const oauth2 = google.oauth2({ version: "v2", auth: client });
   const userInfo = await oauth2.userinfo.get();
   const email = userInfo.data.email ?? "";
+  if (!email) throw new Error("Google did not return an account email");
+  saveTokens(tokens as Record<string, unknown>, email);
+  const accounts = [...new Set([...listConnectedAccounts(), email])];
 
   writeState({
     google_connector: true,
     google_auth_complete: true,
     google_account: email,
+    google_accounts: accounts,
   });
 
   console.log(`\nConnected as ${email}`);
@@ -194,8 +221,8 @@ export async function authSetup(): Promise<void> {
 /**
  * Check current auth status.
  */
-export async function authStatus(): Promise<AuthStatus> {
-  const tokens = loadTokens();
+export async function authStatus(account = selectedAccount()): Promise<AuthStatus> {
+  const tokens = loadTokens(account);
   if (!tokens || (!tokens.access_token && !tokens.refresh_token)) {
     return { connected: false };
   }
@@ -209,7 +236,7 @@ export async function authStatus(): Promise<AuthStatus> {
     const e = err as { message?: string };
     // If we have a refresh token, we might just need a refresh
     if (tokens.refresh_token) {
-      return { connected: true, account: readState().google_account ?? "unknown (token needs refresh)" };
+      return { connected: true, account: account ?? readState().google_account ?? "unknown (token needs refresh)" };
     }
     return { connected: false, error: e.message };
   }
@@ -218,8 +245,8 @@ export async function authStatus(): Promise<AuthStatus> {
 /**
  * Revoke Google access.
  */
-export async function authRevoke(): Promise<void> {
-  const tokens = loadTokens();
+export async function authRevoke(account = selectedAccount()): Promise<void> {
+  const tokens = loadTokens(account);
   if (tokens?.access_token) {
     try {
       const client = await createOAuth2Client();
@@ -230,16 +257,18 @@ export async function authRevoke(): Promise<void> {
     }
   }
 
-  clearTokens();
+  clearTokens(account);
+  const remaining = listConnectedAccounts().filter((item) => item !== account);
+  const nextAccount = remaining[0];
   writeState({
-    google_connector: false,
-    google_auth_complete: false,
-    google_account: undefined,
-    google_services: undefined,
-    google_last_sync: undefined,
+    google_connector: remaining.length > 0,
+    google_auth_complete: remaining.length > 0,
+    google_account: nextAccount,
+    google_accounts: remaining,
+    ...(remaining.length === 0 ? { google_services: undefined, google_last_sync: undefined } : {}),
   });
 
-  console.log("Google access revoked. Auth tokens cleared.");
+  console.log(`Google access revoked${account ? ` for ${account}` : ""}. Auth tokens cleared.`);
 }
 
 /**
@@ -279,8 +308,8 @@ async function authHosted(): Promise<void> {
 /**
  * Print auth status to stdout.
  */
-export async function printAuthStatus(): Promise<void> {
-  const status = await authStatus();
+export async function printAuthStatus(account = selectedAccount()): Promise<void> {
+  const status = await authStatus(account);
   const state = readState();
 
   if (status.connected) {
