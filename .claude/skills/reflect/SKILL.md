@@ -272,6 +272,16 @@ ORDER BY size(shared) DESC LIMIT 3
 
 Present relation suggestions alongside Step 3's proposal. If no relations found, skip silently.
 
+## Step 4.5: Dedupe check (all modes)
+
+Before creating files, check whether memory already covers each artifact:
+
+```bash
+bash bin/search.sh query "{artifact title / core claim}" --fast -n 3
+```
+
+If a hit clearly covers the same insight, propose updating that file instead of creating a duplicate — show the existing path alongside Step 3's proposal and let the user choose update vs. new. Weak or unrelated hits: proceed silently.
+
 ## Step 5: Create files
 
 For each artifact, generate slug from title: lowercase, hyphens, no special chars, max 50 chars.

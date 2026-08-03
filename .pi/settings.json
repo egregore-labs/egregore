@@ -1,0 +1,6 @@
+{
+  "quietStartup": true,
+  "skills": [
+    "../.codex/skills"
+  ]
+}

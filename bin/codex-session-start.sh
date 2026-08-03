@@ -6,7 +6,7 @@ set -o pipefail
 # libraries as Claude's SessionStart, then renders a terminal greeting before
 # Codex itself starts.
 
-FRAMEWORK_VERSION="3"
+FRAMEWORK_VERSION="7"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
@@ -21,6 +21,9 @@ fi
 # Clear any branch-guard consent from a previous session — consent to write on
 # a protected branch is asked fresh each session (see AGENTS.md branch-guard protocol).
 rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch-consent" 2>/dev/null
+# Same for boundary-crossing consent — grants are session-scoped (AGENTS.md
+# environment-isolation protocol); durable grants belong in .egregore-boundary.local.json.
+rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
 
 if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
   source "$SCRIPT_DIR/bin/lib/worktree-links.sh" >/dev/null 2>/dev/null || true
@@ -43,6 +46,15 @@ source "$SCRIPT_DIR/bin/lib/hash.sh"
 source "$SCRIPT_DIR/bin/lib/time.sh"
 source "$SCRIPT_DIR/bin/lib/identity.sh" >/dev/null 2>/dev/null
 
+# Keep the durable local identity current before gathering context, then project
+# it to Supabase + Neo4j in the background so startup is never network-blocked.
+if [ -f "$STATE_FILE" ] && [ -f "$SCRIPT_DIR/bin/person.py" ]; then
+  python3 "$SCRIPT_DIR/bin/person.py" sync-local >/dev/null 2>&1 || true
+fi
+if [ -f "$SCRIPT_DIR/bin/person.sh" ]; then
+  ( bash "$SCRIPT_DIR/bin/person.sh" sync >/dev/null 2>&1 & ) 2>/dev/null
+fi
+
 LOCAL_MODE="false"
 [ "$(_detect_mode)" = "local" ] && LOCAL_MODE="true"
 MODE_BADGE="$(_runtime_mode_badge)"
@@ -56,8 +68,26 @@ if [ "$LOCAL_MODE" != "true" ]; then
 fi
 
 source "$SCRIPT_DIR/bin/lib/git-sync.sh" >/dev/null 2>/dev/null
+# Warm-state parity with the Claude SessionStart path: hand context.sh the
+# pre-baked snapshot and route greeting reads through the warm graph cache.
+# The attendant daemon is deliberately NOT started from the Codex/Pi path —
+# its dead-session detection reads Claude transcripts only, so a live Codex
+# or Pi session with 12 quiet minutes would look dead and could have its
+# unfinished work ripcorded/auto-pushed. Codex sessions still benefit from
+# any snapshot a Claude session's attendant maintains; runtime-neutral
+# liveness tracking is the prerequisite for starting the daemon here.
+if [ -n "${_ATT_KEY:-}" ]; then
+  export CTX_SEED_TAR="${ATTENDANT_HOME:-$HOME/.egregore/attendant}/${_ATT_KEY}.ctx.tar"
+fi
+export EGREGORE_GRAPH_CACHE_TTL=600
 source "$SCRIPT_DIR/bin/lib/context.sh" >/dev/null 2>/dev/null
+unset EGREGORE_GRAPH_CACHE_TTL CTX_SEED_TAR
+source "$SCRIPT_DIR/bin/lib/metrics.sh" >/dev/null 2>/dev/null
 trap 'rm -rf "${CTX_DIR:-}"' EXIT
+
+# Rescue non-coding leftovers from sessions that died without ceremony
+# (terminal closed). Gated + idle-guarded inside the script; fire-and-forget.
+( bash "$SCRIPT_DIR/bin/session-autosave.sh" --sweep >/dev/null 2>&1 & ) 2>/dev/null
 
 read_json() {
   local file="$1"
@@ -67,23 +97,6 @@ read_json() {
     jq -r "$expr // empty" "$file" 2>/dev/null | head -1
   else
     printf '%s\n' "$fallback"
-  fi
-}
-
-shorten() {
-  local value="$1"
-  local max="$2"
-  if command -v jq >/dev/null 2>&1; then
-    jq -nr --arg value "$value" --argjson max "$max" '
-      $value
-      | if length > $max then .[0:($max - 3)] + "..." else . end
-    '
-    return
-  fi
-  if [ "${#value}" -gt "$max" ]; then
-    printf '%s...\n' "${value:0:$((max - 3))}"
-  else
-    printf '%s\n' "$value"
   fi
 }
 
@@ -97,14 +110,12 @@ DISPLAY_NAME="$(read_json "$STATE_FILE" '.display_name' '')"
 ONBOARDING_COMPLETE="$(read_json "$STATE_FILE" '.onboarding_complete' '')"
 [ -z "$ONBOARDING_COMPLETE" ] && ONBOARDING_COMPLETE="unknown"
 
-TEAM_DATA="$(cat "$CTX_DIR/team" 2>/dev/null || echo "[]")"
 ADDRESSED_RICH="$(cat "$CTX_DIR/addressed_rich" 2>/dev/null || echo "[]")"
 PENDING_Q="$(cat "$CTX_DIR/pending_questions" 2>/dev/null || echo "[]")"
-LAST_ACTIVITY="$(cat "$CTX_DIR/activity" 2>/dev/null || true)"
 ADDRESSED_COUNT="$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")"
 PENDING_Q_COUNT="$(echo "$PENDING_Q" | jq 'length' 2>/dev/null || echo "0")"
 
-render_for_you_summary() {
+render_pending_line() {
   if [ "$PENDING_Q_COUNT" -gt 0 ] 2>/dev/null; then
     local senders noun
     senders="$(echo "$PENDING_Q" | jq -r '[.[].from] | unique | join(", ")' 2>/dev/null)"
@@ -114,41 +125,10 @@ render_for_you_summary() {
     else
       printf '  ◐ %s pending %s - bin/agent.sh answer\n' "$PENDING_Q_COUNT" "$noun"
     fi
-  elif [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null; then
-    printf '  ◇ %s handoffs for %s - bin/agent.sh activity --for %s\n' "$ADDRESSED_COUNT" "$AUTHOR" "$AUTHOR"
-  else
-    printf '  ◇ nothing pending for %s\n' "$AUTHOR"
   fi
-}
-
-render_handoff_rows() {
   if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null; then
-    echo "$ADDRESSED_RICH" | jq -r '.[] | [.author, .date, .topic] | @tsv' 2>/dev/null | head -4 | while IFS=$'\t' read -r author date topic; do
-      [ -z "$author" ] && continue
-      printf '  ○ %-10s%-12s%s\n' "$(shorten "$author" 9)" "$date" "$(shorten "$topic" 40)"
-    done
-  elif [ -n "$LAST_ACTIVITY" ]; then
-    local last_when last_msg
-    last_when="$(printf '%s\n' "$LAST_ACTIVITY" | cut -d'|' -f1 | sed 's/ hours\{0,1\} ago/h ago/; s/ days\{0,1\} ago/d ago/; s/ minutes\{0,1\} ago/m ago/')"
-    last_msg="$(printf '%s\n' "$LAST_ACTIVITY" | cut -d'|' -f2-)"
-    printf '  ◇ %-10s%-12s%s\n' "you" "$last_when" "$(shorten "$last_msg" 40)"
+    printf '  ◇ %s handoffs for %s - say "show my handoffs" to review or close\n' "$ADDRESSED_COUNT" "$AUTHOR"
   fi
-}
-
-render_team_rows() {
-  local now_render online_threshold
-  now_render=$(date +%s)
-  online_threshold=7200
-  echo "$TEAM_DATA" | jq -r '.[] | [.name, .last_seen_sort, .last_seen, (.branches | join(", "))] | @tsv' 2>/dev/null | head -4 | while IFS=$'\t' read -r name epoch seen branches; do
-    [ -z "$name" ] && continue
-    local dot
-    if [ "$epoch" -gt 0 ] 2>/dev/null && [ $((now_render - epoch)) -lt "$online_threshold" ] 2>/dev/null; then
-      dot="●"
-    else
-      dot="○"
-    fi
-    printf '  %s %-10s%-12s%s\n' "$dot" "$(shorten "$name" 9)" "$seen" "$(shorten "$branches" 40)"
-  done
 }
 
 banner() {
@@ -176,12 +156,8 @@ render_card() {
   banner
   printf '%s%*s%s\n' "$identity_left" "$pad" "" "$identity_right"
   printf '%s\n' "$separator"
-  printf '  ◦ for you\n'
-  render_for_you_summary
-  render_handoff_rows
-  printf '\n'
-  printf '  ◦ around\n'
-  render_team_rows
+  SEPARATOR="$separator" LINE_WIDTH=$line_width _render_momentum_board
+  render_pending_line
   printf '%s\n' "$separator"
 
   has_failure="false"
@@ -209,7 +185,46 @@ render_card() {
     printf '%s%*s%s\n' "$footer_left" "$pad" "" "$footer_right"
   fi
 
-  if [ -n "$SLUG" ]; then
+  # Autosave trail — background saves since the last greeting (same ledger
+  # the Claude greeting reads; sweep rescues become visible here).
+  autosave_log="${EGREGORE_AUTOSAVE_LOG:-$HOME/.egregore/autosave.log}"
+  autosave_seen="${autosave_log}.seen"
+  if [ -f "$autosave_log" ]; then
+    total_as=$(grep -c '|autosave|' "$autosave_log" 2>/dev/null || echo 0)
+    seen_as=$(cat "$autosave_seen" 2>/dev/null || echo 0)
+    case "$seen_as" in ''|*[!0-9]*) seen_as=0 ;; esac
+    if [ "$total_as" -gt "$seen_as" ]; then
+      new_as=$((total_as - seen_as))
+      merged_as=$(grep '|autosave|' "$autosave_log" 2>/dev/null | tail -n "$new_as" | grep -c '|merged|' || echo 0)
+      if [ "$merged_as" -gt 0 ]; then
+        printf '  ⟲ auto-saved %s non-coding save(s) → develop while you were away\n' "$merged_as"
+      fi
+    fi
+    printf '%s' "$total_as" > "$autosave_seen" 2>/dev/null || true
+  fi
+
+  # Staged auto-saves awaiting the user's merge (the autosave consent gate).
+  # Live gh query so the line persists until the PRs actually merge.
+  if command -v gh >/dev/null 2>&1; then
+    gh_self=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
+    if [ -n "$gh_self" ]; then
+      waiting_as=$(gh pr list --state open --author "$gh_self" --limit 20 \
+        --json number,title --jq '[.[] | select(.title | startswith("Auto-save:")) | .number] | join(", #")' 2>/dev/null || true)
+      if [ -n "$waiting_as" ]; then
+        printf '  ⟲ auto-saves awaiting your merge: PR #%s — \$autosave merge (or bin/agent.sh autosave merge)\n' "$waiting_as"
+      fi
+    fi
+  fi
+
+  # Greeting links. Org config `pinned_links` in egregore.json replaces the
+  # default board link — same contract as bin/lib/greeting.sh.
+  pinned_links=$(jq -c '.pinned_links // []' "$CONFIG" 2>/dev/null || echo "[]")
+  if [ "$(printf '%s' "$pinned_links" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+    printf '%s' "$pinned_links" | jq -r '.[] |
+      if type == "string" then "  ◆ \(.)"
+      elif (.label // "") != "" then "  ◆ \(.label): \(.url)"
+      else "  ◆ \(.url)" end' 2>/dev/null
+  elif [ -n "$SLUG" ]; then
     board_url="https://egregore.xyz/view/${SLUG}/board"
     printf '  ◆ %s\n' "$board_url"
   fi

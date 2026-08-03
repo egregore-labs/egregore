@@ -130,6 +130,11 @@ card="$(bash "$ROOT/bin/codex-session-start.sh" --card)"
 ! echo "$card" | grep -q 'More skills:'
 ! echo "$card" | grep -q 'Trusted Codex:'
 ! echo "$card" | grep -q 'Adapter skills:'
+if jq -e '(.mode // "") != "local" and ((.api_url // "") | length > 0)' "$ROOT/egregore.json" >/dev/null 2>&1; then
+  echo "$card" | grep -q '◆ CONNECTED'
+else
+  echo "$card" | grep -q '◇ LOCAL'
+fi
 
 prompt="$(bash "$ROOT/bin/codex-session-start.sh" --prompt)"
 echo "$prompt" | grep -q 'Trusted Codex: full shell/network access is enabled'
@@ -161,5 +166,11 @@ echo "$initial" | node "$RENDER" classify-graph --mode connected | grep -q '"ret
 echo "$retry_connected" | node "$RENDER" classify-graph --mode connected --attempt retry | grep -q '"status":"connected"'
 echo "$retry_offline" | node "$RENDER" classify-graph --mode connected --attempt retry | grep -q '"status":"offline"'
 echo "$retry_offline" | node "$RENDER" classify-graph --mode connected --attempt retry | grep -q '"retry":false'
+
+activity_with_handoff='{"org":"Curve Labs","date":"Jul 06","graph_status":"connected","handoffs_to_me":[{"author":"oguzhan","topic":"Ripcord: PR review checklist rules","status":"pending","intent":"action","ageDays":8}]}'
+echo "$activity_with_handoff" | node "$RENDER" activity-card - | grep -q '\[1\] ● ⇌ oguzhan: Ripcord: PR review checklist'
+echo "$activity_with_handoff" | node "$RENDER" activity-card - | grep -q 'Handoff actions: done N · expire N · reopen N'
+activity_with_question='{"org":"Curve Labs","date":"Jul 06","graph_status":"connected","pending_questions":[{"from":"cem","topic":"launch-strategy"}]}'
+echo "$activity_with_question" | node "$RENDER" activity-card - | grep -q '● cem: launch-strategy'
 
 echo "codex native skills ok"

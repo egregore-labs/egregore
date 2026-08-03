@@ -1,10 +1,10 @@
 name: Tests
 
+# Temporarily paused for automatic push/PR runs while the required merge
+# checks are reassessed. Keep the workflow available for deliberate manual
+# validation without consuming Actions minutes on every change.
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  workflow_dispatch:
 
 jobs:
   oss-validation:
@@ -85,6 +85,9 @@ jobs:
           echo "Checked $(echo "$COMMAND_FILES" | wc -l | tr -d ' ') command/skill files"
           exit $FAIL
 
+      - name: Harvest question palette contract
+        run: bash tests/test-harvest-question-palette.sh
+
   worktree-tests:
     runs-on: ubuntu-latest
     steps:
@@ -98,6 +101,79 @@ jobs:
 
       - name: Run agent protocol smoke test
         run: bash tests/test-agent-protocol.sh
+
+  multiplayer-poc-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test multiplayer Thread protocol, governance, lifecycle, and dependency continuation
+        run: node --test threads/experiments/multiplayer-poc/test/*.test.mjs
+
+  greeting-runtime-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install shell test dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq zsh
+
+      - name: Test greeting in Bash and Zsh
+        run: bash bin/test-greeting.sh
+
+      - name: Test pending-turn greeting projection
+        run: bash tests/test-greeting-pending-turns.sh
+
+      - name: Test runtime mode status
+        run: bash bin/tests/test-runtime-mode-status.sh
+
+      - name: Test packaged runtime parity
+        working-directory: packages/create-egregore
+        run: npm test
+
+  loom-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: routing
+            script: bin/tests/test-loom.sh
+          - name: truth
+            script: bin/tests/test-loom-truth.sh
+          - name: evals
+            script: bin/tests/test-loom-evals.sh
+          - name: learner
+            script: bin/tests/test-loom-learner.sh
+          - name: replay
+            script: bin/tests/test-loom-replay.sh
+          - name: scenarios
+            script: bin/tests/test-loom-scenarios.sh
+          - name: dashboard
+            script: bin/tests/test-loom-dashboard.sh
+          - name: minion-workflow
+            script: bin/tests/test-minion-workflow.sh
+    name: Loom — ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run Loom suite
+        run: bash "${{ matrix.script }}"
 
   # Functional gate for the npm-published renderer packages. Previously these
   # tests ran in NO workflow — a broken egregore-artifacts could reach every

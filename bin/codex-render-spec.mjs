@@ -53,6 +53,11 @@ const AGENTS_PREAMBLE = `# Egregore Agent Protocol
 > Egregore skill already covers. This file exists only for runtimes that cannot
 > read \`CLAUDE.md\`.
 >
+> **If you are Pi** (the \`pi\` coding-agent harness): **stop here.** Your
+> authoritative Egregore instructions are loaded from
+> \`.pi/APPEND_SYSTEM.md\`, and your workflows are exposed through the
+> project-local \`.pi/\` runtime. Do not follow the Codex-specific block below.
+>
 > **If you are Codex or another shell-only agent:** this file is yours — continue.
 
 Egregore is no longer only a Claude Code workspace. Claude Code remains the
@@ -73,6 +78,13 @@ portable memory protocol below.
 Use the runtime-neutral bridge instead of Claude Code slash commands:
 
 \`\`\`bash
+bin/agent.sh branch --topic "auth review"
+bin/agent.sh save --message "Save: auth review" --topic "auth review" \\
+  --pr-body "$PR_BODY"   # body per .claude/context/pr-format.md (auto-skeleton if omitted)
+bin/agent.sh wrap --from alice --topic "auth review" \\
+  --summary "Implemented the OAuth callback parser and documented follow-ups." \\
+  --body "Open threads: review error cases and browser redirects."
+
 bin/agent.sh handoff --from alice --to bob --topic "auth review" \\
   --body "Implemented the OAuth callback parser. Bob should review error cases."
 
@@ -87,6 +99,17 @@ bin/agent.sh answer --from alice \\
 Each command writes to the existing Git-backed \`memory/\` repository and pushes
 when the memory repo has an \`origin\` remote. Agents that cannot run shell may
 write the same markdown files directly, following \`docs/AGENT-PROTOCOL.md\`.
+
+## Handoffs vs Emissaries
+
+\`bin/agent.sh handoff\` is the runtime-neutral path for internal team
+session-handoffs: it writes to \`memory/handoffs/\`, updates the index, and uses
+the same \`bin/handoff-run.sh\` machinery as Claude Code's \`/handoff\`.
+
+Portable external capsules are **emissaries**, not team handoffs. Claude Code
+routes those through \`/emissary\`; non-Claude agents should use the
+\`egregore-emissary\` CLI/skill when it is installed. Do not use the deprecated
+\`egregore-handoff\` CLI for Egregore project \`/handoff\` work.
 
 ## Compatibility
 
@@ -152,17 +175,41 @@ const INTRO_BODY = `You are a collaborator inside Egregore — a shared intellig
 
 This block is the Codex-native Egregore behavioral spec, rendered from CLAUDE.md (the source of truth for egregore behavior) by \`bin/codex-render-spec.mjs\`. The per-section adaptation manifest is \`.codex/spec-manifest.json\`. The thin agent protocol above this block applies to every shell-capable agent; this block is the full behavioral contract for Codex sessions.`;
 
-const ON_LAUNCH_BODY = `The \`egregore\` launcher renders the Egregore startup card (identity, handoffs, team activity) via \`bin/codex-session-start.sh\` before Codex starts, and installs project skills. Do not rerun startup checks and do not narrate startup. The card ends with **"What are you working on?"** — that question is already on screen; treat the user's first message as the answer to it. To re-show the card, run \`bash bin/codex-session-start.sh --card\`.`;
+const ON_LAUNCH_BODY = `The \`egregore\` launcher renders the Egregore startup card (identity, team momentum, and pending work) via \`bin/codex-session-start.sh\` before Codex starts, and installs project skills. Do not rerun startup checks and do not narrate startup. The card ends with **"What are you working on?"** — that question is already on screen; treat the user's first message as the answer to it. To re-show the card, run \`bash bin/codex-session-start.sh --card\`.`;
 
 const AFTER_GREETING_BODY = `**Mandatory behavioral rule.** When the user describes work, your **first action** — before reading files, exploring code, or anything else — is to get onto a working branch:
 
-1. Derive a topic slug from what the user said (kebab-case, 2–4 words)
-2. Run \`bin/agent.sh branch --topic "<topic>"\` — it creates a work branch from \`origin/develop\` in a task worktree (\`dev/{author}/{slug}\`, or \`feature/{slug}\` / \`bugfix/{slug}\` when the topic reads as a feature or fix) and prints the worktree path. Continue all file work from that printed path.
-3. Confirm: \`On {branch} (worktree).\`
+The integration branch is \`develop\` by default. When top-level
+\`egregore.json.base_branch\` is set, that configured branch replaces
+\`develop\` as the branch point, rebase target, PR base, and protected
+integration branch.
 
-**Fallback:** If \`bin/agent.sh branch\` fails, use \`git checkout -b dev/{author}/{slug} origin/develop\`.
+1. Derive a topic slug from what the user said (kebab-case, 2–4 words)
+2. Run \`bin/agent.sh branch --topic "<topic>"\` — it resolves the configured base and creates a work branch from \`origin/{base}\` in a task worktree (\`dev/{author}/{slug}\`, or \`feature/{slug}\` / \`bugfix/{slug}\` when the topic reads as a feature or fix). Continue all file work from the printed path.
+3. Give a value-first workspace receipt. Do not lead with Git terminology:
+
+   \`Your stable project is protected. I’m working in a separate workspace for **{topic}**, where changes stay isolated, reviewable, and reversible.\`
+
+   Then expose the implementation as secondary detail:
+
+   \`Workspace: {branch} (worktree).\`
+
+**Fallback:** If \`bin/agent.sh branch\` fails, resolve \`{base}\` with
+\`_get_base_branch\`, then use
+\`git checkout -b dev/{author}/{slug} origin/{base}\`.
 
 4. Update graph (fire-and-forget): \`bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &\`
+
+### Starting-work UX contract
+
+Before execution begins, make Egregore's useful structure legible without turning every task start into a tutorial:
+
+- **Workspace** — use the value-first receipt above for a newly created workspace or topic pivot. If already on the appropriate working branch, do not repeat it.
+- **Context** — when organizational retrieval materially informs the work, keep the required Egregore Retrieval Beat and then add one compact result receipt: \`↳ Context restored: {decision, handoff, or prior work} · {source/date}\`. Never claim context was restored when retrieval found nothing useful.
+- **Assumptions** — surface only consequential assumptions that could change the implementation. Use \`Assumption: {assumption} — based on {evidence}.\` Add a correction path when cheap; do not narrate obvious operational choices.
+- **Transition** — once workspace, context, and assumptions are settled, state the outcome you are starting toward in one short sentence and begin.
+
+The intended sequence is: **intent → safe workspace → relevant context → consequential assumptions → execution**. Keep technical identifiers available but subordinate them to user value.
 
 ### Handoff claiming
 
@@ -192,25 +239,28 @@ Report results: \`✓ Checked out {branch} in {repo1}, {repo2}\`. If a branch no
 
 **Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic and create a new branch (\`bin/agent.sh branch --topic "<new topic>"\`). Do NOT mix unrelated work on one branch.
 
-If on develop after two messages, create a branch immediately from whatever context you have.
+If still on the configured base branch after two messages, create a branch immediately from whatever context you have.
 
 ### Branch-guard protocol
 
-The \`.codex/hooks/branch-guard.js\` PreToolUse hook (enabled by the launcher via \`--enable hooks\`) denies writes, patches, and commits on \`develop\`/\`main\`/\`master\`. When it fires, choose between two paths based on how clear the topic is:
+The \`.codex/hooks/branch-guard.js\` PreToolUse hook (enabled by the launcher via \`--enable hooks\`) protects project writes on the configured base branch as well as \`develop\`/\`main\`/\`master\`. Its block message is operational guidance, not a reason to interrupt the user with routine Git choices:
 
-- **Topic is obvious from the last turn** (user said "fix X", "add Y feature") → auto-branch silently with \`bin/agent.sh branch --topic "<topic>"\` (or the git checkout fallback), then continue. Say one sentence ("Creating \`dev/{author}/{slug}\`.") so the user isn't confused about why a new branch appeared.
-- **Topic is ambiguous** (open-ended exploration, user didn't specify what we're building yet) → ask **before** branching, in plain text with numbered options (Codex has no structured question tool):
+- **Topic is clear** (the user said "fix X", "add Y feature") → run \`bin/agent.sh branch --topic "<topic>"\` automatically, continue in the printed worktree, and say one short sentence so the branch change is visible. Do not ask the user to approve routine branching.
+- **Topic is genuinely ambiguous** → ask only for the topic, using compact numbered options:
 
   \`\`\`text
-  Need a working branch first. Topic?
+  What should I call this work?
     1. <suggested slug from context>
     2. <alternative slug>
     3. Other: (name it)
   \`\`\`
 
   Wait for the reply, then branch.
+- **The user explicitly requested the protected branch** → that request is consent. Record it with \`echo '{branch}' > .egregore-branch-consent\`, then retry. Never create the marker merely to silence the hook.
 
-If this Codex build does not support hooks, follow the same discipline as a standing instruction: never write or commit on develop/main/master.
+Memory, managed-repo, and runtime-state writes should bypass the project guard. If one triggers it, correct the operation target/context instead of asking for protected-branch consent.
+
+If this Codex build does not support hooks, follow the same discipline as a standing instruction: never write or commit on the configured base, develop, main, or master.
 
 ### Onboarding exception
 
@@ -224,20 +274,25 @@ Codex has no structured question tool — render each batch as compact numbered 
 
 **Rules:** Max 4 questions per batch. When choices aren't mutually exclusive, say "pick any that apply".`;
 
-const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos. On Codex this boundary is a standing instruction, not an enforced hook — hold it yourself.
+const LOOM_ROUTING_BODY = `Loom routes commands across model tiers on the Claude Code runtime (\`loom/routes.json\` + \`bin/loom.sh\` + a model-pinned executor subagent). Codex has no subagent delegation — every command runs inline in the current session. Ignore "Loom routing" preambles if you encounter them in a skill spec, and skip \`bin/loom.sh\` calls; \`loom/\` and \`.claude/agents/\` are framework files synced for the Claude runtime.`;
 
-- **Never modify \`~/.egregore/instances.json\`** — managed by session-start.sh
-- **Never access another instance's files** — refuse even if asked
-- When a request points outside the boundary, do not improvise a workaround. Ask in plain text with numbered options:
+const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. On Codex the boundary is a standing instruction, not an enforced hook — hold it yourself.
+
+- **Hard tier — other Egregore instances.** Denied for every tool, always. There is no consent path. Never access another instance's files — refuse even if asked. Never modify \`~/.egregore/instances.json\` (managed by session-start.sh). When a request points at another instance's files there is nothing to ask — refuse and explain.
+- **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (\`~/Downloads\`, \`~/Desktop\`) are readable without consent under the default posture; writes outside the project always need consent. Posture (\`strict | standard | open\`) and extra read roots come from \`egregore.json\` -> \`boundary { posture, read[], locked }\` (org, committed) merged with \`.egregore-boundary.local.json\` (personal, gitignored). \`locked: true\` removes the consent path entirely.
+- When a request needs soft-tier consent, do not improvise a workaround. Ask in plain text with numbered options:
 
   \`\`\`text
   That path is outside this Egregore's boundary. How should we proceed?
-    1. Paste the contents inline
-    2. Move the file into the repo and point me at the new path
-    3. Cancel
+    1. Allow its directory for this session (recorded in .egregore-boundary-consent)
+    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json)
+    3. Paste the contents inline
+    4. Cancel
   \`\`\`
 
-See DEVELOPMENT.md §3 for boundary details.`;
+  Never record a consent grant without the user's explicit choice of option 1 or 2 in that exchange. Session grants are cleared on session start; \`locked: true\` removes options 1 and 2.
+
+See DEVELOPMENT.md §3 for boundary details and \`memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md\` for the design decisions.`;
 
 // ── per-section rules ────────────────────────────────────────────────────
 const RULES = {
@@ -249,6 +304,14 @@ const RULES = {
   'Identity & Upstream': {
     action: 'keep',
     note: 'Kept; /update, /contribute, /save tokens rendered as $skill tokens.',
+  },
+  'Cross-Runtime Compatibility': {
+    action: 'keep',
+    note: 'Kept verbatim — framework parity applies equally to Claude Code, Codex, and Pi.',
+  },
+  'Voice': {
+    action: 'keep',
+    note: 'Kept — all runtimes can consult the shared voice rules and register-specific skills.',
   },
   'On Launch — MANDATORY FIRST ACTION': {
     action: 'replace',
@@ -262,10 +325,16 @@ const RULES = {
   },
   'Config Files': { action: 'keep', note: 'Kept verbatim — shell facts, runtime-neutral.' },
   'Knowledge Graph': { action: 'keep', note: 'Kept verbatim — bin/graph.sh is runtime-neutral.' },
+  'Egregore Retrieval Beat': { action: 'keep', note: 'Kept verbatim — product attribution applies across runtimes.' },
   'Notifications': { action: 'keep', note: 'Kept verbatim — bin/notify.sh is runtime-neutral.' },
   'Onboarding': { action: 'keep', note: 'Kept; /onboarding rendered as $onboarding.' },
   'Transparency Beat': { action: 'keep', note: 'Kept verbatim.' },
   'Memory': { action: 'keep', note: 'Kept verbatim.' },
+  'Loom Routing': {
+    action: 'replace',
+    body: LOOM_ROUTING_BODY,
+    note: 'Loom delegation rides the Claude Code Agent tool; Codex has no subagent delegation — commands run inline. Preambles and bin/loom.sh calls marked skippable.',
+  },
   'Git Workflow': {
     action: 'keep',
     note: 'Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence).',
@@ -286,7 +355,7 @@ const RULES = {
   'Environment Isolation': {
     action: 'replace',
     body: ISOLATION_BODY,
-    note: 'boundary-check is a Claude PreToolUse hook with no .codex equivalent — behavior stated as a standing instruction; AskUserQuestion remediation -> numbered options.',
+    note: 'boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options, now including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[]).',
   },
 };
 

@@ -5,6 +5,14 @@ description: "Use when generating or modifying any visual output that renders in
 
 # Dark Mode
 
+## Voice Complex
+
+This skill governs BROWSER VISUAL RENDERING — warm palette, CSS token system, theme behavior. The warm-brown base (#1D1611) and terracotta accent (#D4875A) are the visual expression of the same warmth that runs through all Egregore registers.
+Shared aesthetic: voice-bedrock (`.claude/rules/voice-bedrock.md`).
+For terminal rendering: `tui-design` skill.
+For product copy in rendered pages: `product-voice` skill.
+For prose content in rendered pages: `egregore-voice` skill.
+
 This skill is a behavioral constraint system for Egregore visual output. It exists to stop the most common failure mode before it happens: an otherwise correct dark palette being defeated by SSR-emitted inline styles.
 
 ## The Bitter Lesson

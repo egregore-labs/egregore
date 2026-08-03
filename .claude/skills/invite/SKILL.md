@@ -5,7 +5,9 @@ Arguments: $ARGUMENTS (Required: GitHub username of the person to invite)
 ## Execution rules
 
 **Neo4j-first (connected mode only).** In connected mode, all queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j. In local mode, Step 1b routes to Step 2L (GitHub API only) — Steps 2–4b (graph + notify) are skipped entirely. Do NOT show any graph-related messaging in local mode (no "Person node created", no "recorded in graph", no Neo4j references).
-**Notifications via `bash bin/notify.sh send` (connected mode only)**. No direct curl to Telegram.
+**Notifications use the plan → approve → dispatch flow in
+`.claude/context/notification-consent.md` (connected mode only).** No direct
+curl to Telegram. Inviting the person is not notification consent.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
 
 **CRITICAL: Never expose credentials in tool output.**
@@ -92,6 +94,7 @@ TODAY=$(date -u +%Y-%m-%d)
 cat > "memory/people/${INVITE_USER}.md" << EOF
 ---
 name: ${INVITE_USER}
+person_id: github-login:$(printf '%s' "$INVITE_USER" | tr '[:upper:]' '[:lower:]')
 github: ${INVITE_USER}
 invited_by: ${INVITER}
 joined: ${TODAY}
@@ -248,13 +251,13 @@ Share this link with {username}:
 Failed to invite {username}: {error}
 ```
 
-## Step 4: Record in graph + notify (parallel)
+## Step 4: Record in graph, then separately offer notification
 
-Run these two in parallel. Use description "Recording invite in graph" and "Checking notification channel":
+Record the invite first. Do not combine this with notification approval.
 
 **Create Person node + sync to Supabase:**
 ```bash
-bash bin/graph.sh query "MERGE (p:Person {github: \$github}) ON CREATE SET p.name = \$github, p.invited = date(), p.invitedBy = \$inviter RETURN p.name" '{"github": "USERNAME", "inviter": "INVITER"}'
+bash bin/graph.sh query "MERGE (p:Person {github: \$github}) ON CREATE SET p.personId = 'github-login:' + toLower(\$github), p.name = \$github, p.identityStatus = 'invited', p.invited = date(), p.invitedBy = \$inviter RETURN p.name" '{"github": "USERNAME", "inviter": "INVITER"}'
 ```
 
 Then sync to Supabase (non-fatal):
@@ -275,12 +278,15 @@ Get the inviter name from `git config user.name` (derive short handle: lowercase
 bash bin/graph.sh query "MATCH (p:Person) WHERE p.github = \$username OR p.name = \$username RETURN p.telegramId" '{"username": "USERNAME"}'
 ```
 
-If they have a telegramId, send the invite:
+If they have a telegramId, prepare the exact invite notification without
+sending:
 ```bash
-bash bin/notify.sh send "USERNAME" "You've been invited to ORG_NAME on Egregore! Join here: INVITE_URL"
+PLAN_JSON=$(bash bin/notify.sh plan send "USERNAME" "You've been invited to ORG_NAME on Egregore! Join here: INVITE_URL")
 ```
 
-If not, skip silently — the link was already shown in Step 3.
+Show the organization, recipient, channel, and exact message in a dedicated
+Send / Edit / Cancel checkpoint. Dispatch only after the user approves that
+preview. If no direct destination exists, say so; never fall back to the group.
 
 ## Step 4b: Provision Coder user (if remote hosting enabled)
 
@@ -320,13 +326,13 @@ If the output is `coder_user_created`, include in the summary:
 
 ## Step 5: Summary line
 
-After all steps complete, show one final status:
+After all steps complete, show one truthful final status:
 ```
-  Notified via Telegram
+  Notification sent via Telegram
 ```
 or
 ```
-  No Telegram — share the link manually
+  Notification not sent — share the link manually
 ```
 
 ## Example
@@ -367,4 +373,5 @@ They can join Egregore directly at: https://egregore.xyz/setup
 - **Memory repo access is granted automatically** — invitee gets push access
 - **Never expose tokens** — all credential reads happen inside bash scripts, never as separate tool calls
 - Always use `bin/graph.sh` for Neo4j — never MCP
-- Always use `bin/notify.sh` for Telegram — never construct API calls directly
+- Always use the exact consent flow in `bin/notify.sh` — never construct API
+  calls directly or treat the invite request as notification approval

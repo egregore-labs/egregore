@@ -34,7 +34,8 @@ mkdir -p "$SANDBOX"
   git config user.email "qa@test.local"
   git config user.name "QA"
   echo "test" > README.md
-  git add README.md
+  printf '%s\n' '{"base_branch":"develop","mode":"local"}' > egregore.json
+  git add README.md egregore.json
   git commit -m "init" --quiet
   # Bare origin lives OUTSIDE the sandbox so `git status` stays clean.
   git clone --quiet --bare "$SANDBOX" "$ORIGIN" 2>/dev/null
@@ -74,38 +75,40 @@ fi
 
 echo ""
 
-# --- 3. handoff-run.sh status-bit logic: RECIPIENT set + sent → '{name} notified' ---
+# --- 3. handoff-run.sh proposal status: never claim an unattended send ---
 echo "# handoff-run.sh status-bit rendering"
 
 # We grep the script source for the specific status-bit construction,
 # since running the full orchestrator against the shared memory repo is unsafe.
-# The test verifies the code path introduced by /qa (commit covers the
-# group-notified + relayed-to-group branches).
+# The addressed worker may plan, but only an interactive harness can approve
+# and dispatch after showing the exact delivery.
 
-if grep -q 'STATUS_BITS+=("${RECIPIENT} notified")' "$SCRIPT_DIR/bin/handoff-run.sh"; then
-  pass "'{recipient} notified' bit present"
+if grep -q 'STATUS_BITS+=("notify approval pending")' "$SCRIPT_DIR/bin/handoff-run.sh"; then
+  pass "'notify approval pending' bit present"
 else
-  fail "'{recipient} notified' bit missing from handoff-run.sh"
+  fail "approval-pending status bit missing from handoff-run.sh"
 fi
 
-if grep -q 'STATUS_BITS+=("group notified")' "$SCRIPT_DIR/bin/handoff-run.sh"; then
-  pass "'group notified' bit present (self-handoff path)"
+if grep -q 'notify.sh" plan send' "$SCRIPT_DIR/bin/handoff-run.sh" &&
+   grep -q 'notify.sh" plan group' "$SCRIPT_DIR/bin/handoff-run.sh"; then
+  pass "handoff worker creates direct or group proposals"
 else
-  fail "'group notified' bit missing — self-handoffs will render with empty recipient name"
+  fail "handoff worker no longer creates exact notification proposals"
 fi
 
-if grep -q 'STATUS_BITS+=("${RECIPIENT} relayed to group")' "$SCRIPT_DIR/bin/handoff-run.sh"; then
-  pass "'{recipient} relayed to group' bit present (DM fallback path)"
+if ! grep -qE 'notify\.sh" (send|group)' "$SCRIPT_DIR/bin/handoff-run.sh" &&
+   ! grep -q 'relayed to group' "$SCRIPT_DIR/bin/handoff-run.sh"; then
+  pass "handoff worker cannot dispatch or fall back to group"
 else
-  fail "'{recipient} relayed to group' bit missing — DM-to-group fallback is invisible"
+  fail "handoff worker retains an unattended dispatch or group fallback"
 fi
 
-# Verify the NOTIFY-always-fires gate: the [ -n "$RECIPIENT" ] guard on notify should be removed.
-# The new condition only checks NO_NOTIFY. Recipient presence decides DM vs group, not whether to send.
+# Proposal creation is unconditional unless explicitly disabled. Recipient
+# presence selects proposal kind, never fallback behavior.
 if grep -qE 'if \[ "\$NO_NOTIFY" = "0" \]; then' "$SCRIPT_DIR/bin/handoff-run.sh"; then
-  pass "notify branch runs unconditionally (recipient decides DM vs group, not whether to send)"
+  pass "proposal branch runs when notifications are enabled"
 else
-  fail "notify branch still gated on recipient — self-handoffs will be silent"
+  fail "notification proposal branch is unexpectedly recipient-gated"
 fi
 
 echo ""

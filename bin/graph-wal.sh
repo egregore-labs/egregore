@@ -32,13 +32,14 @@ WAL_FILE="$WAL_DIR/graph-wal-${PROJ_HASH}.jsonl"
 MAX_BUFFER_BYTES=2097152  # 2MB
 MAX_ENTRIES_AFTER_TRUNCATE=200
 LOCK_DIR="$WAL_DIR/graph-wal-${PROJ_HASH}.lock"
+LOCK_ATTEMPTS="${GRAPH_WAL_LOCK_ATTEMPTS:-50}"
 
 # --- Cross-platform file locking via mkdir (atomic on all POSIX systems) ---
 _lock() {
   local attempts=0
   while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     attempts=$((attempts + 1))
-    if [ "$attempts" -gt 50 ]; then
+    if [ "$attempts" -gt "$LOCK_ATTEMPTS" ]; then
       # Stale lock — check if holder PID is alive
       local holder_pid
       holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
@@ -46,7 +47,7 @@ _lock() {
         rm -rf "$LOCK_DIR" 2>/dev/null
         continue
       fi
-      echo "graph-wal: lock timeout after 5s" >&2
+      echo "graph-wal: lock timeout after ${LOCK_ATTEMPTS} attempt(s)" >&2
       return 1
     fi
     sleep 0.1

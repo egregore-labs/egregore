@@ -11,6 +11,9 @@ set -euo pipefail
 #     --topic  "<short topic>" \
 #     [--recipient <name>] \
 #     [--project <name>] \
+#     [--intent <action|feedback|fyi>] \
+#     [--content-mode <supplied|generated>] \
+#     [--include-session-artifacts] \
 #     <<'HANDOFFEOF'
 #   ...full markdown body of the handoff...
 #   HANDOFFEOF
@@ -18,13 +21,13 @@ set -euo pipefail
 # The full file body is read from stdin. The script:
 #   1. Computes the file path: memory/handoffs/YYYY-MM/DD-author-slug.md
 #   2. Writes the file
-#   3. Appends ## Repo State section (from bin/repo-state.sh) if non-empty
+#   3. In generated mode, appends ## Repo State when non-empty
 #   4. Prepends memory/handoffs/index.md with a new entry
 #   5. Runs bin/index-handoff.sh (connected mode only) — creates Session node
 #      and returns a subgraph snapshot in the result JSON
 #   6. Commits + pushes memory repo (with orphan-stash dance if needed)
 #   7. Publishes HTML artifact via bin/publish-artifact.sh
-#   8. Sends Telegram notification via bin/notify.sh (if recipient)
+#   8. Creates an exact notification proposal via bin/notify.sh (never sends)
 #   9. Emits ONE status line and ONE JSON blob on stdout
 #
 # Exit codes:
@@ -45,10 +48,13 @@ AUTHOR=""
 TOPIC=""
 RECIPIENT=""
 PROJECT=""
+INTENT="action"
 NO_PUSH=0
 NO_NOTIFY=0
 NO_PUBLISH=0
 COMPOSED=""    # optional house-kit JSON — the agent-composed render spec
+CONTENT_MODE="generated"
+INCLUDE_SESSION_ARTIFACTS=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -56,7 +62,10 @@ while [ $# -gt 0 ]; do
     --topic)      TOPIC="${2:?}";     shift 2 ;;
     --recipient)  RECIPIENT="${2:-}"; shift 2 ;;
     --project)    PROJECT="${2:-}";   shift 2 ;;
+    --intent)     INTENT="${2:-}";    shift 2 ;;
     --composed)   COMPOSED="${2:-}";  shift 2 ;;
+    --content-mode) CONTENT_MODE="${2:-}"; shift 2 ;;
+    --include-session-artifacts) INCLUDE_SESSION_ARTIFACTS=1; shift ;;
     --no-push)    NO_PUSH=1;          shift ;;
     --no-notify)  NO_NOTIFY=1;        shift ;;
     --no-publish) NO_PUBLISH=1;       shift ;;
@@ -69,13 +78,25 @@ done
 # markdown file is ALWAYS the memory record + graph index either way.
 RENDER_TYPE="handoff"
 RENDER_SRC=""   # resolved to $ABS_FILE after the file is written, unless composed
-if [ -n "$COMPOSED" ] && [ -f "$COMPOSED" ]; then
+if [ "$CONTENT_MODE" = "generated" ] && [ -n "$COMPOSED" ] && [ -f "$COMPOSED" ]; then
   RENDER_TYPE="composed"
   RENDER_SRC="$COMPOSED"
 fi
 
 [ -z "$AUTHOR" ] && { echo "Missing --author" >&2; exit 1; }
 [ -z "$TOPIC" ]  && { echo "Missing --topic"  >&2; exit 1; }
+case "$INTENT" in
+  action|feedback|fyi) ;;
+  *) echo "Invalid --intent: $INTENT (action|feedback|fyi)" >&2; exit 1 ;;
+esac
+case "$CONTENT_MODE" in
+  supplied|generated) ;;
+  *) echo "Invalid --content-mode: $CONTENT_MODE (supplied|generated)" >&2; exit 1 ;;
+esac
+if [ "$CONTENT_MODE" = "supplied" ] && [ -n "$COMPOSED" ]; then
+  echo "--composed cannot be used with --content-mode supplied" >&2
+  exit 1
+fi
 
 MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null || echo "connected")
 TODAY=$(date +%Y-%m-%d)
@@ -115,27 +136,73 @@ if [ ! -s "$ABS_FILE" ]; then
   exit 1
 fi
 
-# --- Inject **To**: line if --recipient given and body omits it -----
-# index-handoff.sh parses recipients from the file body. Skills
-# normally write the To line themselves, but callers that invoke
-# handoff-run.sh directly often skip it. Inject after the Author
-# line so the graph gets the HANDED_TO edge.
-if [ -n "$RECIPIENT" ] && ! grep -qi "^\*\*[Tt]o\*\*:" "$ABS_FILE"; then
-  awk -v r="$RECIPIENT" '
-    !injected && /^\*\*[Aa]uthor\*\*:/ {
-      print
-      print "**To**: " r
-      injected=1
-      next
-    }
-    { print }
-  ' "$ABS_FILE" > "$ABS_FILE.new" && mv "$ABS_FILE.new" "$ABS_FILE"
+# --- Canonical metadata boundary ----------------------------------------
+# Callers are allowed to send prose-only markdown, but persisted handoffs are
+# not. Normalize every input to the same frontmatter contract before indexing
+# or rendering so title/author/recipient cannot disappear at the adapter seam.
+HAS_FRONTMATTER=0
+[ "$(head -1 "$ABS_FILE")" = "---" ] && HAS_FRONTMATTER=1
+
+_has_frontmatter_key() {
+  [ "$HAS_FRONTMATTER" = "1" ] && sed -n '2,/^---$/p' "$ABS_FILE" | grep -qiE "^${1}:"
+}
+
+MISSING_SCHEMA=0;    _has_frontmatter_key capture_schema || MISSING_SCHEMA=1
+MISSING_MODE=0;      _has_frontmatter_key capture_mode || MISSING_MODE=1
+MISSING_KIND=0;      _has_frontmatter_key kind || MISSING_KIND=1
+MISSING_FROM=0;      _has_frontmatter_key from || _has_frontmatter_key author || MISSING_FROM=1
+MISSING_DATE=0;      _has_frontmatter_key date || MISSING_DATE=1
+MISSING_TOPIC=0;     _has_frontmatter_key topic || MISSING_TOPIC=1
+MISSING_INTENT=0;    _has_frontmatter_key intent || MISSING_INTENT=1
+MISSING_CONTENT_MODE=0; _has_frontmatter_key content_mode || MISSING_CONTENT_MODE=1
+MISSING_RECIPIENT=0
+if [ -n "$RECIPIENT" ]; then
+  _has_frontmatter_key addressed_to || _has_frontmatter_key to || MISSING_RECIPIENT=1
 fi
+
+awk \
+  -v has_frontmatter="$HAS_FRONTMATTER" \
+  -v schema="$MISSING_SCHEMA" -v mode="$MISSING_MODE" -v kind="$MISSING_KIND" \
+  -v from="$MISSING_FROM" -v date_missing="$MISSING_DATE" \
+  -v topic_missing="$MISSING_TOPIC" -v intent_missing="$MISSING_INTENT" \
+  -v content_mode_missing="$MISSING_CONTENT_MODE" \
+  -v recipient_missing="$MISSING_RECIPIENT" \
+  -v author="$AUTHOR" -v date="$TODAY" -v topic="$TOPIC" \
+  -v intent="$INTENT" -v recipient="$RECIPIENT" -v content_mode="$CONTENT_MODE" '
+  function metadata() {
+    if (schema) print "capture_schema: egregore-capture/v1"
+    if (mode) print "capture_mode: addressed"
+    if (kind) print "kind: addressed"
+    if (from) print "from: " author
+    if (recipient_missing) print "addressed_to: " recipient
+    if (date_missing) print "date: " date
+    if (topic_missing) print "topic: " topic
+    if (intent_missing) print "intent: " intent
+    if (content_mode_missing) print "content_mode: " content_mode
+  }
+  BEGIN {
+    if (!has_frontmatter) {
+      print "---"
+      metadata()
+      print "---"
+      if (content_mode != "supplied") print ""
+    }
+  }
+  has_frontmatter && NR == 1 {
+    print
+    metadata()
+    next
+  }
+  { print }
+' "$ABS_FILE" > "$ABS_FILE.new" && mv "$ABS_FILE.new" "$ABS_FILE"
 
 # --- Append repo state ---------------------------------------------------
 # --no-pr skips `gh pr list` (~400–600ms per repo). A detached PR backfill
 # after the parallel phase rewrites `—` → `#N` and re-pushes memory.
-REPO_STATE=$(bash "$SCRIPT_DIR/bin/repo-state.sh" --no-pr 2>/dev/null || true)
+REPO_STATE=""
+if [ "$CONTENT_MODE" = "generated" ] || [ "$INCLUDE_SESSION_ARTIFACTS" = "1" ]; then
+  REPO_STATE=$(bash "$SCRIPT_DIR/bin/repo-state.sh" --no-pr 2>/dev/null || true)
+fi
 if [ -n "$REPO_STATE" ]; then
   printf '\n%s\n' "$REPO_STATE" >> "$ABS_FILE"
 fi
@@ -159,14 +226,14 @@ awk -v line="$IDX_LINE" '
   END { if (!inserted) print line }
 ' "$INDEX" > "$INDEX.new" && mv "$INDEX.new" "$INDEX"
 
-# --- Parallel stage: graph + memory + (publish → notify) ----------------
+# --- Parallel stage: graph + memory + (publish → notification proposal) -
 #
 # Three independent branches fork here and join before we emit the result:
 #   A. Graph index     — reads ABS_FILE, writes Session node to Neo4j, and
 #                        returns the handoff's neighborhood as subgraph JSON.
 #   B. Memory push     — commits + pushes memory repo (orphan-stash dance).
-#   C. Publish+notify  — publishes HTML artifact, then (if recipient is set)
-#                        sends Telegram with the artifact URL embedded.
+#   C. Publish+plan    — publishes HTML artifact, then creates an immutable
+#                        notification proposal with the artifact URL embedded.
 #
 # Each branch writes its result to a tmpfile. Wall-clock is max(A,B,C).
 #
@@ -179,7 +246,7 @@ MEMORY_DIR="$SCRIPT_DIR/memory"
 TMPD=$(mktemp -d -t handoff-run-XXXXXX)
 trap 'rm -rf "$TMPD"' EXIT
 
-# Extract briefing text once (used by publish and notify) so we don't
+# Extract briefing text once (used by publish and the proposal) so we don't
 # re-awk the same file inside multiple workers.
 BRIEFING_LEAD=$(awk '/^## Briefing/{found=1; next} found && /^##/{exit} found && NF{print}' "$ABS_FILE" 2>/dev/null \
   | head -2 | tr '\n' ' ' | cut -c1-200 || true)
@@ -318,19 +385,27 @@ PID_MEMORY=$!
     fi
     EMISSARY_API_URL="${EMISSARY_API_URL:-https://egregore-production-55f2.up.railway.app/api/v1/emissary}"
 
-    if [ -n "$EMISSARY_TOKEN" ]; then
+    # /handoff is an internal team primitive, not an implicit public-emissary
+    # composer. Use the emissary route only for an explicit recipient, and make
+    # that artifact directed-private. Recipient-less handoffs fall through to
+    # the org-scoped publisher (connected) or opt-in relay (local).
+    if [ -n "$EMISSARY_TOKEN" ] && [ -n "$RECIPIENT" ]; then
       # Step 1: render the handoff to HTML locally using egregore-artifacts.
       # Same renderer + template publish-artifact.sh uses today — handoffs
       # keep their familiar look.
       RENDERED_HTML="$TMPD/handoff.html"
       RENDER_OK=0
       LOCAL_CLI="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
+      FIDELITY_ARGS=(--verify-fidelity)
+      if [ "$RENDER_TYPE" = "composed" ]; then
+        FIDELITY_ARGS+=(--source "$ABS_FILE")
+      fi
       if [ "${EGREGORE_USE_PUBLISHED:-0}" != "1" ] && [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-        if node "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" --output "$RENDERED_HTML" >/dev/null 2>&1; then
+        if node "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
           RENDER_OK=1
         fi
       else
-        if npx egregore-artifacts "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" --output "$RENDERED_HTML" >/dev/null 2>&1; then
+        if npx -y egregore-artifacts@latest "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
           RENDER_OK=1
         fi
       fi
@@ -350,12 +425,8 @@ PID_MEMORY=$!
             DISPLAY_NAME=$(head -1 "$PERSON_FILE" | sed 's/^# //')
           fi
 
-          # addressed_to: only set if there's a recipient
-          ADDRESSED_TO="[]"
-          if [ -n "$RECIPIENT" ]; then
-            RECIP_HANDLE=$(echo "$RECIPIENT" | tr '[:upper:]' '[:lower:]' | awk '{print $1}')
-            ADDRESSED_TO=$(jq -nc --arg h "$RECIP_HANDLE" --arg d "$RECIPIENT" '[{"handle":$h,"display":$d}]')
-          fi
+          RECIP_HANDLE=$(echo "$RECIPIENT" | tr '[:upper:]' '[:lower:]' | awk '{print $1}')
+          ADDRESSED_TO=$(jq -nc --arg h "$RECIP_HANDLE" --arg d "$RECIPIENT" '[{"handle":$h,"display":$d}]')
 
           CLAIM=$(echo "$BRIEFING_LEAD" | cut -c1-200)
 
@@ -384,8 +455,8 @@ PID_MEMORY=$!
               body: { prose: $prose },
               audience: {
                 addressed_to: $addressed,
-                visible_to: "public",
-                extendable_by: "anyone"
+                visible_to: $addressed,
+                extendable_by: $addressed
               },
               parents: [],
               render_mode: "custom",
@@ -403,15 +474,34 @@ PID_MEMORY=$!
     fi
   fi
 
-  # Fallback: if the emissary publish didn't produce a URL (no token, no
-  # network, size cap, render failure), fire the legacy publish-artifact.sh
-  # so handoffs still get a Telegram-able URL.
+  # Fallback: if a directed emissary publish didn't produce a URL—or this is a
+  # recipient-less team handoff—use publish-artifact.sh. Connected mode is
+  # authenticated and org-scoped; local mode's public relay is opt-in.
+  PUBLISH_RC=0
   if [ -z "$V1URL" ] && [ "$NO_PUBLISH" = "0" ] && [ -x "$SCRIPT_DIR/bin/publish-artifact.sh" ]; then
     AURL=$(bash "$SCRIPT_DIR/bin/publish-artifact.sh" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" \
+      --verify-fidelity \
+      --source "$ABS_FILE" \
       --title "$TOPIC" \
       --author "$AUTHOR" \
-      --description "$BRIEFING_LEAD" 2>/dev/null || echo "")
+      --description "$BRIEFING_LEAD" 2>"$TMPD/publish-error") || PUBLISH_RC=$?
   fi
+
+  PS="published"
+  if [ "$NO_PUBLISH" = "1" ]; then
+    PS="disabled"
+  elif [ -n "$V1URL" ] || [ -n "$AURL" ]; then
+    PS="published"
+  elif [ "$PUBLISH_RC" = "4" ]; then
+    PS="relay-off"
+  elif [ "$PUBLISH_RC" = "3" ]; then
+    PS="hosting-off"
+  elif grep -q 'Handoff fidelity check failed' "$TMPD/render-error" "$TMPD/publish-error" 2>/dev/null; then
+    PS="fidelity-failed"
+  else
+    PS="failed"
+  fi
+  echo "$PS" > "$TMPD/publish"
 
   # Prefer v1 (emissary-rendered) URL when available; fall back to the
   # legacy egregore-artifacts URL only if the v1 publish failed.
@@ -425,6 +515,7 @@ PID_MEMORY=$!
   fi
 
   NS="skipped"
+  echo '{}' > "$TMPD/notify-plan"
   if [ "$NO_NOTIFY" = "0" ]; then
     if [ -n "$NOTIFY_URL" ]; then
       MSG_NOTIFY="Handoff from ${AUTHOR}: ${TOPIC}
@@ -438,21 +529,19 @@ View: ${NOTIFY_URL}"
 \"${BRIEFING_SHORT}\""
     fi
 
-    # Always notify. With a recipient (connected mode) → DM. Otherwise → group.
-    # Self-handoffs still post to the group so they're visible on /activity
-    # and in the Telegram feed — a handoff without a Telegram beat is invisible.
-    if [ -n "$RECIPIENT" ] && [ "$MODE" = "connected" ]; then
-      NR=$(bash "$SCRIPT_DIR/bin/notify.sh" send "$RECIPIENT" "$MSG_NOTIFY" 2>/dev/null || echo "Failed")
+    # Resolve the exact destination, but never approve or dispatch here. The
+    # interactive harness must show this proposal in a separate checkpoint.
+    if [ -n "$RECIPIENT" ]; then
+      NR=$(bash "$SCRIPT_DIR/bin/notify.sh" plan send "$RECIPIENT" "$MSG_NOTIFY" 2>/dev/null || echo '{}')
     else
-      NR=$(bash "$SCRIPT_DIR/bin/notify.sh" group "$MSG_NOTIFY" 2>/dev/null || echo "Failed")
+      NR=$(bash "$SCRIPT_DIR/bin/notify.sh" plan group "$MSG_NOTIFY" 2>/dev/null || echo '{}')
     fi
 
-    if echo "$NR" | grep -qi "^Sent"; then
-      NS="sent"
-    elif echo "$NR" | grep -qi "^Failed"; then
-      NS="failed"
+    if printf '%s' "$NR" | jq -e '.status == "approval_required"' >/dev/null 2>&1; then
+      NS="approval_required"
+      printf '%s\n' "$NR" > "$TMPD/notify-plan"
     else
-      NS="unknown"
+      NS="unavailable"
     fi
   fi
   echo "$NS" > "$TMPD/notify"
@@ -502,6 +591,9 @@ fi
 MEMORY_STATUS=$(cat "$TMPD/memory"   2>/dev/null || echo "skipped")
 ARTIFACT_URL=$(cat "$TMPD/artifact"  2>/dev/null || echo "")
 NOTIFY_STATUS=$(cat "$TMPD/notify"   2>/dev/null || echo "skipped")
+NOTIFY_PLAN=$(cat "$TMPD/notify-plan" 2>/dev/null || echo "{}")
+PUBLISH_STATUS=$(cat "$TMPD/publish" 2>/dev/null || echo "skipped")
+[ -z "$PUBLISH_STATUS" ] && PUBLISH_STATUS="skipped"
 ARTIFACTS_ARR=$(cat "$TMPD/artifacts" 2>/dev/null || echo "[]")
 [ -z "$ARTIFACTS_ARR" ] && ARTIFACTS_ARR="[]"
 
@@ -522,16 +614,10 @@ fi
 STATUS_BITS=("saved")
 [ "$GRAPH_STATUS"  = "ok" ]    && STATUS_BITS+=("graphed")
 [ "$MEMORY_STATUS" = "ok" ]    && STATUS_BITS+=("pushed")
-if [ "$NOTIFY_STATUS" = "sent" ]; then
-  if [ -n "$RECIPIENT" ]; then
-    STATUS_BITS+=("${RECIPIENT} notified")
-  else
-    STATUS_BITS+=("group notified")
-  fi
-elif [ "$NOTIFY_STATUS" = "unknown" ] && [ -n "$RECIPIENT" ]; then
-  STATUS_BITS+=("${RECIPIENT} relayed to group")
-fi
+[ "$NOTIFY_STATUS" = "approval_required" ] && STATUS_BITS+=("notify approval pending")
 [ -n "$ARTIFACT_URL" ]         && STATUS_BITS+=("published")
+[ "$PUBLISH_STATUS" = "relay-off" ] && STATUS_BITS+=("not published")
+[ "$PUBLISH_STATUS" = "fidelity-failed" ] && STATUS_BITS+=("artifact fidelity failed")
 
 STATUS_LINE=""
 for bit in "${STATUS_BITS[@]}"; do
@@ -553,7 +639,9 @@ jq -cn \
   --arg graphStatus "$GRAPH_STATUS" \
   --arg memoryStatus "$MEMORY_STATUS" \
   --arg notifyStatus "$NOTIFY_STATUS" \
+  --argjson notifyPlan "$NOTIFY_PLAN" \
   --arg artifactUrl "$ARTIFACT_URL" \
+  --arg publishStatus "$PUBLISH_STATUS" \
   --arg recipient "$RECIPIENT" \
   --arg topic "$TOPIC" \
   --arg author "$AUTHOR" \
@@ -568,7 +656,9 @@ jq -cn \
     graphStatus:$graphStatus,
     memoryStatus:$memoryStatus,
     notifyStatus:$notifyStatus,
+    notifyPlan:$notifyPlan,
     artifactUrl:$artifactUrl,
+    publishStatus:$publishStatus,
     recipient:$recipient,
     topic:$topic,
     author:$author,

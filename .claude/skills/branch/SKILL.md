@@ -4,6 +4,12 @@ Description: $ARGUMENTS
 
 ## What to do
 
+Resolve the core repo's configured base first:
+```bash
+BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch') ||
+  { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
+```
+
 1. Derive a topic slug from the description (lowercase, hyphens, no special chars, max 40 chars)
 2. Determine branch type from description:
    - `dev/{author}/{topic-slug}` — default for session work
@@ -11,9 +17,9 @@ Description: $ARGUMENTS
    - `bugfix/{topic-slug}` — bug fixes
 3. Call `EnterWorktree` with `name` set to the topic slug
 
-The WorktreeCreate hook handles everything: fetches develop, creates the branch, creates the worktree, sets up symlinks.
+The WorktreeCreate hook handles everything: fetches the configured base branch, creates the branch, creates the worktree, sets up symlinks.
 
-**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} origin/develop`
+**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} "origin/$BASE_BRANCH"`
 
 ## Deriving the topic slug
 
@@ -46,8 +52,8 @@ If already in a worktree and the user needs a new branch (e.g., after their PR w
 1. Do NOT exit the worktree or create a new one
 2. Create the new branch and checkout within the existing worktree:
    ```bash
-   git fetch origin develop --quiet
-   git checkout -b dev/$AUTHOR/$NEW_SLUG origin/develop
+   git fetch origin "$BASE_BRANCH" --quiet
+   git checkout -b dev/$AUTHOR/$NEW_SLUG "origin/$BASE_BRANCH"
    ```
 3. The worktree directory stays the same — only the branch changes
 4. Confirm: `Switched to dev/$AUTHOR/$NEW_SLUG (same worktree).`
@@ -59,12 +65,12 @@ If already in a worktree and the user needs a new branch (e.g., after their PR w
 
 Creating branch...
 
-  git fetch origin develop --quiet
-  git branch dev/alice/auth-flow origin/develop
+  git fetch origin "$BASE_BRANCH" --quiet
+  git branch dev/alice/auth-flow "origin/$BASE_BRANCH"
   EnterWorktree → .claude/worktrees/auth-flow/
   git checkout dev/alice/auth-flow
   bash <main-dir>/bin/worktree.sh setup "$(pwd)" "<main-dir>"
-  ✓ Created dev/alice/auth-flow (worktree, from develop)
+  ✓ Created dev/alice/auth-flow (worktree, from configured base)
 
 Ready to work. /save when done.
 ```
@@ -74,11 +80,11 @@ Ready to work. /save when done.
 
 Creating branch...
 
-  git fetch origin develop --quiet
-  git branch bugfix/fix-payment-endpoint origin/develop
+  git fetch origin "$BASE_BRANCH" --quiet
+  git branch bugfix/fix-payment-endpoint "origin/$BASE_BRANCH"
   EnterWorktree → .claude/worktrees/fix-payment-endpoint/
   git checkout bugfix/fix-payment-endpoint
-  ✓ Created bugfix/fix-payment-endpoint (worktree, from develop)
+  ✓ Created bugfix/fix-payment-endpoint (worktree, from configured base)
 
 Ready to work. /save when done.
 ```
@@ -88,10 +94,10 @@ Ready to work. /save when done.
 
 No description given. Using today's date.
 
-  git branch dev/alice/2026-02-12 origin/develop
+  git branch dev/alice/2026-02-12 "origin/$BASE_BRANCH"
   EnterWorktree → .claude/worktrees/2026-02-12/
   git checkout dev/alice/2026-02-12
-  ✓ Created dev/alice/2026-02-12 (worktree, from develop)
+  ✓ Created dev/alice/2026-02-12 (worktree, from configured base)
 
 Ready to work. /save when done.
 ```
@@ -102,7 +108,8 @@ If the user's description references a managed repo (listed in `egregore.json` �
 
 Resolve the repo's base branch first:
 ```bash
-BASE_BRANCH=$(jq -r --arg name "$REPO" '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // "develop" else "develop" end' egregore.json)
+BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch "$1"' _ "$REPO") ||
+  { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
 REPO_DIR="$(cd .. && pwd)/$REPO"
 git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" --quiet
 git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG "origin/$BASE_BRANCH"

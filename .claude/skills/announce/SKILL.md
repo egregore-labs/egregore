@@ -3,7 +3,7 @@ Send an announcement to the Telegram group. Drafts a message, shows a preview fo
 ## When to invoke
 
 User says: "announce", "tell the team", "send to the group", "notify everyone", "let everyone know"
-Not this: notify one person → `bash bin/notify.sh send` · handoff → `/handoff`
+Not this: notify one person → prepare a direct notification proposal · handoff → `/handoff`
 
 Topic: $ARGUMENTS
 
@@ -22,29 +22,9 @@ If no arguments, ask: "What should I announce?"
 - Keep it under 500 chars (Telegram readability)
 - No emojis unless the user's draft uses them
 
-### Step 2: Preview and confirm
+### Step 2: Publish artifact (if relevant)
 
-Show the draft and use AskUserQuestion:
-
-```
-header: "Announce"
-question: "Send this to the group?"
-options:
-  - label: "Send"
-    description: "Post to Telegram group now"
-  - label: "Edit"
-    description: "I want to change the wording"
-```
-
-Use the `preview` field to show the exact message that will be sent.
-
-**If "Send"** → proceed to Step 3.
-**If "Edit"** → ask what to change, redraft, preview again.
-**If user types custom text** → use their text as the message, preview again.
-
-### Step 3: Publish artifact (if relevant)
-
-If the announcement references a document, handoff, quest, or knowledge artifact from `memory/`, publish it first so the Telegram message includes a clickable link with OG preview.
+If the announcement references a document, handoff, quest, or knowledge artifact from `memory/`, publish it now so the final message includes a clickable link with OG preview.
 
 **Detect:** Check if the conversation produced or references a specific file in `memory/` (handoffs, knowledge, quests). If so, publish it:
 
@@ -57,15 +37,50 @@ ARTIFACT_URL=$(bash bin/publish-artifact.sh document "$FILE_PATH" \
 
 Use the appropriate type: `handoff`, `quest`, or `document` (for knowledge files).
 
-- **If publish succeeds**: `ARTIFACT_URL` contains the live URL (e.g. `https://egregore.xyz/view/curvelabs/U8mscr78Vp0`). Insert it into the message draft.
-- **If publish fails**: `ARTIFACT_URL` is empty — send the message without a link. Do NOT make up a URL.
+- **If publish succeeds**: insert the returned live URL into the message draft.
+- **If publish fails**: send the message without a link. Do NOT make up a URL.
 
 **Never fabricate artifact URLs.** Only use URLs returned by `publish-artifact.sh`.
 
-### Step 4: Send
+### Step 3: Plan, preview, and confirm
+
+Follow `.claude/context/notification-consent.md`. Create the group plan only
+after the artifact URL and message are final:
 
 ```bash
-bash bin/notify.sh group "$MESSAGE" 2>/dev/null
+PLAN_JSON=$(bash bin/notify.sh plan group "$MESSAGE")
+```
+
+Confirm via AskUserQuestion. Do NOT print the draft as text before the tool call — the harness hides text that precedes a tool call, so a draft "shown" that way is never seen and the user approves blind. The `preview` field is the only carrier the user actually sees:
+
+```
+header: "Send"
+question: "Send this exact notification?"
+options:
+  - label: "Send"
+    description: "Send once to the listed group channels"
+  - label: "Edit"
+    description: "I want to change the wording"
+  - label: "Cancel"
+    description: "Do not send anything"
+```
+
+**MANDATORY:** put the organization, every delivery/channel, and exact final
+message in the `preview` field of the "Send" option. Without all three, there
+is no valid consent.
+
+**If "Send"** → proceed to Step 4 using that plan's id and digest.
+**If "Edit"** → cancel the plan, ask what to change, redraft, plan, and preview again.
+**If "Cancel"** → cancel the plan and stop without sending.
+**If user types custom text** → cancel the plan, use their text, create a new plan, and preview again.
+
+### Step 4: Approve and dispatch once
+
+```bash
+APPROVAL_JSON=$(bash bin/notify.sh approve \
+  "$PLAN_ID" "$DIGEST" APPROVE_EXACT_NOTIFICATION)
+APPROVAL_TOKEN=$(printf '%s' "$APPROVAL_JSON" | jq -r '.approval_token')
+bash bin/notify.sh dispatch "$PLAN_ID" "$APPROVAL_TOKEN"
 ```
 
 Confirm: `✓ Announced to the group.`
@@ -131,7 +146,9 @@ bash bin/telemetry.sh emit "command" '{"command":"announce"}' 2>/dev/null &
 
 ## Rules
 
-- Always preview before sending — never send without confirmation
+- Always show the organization, every channel, and exact final message in a
+  separate notification checkpoint.
+- The user's request to announce is not consent to dispatch.
 - Keep messages concise — Telegram group, not an essay
 - If the user provides the exact message text in quotes, use it verbatim
 - Never fabricate artifact URLs — only use URLs returned by `publish-artifact.sh`

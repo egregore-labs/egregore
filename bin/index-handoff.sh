@@ -3,7 +3,9 @@ set -euo pipefail
 
 # Index a single handoff file into the Neo4j graph.
 # Usage: bash bin/index-handoff.sh <file-path>
-# Returns: {"sessionId":"...","resolved":N} or {"error":"..."}
+# Returns: {"sessionId":"...","resolved":0} or {"error":"..."}.
+# `resolved` remains for compatibility; lifecycle reconciliation is queued by
+# capture-run.sh after indexing.
 #
 # The file-path should be relative to memory/ (e.g. handoffs/2026-02/14-oz-topic.md)
 # or an absolute/relative path that contains "handoffs/" somewhere in it.
@@ -16,7 +18,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Index a single handoff file into the Neo4j graph."
   echo "Parses metadata (author, date, topic, recipients) from"
   echo "markdown headers or YAML front matter, creates Session"
-  echo "and relationship nodes, and auto-resolves old handoffs."
+  echo "and relationship nodes. Lifecycle completion is queued separately."
   echo ""
   echo "Returns: {\"sessionId\":\"...\",\"resolved\":N}"
   exit 0
@@ -117,11 +119,12 @@ AUTHOR="$(md_field 'Author')"
 AUTHOR_HANDLE="$(echo "$AUTHOR" | sed 's/[[:space:]]*→.*//' | awk '{print tolower($1)}')"
 [ -z "$AUTHOR_HANDLE" ] && AUTHOR_HANDLE="unknown"
 
-# Recipients: try markdown header (To or For), then YAML (to or for)
+# Recipients: try markdown header, then canonical/legacy YAML names.
 RECIPIENTS_RAW="$(md_field 'To')"
 [ -z "$RECIPIENTS_RAW" ] && RECIPIENTS_RAW="$(md_field 'For')"
 [ -z "$RECIPIENTS_RAW" ] && RECIPIENTS_RAW="$(yaml_extract 'to')"
 [ -z "$RECIPIENTS_RAW" ] && RECIPIENTS_RAW="$(yaml_extract 'for')"
+[ -z "$RECIPIENTS_RAW" ] && RECIPIENTS_RAW="$(yaml_extract 'addressed_to')"
 # Also extract from "From: author → recipient" pattern
 if [ -z "$RECIPIENTS_RAW" ] && echo "$AUTHOR" | grep -q '→' 2>/dev/null; then
   RECIPIENTS_RAW="$(echo "$AUTHOR" | sed 's/.*→[[:space:]]*//')"
@@ -130,6 +133,19 @@ fi
 # Project: try markdown header, then YAML
 PROJECT="$(md_field 'Project')"
 [ -z "$PROJECT" ] && PROJECT="$(yaml_extract 'project')"
+
+# Handoff kind: used by readers to distinguish automatic captures from manual handoffs.
+KIND="$(md_field 'Kind')"
+[ -z "$KIND" ] && KIND="$(yaml_extract 'kind')"
+
+# Lifecycle intent determines which automatic transitions are safe.
+INTENT="$(md_field 'Intent')"
+[ -z "$INTENT" ] && INTENT="$(yaml_extract 'intent')"
+INTENT="$(printf '%s' "${INTENT:-unclassified}" | tr '[:upper:]' '[:lower:]')"
+case "$INTENT" in
+  action|feedback|fyi|unclassified) ;;
+  *) INTENT="unclassified" ;;
+esac
 
 # Summary: 5-level precedence chain
 # 1. Frontmatter summary field
@@ -176,7 +192,7 @@ if [ -n "$RECIPIENTS_RAW" ]; then
     [ -z "$R" ] && continue
     HANDED_TO_CYPHER="${HANDED_TO_CYPHER}
 WITH s
-OPTIONAL MATCH (r${i}:Person) WHERE toLower(r${i}.name) = \$recipient${i} OR r${i}.github = \$recipient${i} OR toLower(r${i}.fullName) = \$recipient${i}
+OPTIONAL MATCH (r${i}:Person) WHERE toLower(r${i}.name) = \$recipient${i} OR toLower(r${i}.github) = \$recipient${i} OR toLower(r${i}.fullName) = \$recipient${i} OR \$recipient${i} IN [x IN coalesce(r${i}.previousNames, []) | toLower(x)] OR \$recipient${i} IN [x IN coalesce(r${i}.githubAliases, []) | toLower(x)] OR \$recipient${i} IN [x IN coalesce(r${i}.emails, []) | toLower(x)]
 FOREACH (_ IN CASE WHEN r${i} IS NOT NULL THEN [1] ELSE [] END |
   MERGE (s)-[:HANDED_TO]->(r${i})
 )"
@@ -196,10 +212,11 @@ FOREACH (_ IN CASE WHEN proj IS NOT NULL THEN [1] ELSE [] END |
   _PROJECT_ARGS=("--arg" "project" "$PROJECT")
 fi
 
-Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
+Q1_CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR toLower(p.github) = \$author OR toLower(p.fullName) = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)] OR \$author IN [x IN coalesce(p.githubAliases, []) | toLower(x)] OR \$author IN [x IN coalesce(p.emails, []) | toLower(x)]
 MERGE (s:Session {id: \$sessionId})
-ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.handoffStatus = 'pending', s.repoState = \$repoState, s.startedAt = datetime(\$date + 'T00:00:00Z')
-ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.repoState = \$repoState
+ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.author = \$author, s.handoffKind = CASE WHEN \$kind = '' THEN null ELSE \$kind END, s.handoffStatus = 'pending', s.handoffIntent = \$intent, s.handoffLifecycleVersion = 1, s.repoState = \$repoState, s.startedAt = datetime(\$date + 'T00:00:00Z')
+ON MATCH SET s.topic = \$topic, s.summary = \$summary, s.filePath = \$filePath, s.author = \$author, s.handoffKind = CASE WHEN \$kind = '' THEN null ELSE \$kind END, s.handoffIntent = CASE WHEN \$intent = 'unclassified' THEN coalesce(s.handoffIntent, 'unclassified') ELSE \$intent END, s.handoffLifecycleVersion = 1, s.repoState = \$repoState
+WITH s, p
 MERGE (s)-[:BY]->(p)${PROJECT_CYPHER}${HANDED_TO_CYPHER}
 RETURN s.id AS sessionId"
 
@@ -210,22 +227,21 @@ Q1_PARAMS=$(jq -n \
   --arg topic "$TOPIC" \
   --arg summary "$SUMMARY" \
   --arg filePath "$REL_PATH" \
+  --arg kind "$KIND" \
+  --arg intent "$INTENT" \
   --arg repoState "$REPO_STATE_JSON" \
   "${_PROJECT_ARGS[@]:+${_PROJECT_ARGS[@]}}" \
   "${_RECIP_ARGS[@]:+${_RECIP_ARGS[@]}}" \
   '$ARGS.named')
 
-# Q2: Auto-resolve old read handoffs from this author
-Q2_CYPHER="MATCH (s:Session)-[:HANDED_TO]->(p:Person) WHERE (toLower(p.name) = \$author OR p.github = \$author OR toLower(p.fullName) = \$author) AND s.handoffStatus = 'read' AND s.id <> \$sessionId
-WITH s, p, coalesce(s.handoffReadDate, s.date) AS sinceDate
-MATCH (later:Session)-[:BY]->(p)
-WHERE later.date > sinceDate
-WITH s, count(later) AS laterSessions WHERE laterSessions > 0
-SET s.handoffStatus = 'done'
-RETURN count(s) AS resolved"
+# Q2: Preserve the stable three-result batch shape without mutating lifecycle.
+# Completion used to run inside this foreground indexing request. It now enters
+# through capture-run.sh's local WAL queue and is reconciled off the caller's
+# critical path.
+Q2_CYPHER="MATCH (s:Session {id: \$sessionId})
+RETURN 0 AS resolved"
 
-Q2_PARAMS=$(jq -n --arg author "$AUTHOR_HANDLE" --arg sessionId "$SESSION_ID" \
-  '{author: $author, sessionId: $sessionId}')
+Q2_PARAMS=$(jq -n --arg sessionId "$SESSION_ID" '{sessionId: $sessionId}')
 
 # Q3: Capture the handoff's knowledge-graph neighborhood for artifact rendering.
 # Only the "graph-only" relations — things not already visible in the markdown
@@ -273,7 +289,7 @@ CURRENT_SID=$(cat "$HOME/.egregore/session-${PROJ_HASH}.id" 2>/dev/null || echo 
 if [ -n "$CURRENT_SID" ]; then
   bash "$SCRIPT_DIR/bin/graph.sh" query \
     "MATCH (s:Session {id: \$sid}) SET s.status = 'handed_off' RETURN s.id" \
-    "$(jq -n --arg sid "$CURRENT_SID" '{sid: $sid}')" 2>/dev/null || true
+    "$(jq -n --arg sid "$CURRENT_SID" '{sid: $sid}')" >/dev/null 2>&1 || true
 fi
 
 # --- Parse response ---

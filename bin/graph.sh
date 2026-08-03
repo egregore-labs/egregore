@@ -42,6 +42,42 @@ _millis() {
   fi
 }
 
+# --- Optional read-through cache (opt-in via EGREGORE_GRAPH_CACHE_TTL) ---
+# Read-only queries can be served from a local cache that bin/attendant.sh
+# keeps warm in the background, so callers on the launch path (session-start
+# greeting) pay zero network round-trips when warm. TTL in seconds; unset/0
+# disables. Mutating queries are never cached.
+_CACHE_TTL="${EGREGORE_GRAPH_CACHE_TTL:-0}"
+# Key the cache by the MAIN checkout so worktree sessions hit the same warm
+# cache the attendant maintains (its replay uses the same derivation).
+# Worktrees have .git as a FILE pointing into the main repo's .git/worktrees/.
+# api_url + slug are part of the key so entries never cross tenants when the
+# same checkout is repointed at a different org/API (cache entries are keyed
+# only by query+params below, so the directory must carry the tenant).
+_CACHE_ROOT="$SCRIPT_DIR"
+if [ -f "$SCRIPT_DIR/.git" ]; then
+  _WT_GITDIR=$(sed 's/^gitdir: //' "$SCRIPT_DIR/.git" 2>/dev/null || true)
+  if [ -n "$_WT_GITDIR" ]; then
+    _CACHE_ROOT=$(cd "$_WT_GITDIR/../../.." 2>/dev/null && pwd || echo "$SCRIPT_DIR")
+  fi
+fi
+# The scope is a non-secret fingerprint of the EFFECTIVE endpoint + credential
+# (already resolved above: process env → .env → committed api_url). Committed
+# config alone is not enough — an EGREGORE_API_URL/KEY override or a swapped
+# .env can point this checkout at a different tenant than egregore.json names,
+# and the entry key below carries only query+params. cksum output is a CRC,
+# not a reversible or usable credential.
+_CACHE_SCOPE=$(echo -n "${API_URL:-}|${API_KEY:-}" | cksum | cut -d' ' -f1)
+_CACHE_DIR="$HOME/.egregore/graph-cache/$(echo -n "${_CACHE_ROOT}|${_CACHE_SCOPE}" | cksum | cut -d' ' -f1)"
+
+_cache_key() {
+  echo -n "$1|${2:-}" | cksum | cut -d' ' -f1
+}
+
+_is_read_query() {
+  ! echo "$1" | grep -qiE '\b(MERGE|CREATE|SET|DELETE|DETACH|REMOVE)\b'
+}
+
 if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
   # === API MODE: Call Egregore API gateway ===
 
@@ -52,6 +88,19 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
       params="$2"
     else
       params="{}"
+    fi
+
+    local cache_file=""
+    if [ "$_CACHE_TTL" != "0" ] && _is_read_query "$cypher"; then
+      cache_file="$_CACHE_DIR/$(_cache_key "$cypher" "$params").json"
+      if [ -f "$cache_file" ]; then
+        local now cts
+        now=$(date +%s)
+        cts=$(jq -r '.ts // 0' "$cache_file" 2>/dev/null || echo 0)
+        if [ $(( now - cts )) -lt "$_CACHE_TTL" ]; then
+          jq -c '.result' "$cache_file" 2>/dev/null && return 0
+        fi
+      fi
     fi
 
     local body
@@ -85,6 +134,13 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     # Emit latency telemetry (fire-and-forget)
     bash "$SCRIPT_DIR/bin/telemetry.sh" emit "graph_query" \
       "$(jq -n --argjson latency "$latency_ms" '{latency_ms: $latency}')" 2>/dev/null &
+
+    # Store for the attendant to keep warm (query+params travel with the result)
+    if [ -n "$cache_file" ]; then
+      mkdir -p "$_CACHE_DIR" 2>/dev/null
+      jq -n --arg q "$cypher" --argjson p "$params" --argjson ts "$(date +%s)" --argjson r "$response" \
+        '{query: $q, params: $p, ts: $ts, result: $r}' > "$cache_file" 2>/dev/null || true
+    fi
 
     echo "$response"
   }

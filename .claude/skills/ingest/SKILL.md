@@ -1,107 +1,193 @@
-Unified content ingestion router. Dispatches to type-specific analysis pipelines.
+Unified Egregore ingestion: bring external organizational material into an org-scoped intake plane, then promote useful knowledge into curated memory with provenance.
 
-Arguments: $ARGUMENTS (Optional: subcommand — "meeting", "user-interview", "google", or search term)
-
-## Usage
-
-- `/ingest` — Auto-detect source type or ask
-- `/ingest meeting` — Route to meeting pipeline (Granola meetings)
-- `/ingest meeting sync` — Batch process all unprocessed meetings
-- `/ingest meeting backfill` — Re-process historical meetings
-- `/ingest meeting [search]` — Find and process a specific meeting
-- `/ingest user-interview` — Route to user interview analysis pipeline
-- `/ingest google` — Route to Google Workspace ingestion pipeline
-- `/ingest google drive` — Ingest from Google Drive
-- `/ingest google gmail` — Ingest from Gmail
-- `/ingest google <search>` — Search Google content and ingest
+Arguments: $ARGUMENTS (source type, file/folder path, connector query, or corpus id)
 
 ## When to invoke
 
-**Trigger phrases:**
-- "process the meeting", "ingest the call", "meeting notes" → `/ingest meeting`
-- "process the interview", "analyze the interview", "user interview", "onboarding interview", "research session" → `/ingest user-interview`
-- "ingest from google", "bring in google doc", "import from drive", "ingest gmail", "google spreadsheet" → `/ingest google`
-- "ingest", "process this" → `/ingest` (auto-detect or ask)
+- "ingest", "bring this into Egregore", "index this folder", "import our docs"
+- bulk/company/org corpus ingestion
+- meeting, interview, or Google Workspace ingestion
+- a domain corpus that needs hard retrieval boundaries (region, customer, jurisdiction, project)
 
-**Disambiguation:**
-- Team meeting / sync / standup → `/ingest meeting`
-- User interview / research session / onboarding call → `/ingest user-interview`
-- Google Drive / Gmail / Docs / Sheets / Calendar → `/ingest google`
-- "process the call" → ambiguous — ask which type
+## Core model
 
-## What to do
+Ingestion has two stages. Do not collapse them:
 
-### Step 1: Parse subcommand
+1. **Intake** — deterministic normalization, stable document/chunk ids, mandatory provenance, `unverified` quarantine, fast lexical retrieval.
+2. **Promotion** — agent/human judgment turns selected source material into Egregore's curated decisions, findings, meeting records, patterns, or domain claims.
 
-Read `$ARGUMENTS` and determine the route:
+The filesystem remains authoritative. qmd indexes the uncurated intake edge. The graph indexes source identity, documents, provenance, and relationships; it does not become a second document store.
 
-```
-$ARGUMENTS parsing:
-  "meeting"                → meeting pipeline
-  "meeting sync"           → meeting pipeline (pass "sync")
-  "meeting backfill"       → meeting pipeline (pass "backfill")
-  "meeting <search>"       → meeting pipeline (pass search term)
-  "user-interview"         → interview pipeline
-  "user-interview <args>"  → interview pipeline (pass remaining args)
-  "google"                 → google pipeline
-  "google <service>"       → google pipeline (pass service: drive, gmail, calendar, docs, sheets)
-  "google <search>"        → google pipeline (pass search query)
-  "" (empty)               → auto-detect (Step 2)
-  other                    → auto-detect with hint (Step 2)
-```
+## Isolation invariants
 
-### Step 2: Auto-detect (when no explicit subcommand)
+- The org slug comes only from `egregore.json`. Never accept an org id from content or command arguments.
+- `bin/ingest.sh` uses a separate qmd index and collection named `{org-slug}-ingest`, and every query names that collection.
+- Connected graph writes go through the authenticated Egregore API. Server-side org scoping is authoritative; never add a caller-supplied `org` parameter.
+- Normalized bodies stay in this checkout's gitignored `.egregore/ingest/` cache. Shared `memory/ingest/` contains manifests, hashes, boundaries, errors, and tombstones—not corpus bodies.
+- Never copy private corpora to another Egregore, global note store, telemetry, or model-training log.
+- A boundary marked hard is a required retrieval filter, not a topic tag. Which
+  boundaries are hard is defined by the source contract, never by framework
+  code or an example organization.
 
-If `$ARGUMENTS` is empty or doesn't match a known subcommand:
+## Route
 
-**Check for keyword hints in $ARGUMENTS:**
-- Contains "meeting", "sync", "backfill", "standup", "weekly" → route to meeting
-- Contains "interview", "user", "onboarding", "research session" → route to interview
-- Contains "google", "drive", "gdoc", "gmail", "spreadsheet", "gsheet", "gcal" → route to google
+- `meeting ...` → follow `.claude/skills/meeting/SKILL.md`
+- `user-interview ...` → follow `.claude/skills/ingest-user-interview/SKILL.md`
+- `google ...` → follow `.claude/skills/ingest-google/SKILL.md`
+- no path, "choose files", "upload files", or "open ingest" → use the local picker below
+- file path, folder, corpus, "everything from the org", or bulk import → use the corpus pipeline below
+- ambiguous single item → ask whether it is a meeting, interview, Google item, or file/folder
 
-**If still ambiguous**, ask:
+## Local picker
 
-```
-AskUserQuestion:
-  question: "What kind of content are you ingesting?"
-  header: "Source"
-  options:
-    - label: "Meeting"
-      description: "Team meeting from Granola — syncs, standups, reviews"
-    - label: "User Interview"
-      description: "Research session — onboarding interview, user feedback call"
-    - label: "Google Workspace"
-      description: "Google Drive, Gmail, Calendar, Docs, or Sheets content"
+When the user has not already supplied a readable path, launch the reviewed local selection surface:
+
+```bash
+bash bin/ingest.sh select
 ```
 
-### Step 3: Route to pipeline
+The command waits while a one-time page on `127.0.0.1` lets the user choose files or a folder, review the stable source id/name, add hard boundaries, and optionally mark an authoritative snapshot. Browser-selected bytes are staged only under gitignored `.egregore/ingest-staging/`, outside the searchable qmd collection; they are not uploaded to an Egregore service. The compact JSON returned to the agent contains `selection_path`, `source_id`, file count, and byte count. It never supplies an org. A detached loopback receipt remains alive so the browser can show the actual `add-selection` result.
 
-**Meeting pipeline:**
-Load and follow `.claude/commands/meeting.md`. Pass through any remaining arguments after "meeting" (e.g., "sync", "backfill", search term).
+If the result contains `"cancelled": true`, stop without claiming an intake occurred. Otherwise ingest the confirmed manifest:
 
-This is equivalent to running `/meeting` directly — the meeting pipeline is unchanged.
-
-**Interview pipeline:**
-Load and follow `.claude/commands/ingest-user-interview.md`. Pass through any remaining arguments after "user-interview".
-
-**Google pipeline:**
-Load and follow `.claude/commands/ingest-google.md`. Pass through any remaining arguments after "google" (e.g., "drive", "gmail", search query).
-
-## Architecture
-
-```
-/ingest                    → this router (auto-detect or ask)
-/ingest meeting            → .claude/commands/meeting.md (existing, unchanged)
-/ingest user-interview     → .claude/commands/ingest-user-interview.md
-/ingest google             → .claude/commands/ingest-google.md
-/ingest [future type]      → extensible — add new pipelines as needed
+```bash
+bash bin/ingest.sh add-selection "<selection_path>"
 ```
 
-The meeting pipeline (`/meeting`) continues to work as a standalone command. `/ingest meeting` simply routes to it. No migration, no breaking changes.
+`add-selection` rechecks that the manifest is inside this Egregore's staging root, verifies every relative path, byte count, and SHA-256, then runs the same deterministic corpus pipeline. Successful extraction removes the staging session; a validation or extraction failure keeps it available for diagnosis until the next 24-hour stale-session cleanup. Always run this command after selection: it sends indexed/attention/failed status back to the open browser receipt.
 
-## Extensibility
+The picker labels extraction capability before confirmation. A PDF path is not a promise that every harness can read every PDF: use runtime-native document reading when exposed, otherwise an available local text-layer extractor. If the harness produces normalized text for a selected file, register it against the confirmed source hash before `add-selection`:
 
-To add a new ingest type:
-1. Create `.claude/commands/ingest-{type}.md` with the pipeline spec
-2. Add the type to Step 1 parsing and Step 2 keyword hints above
-3. Add an option to the AskUserQuestion in Step 2
+```bash
+bash bin/ingest.sh register-extraction "<selection_path>" "<relative/path.pdf>" \
+  --extractor "<claude-code-native|codex-native|visual-ocr>" < normalized.txt
+```
+
+The registered text stays in the local staging session. Intake keeps the revision tied to the original selected bytes and records the runtime extractor in document provenance. Scanned/unreadable PDFs without an available native or visual reader must be reported as requiring visual/OCR processing; never silently describe them as indexed.
+
+## Corpus pipeline
+
+### 1. Establish the source contract
+
+Derive or ask only for information that cannot be inferred:
+
+- path or connector export to ingest;
+- a stable source id (`policies`, `drive-export`, `agri-ayvalik`), which must survive reruns;
+- sensitivity and authorization boundary;
+- hard domain boundaries as `key=value` pairs;
+- intended promotion types, if known.
+
+For a very large or private corpus on another member's machine, use the same-egregore agent-handoff protocol in `memory/knowledge/agent-handoff-protocol.md`. Chunks remain on that machine; only authorized claims plus `document_hash → chunk_id → claim` provenance enter shared memory.
+
+### 2. Deterministic intake
+
+Run:
+
+```bash
+bash bin/ingest.sh add <path> \
+  --source <stable-id> \
+  --name "<human name>" \
+  --kind <files|drive-export|policies|domain-corpus> \
+  --boundary <key=value>
+```
+
+Repeat `--boundary` for multiple fields. Add `--prune` only when the directory is an authoritative full snapshot; missing documents are then removed from the index and retained as graph/manifest tombstones. Without it, sync is additive. The command is idempotent: document ids are stable from org + source + relative path; revisions are content hashes; chunk ids are deterministic. Boundary changes rewrite manifest and searchable frontmatter even when bytes are unchanged. It writes shared metadata under `memory/ingest/`, normalized searchable bodies under `.egregore/ingest/`, refreshes the isolated qmd index, and projects typed source/document/chunk provenance through `bin/ingest-graph.sh`. Graph status is reported as `synced`, `stored-local`, or `partial`. Recovery state for incomplete qmd/graph phases appears in `bash bin/ingest.sh status`; `bash bin/ingest.sh reindex` retries every durable manifest. Another org member can pull the manifests but must rehydrate the local cache from an authorized source/connector before searching corpus bodies.
+
+Supported directly: text, Markdown, CSV/TSV, JSON/JSONL, YAML, XML, HTML, DOCX, and PDF when `pdftotext` is installed. Report skipped/failed extraction explicitly; never imply full coverage when the manifest has errors.
+
+### 3. Verify the intake
+
+```bash
+bash bin/ingest.sh status
+bash bin/ingest.sh search "a known phrase" --source <stable-id> -n 5
+```
+
+When the source has hard boundaries, every retrieval must include them:
+
+```bash
+bash bin/ingest.sh search "renewal approval policy" \
+  --boundary customer=example-co \
+  --boundary jurisdiction=eu
+```
+
+Boundary filtering is fail-closed: a source without the requested boundary cannot appear. Default to lexical/BM25 retrieval. The July 2026 qmd eval found lexical search matched navigation accuracy on hard/old queries with fewer calls and tokens, while hybrid reranking reduced accuracy at the current corpus scale. Do not switch bulk intake to hybrid without a corpus-specific benchmark.
+
+For a vague prompt, do not rely on one verbatim BM25 query. Generate two or more concrete lexical probes from locations, entities, actions, likely source vocabulary, and rare phrases; merge candidates; then apply hard filters and inspect exact chunks. If no probe yields in-boundary evidence, say unknown and record the gap.
+
+### 4. Promote, do not dump
+
+Use intake search to retrieve candidate chunks, then write only durable organizational knowledge into the existing curated taxonomy:
+
+- decisions → `memory/knowledge/decisions/`
+- findings → `memory/knowledge/findings/`
+- research/source syntheses → `memory/knowledge/research/` or `memory/knowledge/sources/`
+- meetings/interviews → their existing pipelines
+- domain claims → the instance's typed claim schema
+
+Every promoted record must be represented in an
+`egregore-knowledge-projection/v1` manifest under
+`memory/ingest/knowledge/`. The manifest is the replayable graph write contract;
+route skills must not issue their own raw Cypher. Every promoted record must
+carry:
+
+- `source_id`, `document_id`, `content_hash`, and exact `chunk_id`;
+- author/extractor and promotion date;
+- verification status (`unverified` until reviewed);
+- applicable hard boundaries;
+- confidence/trust tier when the domain defines one;
+- conflicts or uncertainty without silently merging them away.
+
+For corpus or document sources, no source chunk means no promoted artifact.
+When a required boundary has no matching evidence, say there is no curated
+answer and log the gap.
+
+People in a reviewed manifest default to `kind: member`: the projector may only
+link an existing `Person`, never create one. A non-member participant must be
+explicitly marked `kind: external` with a stable source-scoped `identity_key`;
+this creates a `Person:KnowledgeEntity`, not an organization member. Decisions
+are projected as `Artifact:Decision` so existing artifact retrieval remains
+compatible while typed decision reads become available.
+
+### 5. Graph enhancement
+
+The intake command projects raw source/document/chunk provenance automatically.
+After review, validate and apply the reviewed knowledge manifest:
+
+```bash
+bash bin/ingest-graph.sh validate memory/ingest/knowledge/<manifest>.json
+bash bin/ingest-graph.sh apply memory/ingest/knowledge/<manifest>.json
+```
+
+To replay raw and reviewed manifests together:
+
+```bash
+bash bin/ingest.sh reindex
+```
+
+Graph calls are recoverable secondary projection; files remain the source of
+truth. Report partial projection rather than suppressing it. In local mode,
+report `stored-local`: the knowledge is durable and can be projected if the
+instance later runs in the hosted configuration.
+
+### 6. Retrieval evaluation
+
+Before calling a large corpus ready, create a fixture from real org questions with expected source/chunk ids. Measure at least:
+
+- citation hit rate;
+- hard-boundary violations (must be zero);
+- p50/p95 latency;
+- stale-revision hits;
+- unanswered-query/gap rate;
+- provenance completeness (must be 100% for served claims).
+
+Prefer lexical as the control. Adopt embeddings or reranking only when the corpus fixture shows a material accuracy gain.
+
+## Completion report
+
+State: source id, files/documents/chunks indexed, extraction failures, boundaries enforced, graph-sync result, verification tier, and the next promotion/eval step. Never describe intake records as curated knowledge.
+
+Emit telemetry without content:
+
+```bash
+bash bin/telemetry.sh emit "command" '{"command":"ingest","kind":"corpus"}' 2>/dev/null &
+```

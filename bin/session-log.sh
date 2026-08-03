@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# SessionEnd hook: write a structured session log to memory/sessions/.
-# Receives JSON on stdin from Claude Code's SessionEnd hook.
+# Graceful session-end adapter: write a structured session log to memory/sessions/.
+# Receives runtime-neutral JSON on stdin from Claude Code or Pi.
 # Runs BEFORE transcript-archive.sh (needs obs buffer + worktree intact).
 # Makes sessions visible in local-mode without requiring /handoff or /wrap.
 set -euo pipefail
@@ -133,7 +133,7 @@ if [ "$DURATION_MIN" -lt 2 ] 2>/dev/null && [ "$COMMIT_COUNT" -eq 0 ] 2>/dev/nul
   exit 0
 fi
 
-# --- Deduplication: skip if handoff exists for same author+date ---
+# --- Deduplication: explicit /handoff or /wrap wins over baseline capture ---
 TODAY=$(date +%d)
 MONTH=$(date +%Y-%m)
 if [ -n "$STARTED_AT" ]; then
@@ -143,40 +143,31 @@ fi
 
 AUTHOR_LC=$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')
 DISPLAY_LC=$(echo "$DISPLAY_NAME" | tr '[:upper:]' '[:lower:]')
-HANDOFF_DIR="$SCRIPT_DIR/memory/handoffs/$MONTH"
-if [ -d "$HANDOFF_DIR" ]; then
-  # Check for handoffs by this author today (match by author name or display name in filename)
-  EXISTING=$(ls "$HANDOFF_DIR" 2>/dev/null | grep "^${TODAY}-" | grep -i "\-${AUTHOR_LC}\-\|${DISPLAY_LC:+-${DISPLAY_LC}-}" | head -1 || true)
+AUTHOR_PATTERN="-${AUTHOR_LC}-"
+[ -n "$DISPLAY_LC" ] && AUTHOR_PATTERN="${AUTHOR_PATTERN}|-${DISPLAY_LC}-"
+for CAPTURE_DIR in \
+  "$SCRIPT_DIR/memory/handoffs/$MONTH" \
+  "$SCRIPT_DIR/memory/wraps/$MONTH"; do
+  [ -d "$CAPTURE_DIR" ] || continue
+  # Match the canonical handle or display name in today's filename.
+  EXISTING=""
+  for CANDIDATE in "$CAPTURE_DIR/${TODAY}-"*.md; do
+    [ -e "$CANDIDATE" ] || continue
+    CANDIDATE_NAME="$(basename "$CANDIDATE" | tr '[:upper:]' '[:lower:]')"
+    if printf '%s\n' "$CANDIDATE_NAME" | grep -Eq -- "$AUTHOR_PATTERN"; then
+      EXISTING="$CANDIDATE_NAME"
+      break
+    fi
+  done
   if [ -n "$EXISTING" ]; then
     rm -f "$BASELINE_FILE" 2>/dev/null
     exit 0
   fi
-fi
+done
 
-# --- Build topic slug for filename ---
-TOPIC_SLUG=$(echo "$TOPIC" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-' | head -c 40)
-[ -z "$TOPIC_SLUG" ] && TOPIC_SLUG="session"
-
-# --- Write session log ---
-SESSIONS_DIR="$SCRIPT_DIR/memory/sessions/$MONTH"
-mkdir -p "$SESSIONS_DIR" 2>/dev/null || exit 0
-
-SESSION_FILE="$SESSIONS_DIR/${TODAY}-${AUTHOR_LC}-${TOPIC_SLUG}.md"
-
-# Avoid overwriting if file exists (concurrent sessions with same slug)
-if [ -f "$SESSION_FILE" ]; then
-  SESSION_FILE="$SESSIONS_DIR/${TODAY}-${AUTHOR_LC}-${TOPIC_SLUG}-${SESSION_ID:(-6)}.md"
-fi
-
+# --- Write through the shared capture engine -----------------------------
+SUMMARY="${DURATION} session on ${TOPIC}; ${COMMIT_COUNT} commit(s), ${OBS_COUNT} observed action(s)."
 {
-  echo "# Session: $TOPIC"
-  echo ""
-  echo "**Author**: ${DISPLAY_NAME:-$AUTHOR}"
-  echo "**Date**: $STARTED_AT"
-  echo "**Branch**: ${BRANCH:-develop}"
-  echo "**Duration**: $DURATION"
-  echo ""
-
   if [ -n "$OBS_FILES" ]; then
     echo "## Files"
     echo "$OBS_FILES" | while read -r F; do
@@ -190,16 +181,17 @@ fi
     echo "$COMMIT_COUNT commits on ${BRANCH:-develop}"
     echo ""
   fi
-} > "$SESSION_FILE" 2>/dev/null || exit 0
-
-# --- Commit + push memory repo (best-effort, background) ---
-(
-  cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 0
-  git add "sessions/$MONTH/$(basename "$SESSION_FILE")" 2>/dev/null || exit 0
-  git commit -m "session: ${DISPLAY_NAME:-$AUTHOR} — $TOPIC" --quiet 2>/dev/null || exit 0
-  git pull --rebase origin main --quiet 2>/dev/null || true
-  git push origin main --quiet 2>/dev/null || true
-) &
+} | bash "$SCRIPT_DIR/bin/capture-run.sh" \
+      --mode baseline \
+      --author "$AUTHOR" \
+      --display-name "$DISPLAY_NAME" \
+      --topic "$TOPIC" \
+      --summary "$SUMMARY" \
+      --session-id "$SESSION_ID" \
+      --branch "${BRANCH:-develop}" \
+      --date "$STARTED_AT" \
+      --duration "$DURATION" \
+      --async-push >/dev/null 2>&1 || true
 
 # --- Clean up baseline ---
 rm -f "$BASELINE_FILE" 2>/dev/null

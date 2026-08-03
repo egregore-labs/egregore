@@ -28,7 +28,7 @@ Telemetry is on by default. Users can opt out via:
 
 ## What is collected
 
-Command names, timestamps, session durations, error codes, branch names, query latencies.
+Command names, timestamps, session durations, per-command durations, model names/tiers, routing flags (routed/escalated/override), error codes, branch names, query latencies, and content-free per-command outcome counters/enums (e.g. deep-reflect wave counts, docs-read counts, stop reasons).
 
 ## What is NEVER collected
 
@@ -41,6 +41,10 @@ File paths, file contents, code, env var values, conversation content, command a
 ```bash
 bash bin/telemetry.sh emit "command" '{"command":"save"}' 2>/dev/null &
 ```
+
+Optional extended payload example: `{"command":"save","model":"haiku-4-5","tier":"haiku","routed":true,"escalated":false,"override":false,"duration_ms":1240}`
+
+All extended fields are optional, and `duration_ms` is measured by the emitting wrapper (executor spawn wall-time or script time). Per-command token counts are deferred to Claude Code's OTEL metrics (a loom-optimizer data source), not per-emit fields.
 
 Replace `"save"` with the actual command name. Do this for every slash command execution.
 

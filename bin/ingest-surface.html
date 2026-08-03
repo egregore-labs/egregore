@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en" data-theme="ledger" data-theme-pair="sovereign" data-theme-mode="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ingest into Egregore</title>
+  <script type="application/json" id="egregore-design-manifest">{"system":"egregore-design-convention","version":"0.3.0","lineage":"meridian","pair":"sovereign","mode":"auto","resolvedTheme":"ledger","target":"browser","surfaceId":"ingest-picker"}</script>
+  <script>
+    (function () {
+      var pairs = {
+        meridian: {light: 'vellum', dark: 'nocturne'},
+        agronomic: {light: 'loam', dark: 'soil'},
+        sovereign: {light: 'ledger', dark: 'bedrock'}
+      };
+      var modes = ['light', 'auto', 'dark'];
+      function resolveAuto() {
+        if (matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+        if (matchMedia('(prefers-color-scheme: light)').matches) return 'light';
+        var hour = new Date().getHours();
+        return hour >= 19 || hour < 7 ? 'dark' : 'light';
+      }
+      function apply(pair, mode) {
+        var resolvedMode = mode === 'auto' ? resolveAuto() : mode;
+        var resolvedTheme = pairs[pair][resolvedMode];
+        document.documentElement.dataset.theme = resolvedTheme;
+        document.documentElement.dataset.themePair = pair;
+        document.documentElement.dataset.themeMode = mode;
+        var manifest = document.getElementById('egregore-design-manifest');
+        if (manifest) {
+          var value = JSON.parse(manifest.textContent);
+          value.pair = pair; value.mode = mode; value.resolvedTheme = resolvedTheme;
+          manifest.textContent = JSON.stringify(value);
+        }
+      }
+      var serverPreference = __EGREGORE_PREFERENCES_JSON__;
+      var savedPair = serverPreference.pair || localStorage.getItem('eg-theme-pair');
+      if (!pairs[savedPair]) savedPair = 'sovereign';
+      var savedMode = serverPreference.mode || localStorage.getItem('eg-theme-mode') || 'auto';
+      localStorage.setItem('eg-theme-pair', savedPair);
+      localStorage.setItem('eg-theme-mode', savedMode);
+      apply(savedPair, savedMode);
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+        if ((localStorage.getItem('eg-theme-mode') || 'auto') === 'auto') {
+          apply(localStorage.getItem('eg-theme-pair') || 'sovereign', 'auto');
+        }
+      });
+      window.__egTheme = {
+        setPair: function (pair) {
+          if (!pairs[pair]) return;
+          localStorage.setItem('eg-theme-pair', pair);
+          apply(pair, localStorage.getItem('eg-theme-mode') || 'auto');
+          this.paint();
+          if (window.__saveEgTheme) window.__saveEgTheme();
+        },
+        cycle: function () {
+          var current = localStorage.getItem('eg-theme-mode') || 'auto';
+          var next = modes[(modes.indexOf(current) + 1) % modes.length];
+          localStorage.setItem('eg-theme-mode', next);
+          var pair = localStorage.getItem('eg-theme-pair') || 'sovereign';
+          apply(pair, next);
+          this.paint();
+          if (window.__saveEgTheme) window.__saveEgTheme();
+        },
+        paint: function () {
+          var mode = localStorage.getItem('eg-theme-mode') || 'auto';
+          var pair = localStorage.getItem('eg-theme-pair') || 'sovereign';
+          document.querySelectorAll('.theme-label').forEach(function (label) { label.textContent = mode; });
+          document.querySelectorAll('[data-pair]').forEach(function (button) {
+            button.classList.toggle('active', button.dataset.pair === pair);
+            button.setAttribute('aria-pressed', button.dataset.pair === pair ? 'true' : 'false');
+          });
+        }
+      };
+    }());
+  </script>
+  <style>
+__EGREGORE_DESIGN_CSS__
+  </style>
+  <style>
+    :root {
+      --cream: var(--paper);
+      --black: var(--ink);
+      --dark: var(--ink-soft);
+      --muted: var(--ink-faint);
+      --warm-gray: var(--line);
+      --border: var(--line);
+      --hairline: var(--line-soft);
+      --card-bg: var(--card);
+      --elevated-bg: var(--paper-2);
+      --terracotta: var(--t1);
+      --terracotta-soft: var(--t1-bg);
+      --blue-muted: var(--t2);
+      --success: var(--t2);
+      --danger: var(--t3);
+      --font-serif: var(--serif);
+      --font-sans: var(--sans);
+      --font-mono: var(--mono);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--cream); color: var(--dark); font-family: var(--font-sans); min-height: 100vh; }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    ::selection { background: var(--terracotta); color: var(--cream); }
+    .shell { width: min(980px, calc(100% - 40px)); margin: 0 auto; padding: 64px 0 80px; }
+    header { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: start; border-bottom: 1px solid var(--border); padding-bottom: 32px; }
+    .eyebrow { color: var(--terracotta); font-family: var(--font-mono); font-size: 11px; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { color: var(--black); font-family: var(--font-serif); font-size: clamp(38px, 6vw, 68px); font-weight: 400; letter-spacing: -.035em; line-height: .98; margin: 12px 0; }
+    .lede { color: var(--muted); font-size: 15px; line-height: 1.6; margin: 0; max-width: 620px; }
+    .theme-controls { display: grid; justify-items: end; gap: 9px; }
+    .pair-switcher { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 99px; background: var(--card-bg); }
+    .pair { border: 0; border-radius: 99px; background: transparent; color: var(--muted); padding: 7px 10px; font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; transition: color .15s, background .15s; }
+    .pair:hover { color: var(--black); }
+    .pair.active { background: var(--terracotta-soft); color: var(--terracotta); }
+    .theme { border: 1px solid var(--border); border-radius: 99px; background: var(--card-bg); color: var(--muted); padding: 8px 12px; font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+    main { display: grid; gap: 18px; padding-top: 28px; }
+    .panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+    .panel-head { display: flex; justify-content: space-between; gap: 20px; align-items: baseline; margin-bottom: 18px; }
+    h2 { color: var(--black); font-family: var(--font-serif); font-size: 25px; font-weight: 400; margin: 0; }
+    .step { color: var(--muted); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+    .pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pick { display: block; border: 1px dashed var(--warm-gray); border-radius: 12px; padding: 24px; background: var(--cream); color: var(--black); text-align: left; transition: border-color .15s, background .15s; }
+    .pick:hover { border-color: var(--terracotta); }
+    .pick strong { display: block; font-family: var(--font-serif); font-size: 20px; font-weight: 400; }
+    .pick span { color: var(--muted); display: block; font-size: 12px; margin-top: 7px; }
+    input[type="file"] { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+    .hidden { display: none !important; }
+    .file-summary { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+    .files { max-height: 250px; overflow: auto; border-top: 1px solid var(--border); }
+    .file { display: grid; grid-template-columns: 1fr auto auto; gap: 14px; padding: 11px 2px; border-bottom: 1px solid var(--border); align-items: center; font-size: 12px; }
+    .file-name { color: var(--black); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta, .capability { color: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+    .capability.attention { color: var(--terracotta); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    label.field { display: grid; gap: 7px; color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+    label.field.full { grid-column: 1 / -1; }
+    input[type="text"], textarea { width: 100%; border: 1px solid var(--border); border-radius: 9px; background: var(--cream); color: var(--black); padding: 11px 12px; outline: none; }
+    input[type="text"]:focus, textarea:focus { border-color: var(--terracotta); }
+    textarea { min-height: 72px; resize: vertical; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
+    .field-help { color: var(--muted); font-family: var(--font-sans); font-size: 11px; line-height: 1.45; letter-spacing: 0; text-transform: none; }
+    .check { display: flex; gap: 10px; align-items: flex-start; color: var(--dark); font-size: 12px; line-height: 1.5; margin-top: 16px; }
+    .check input { accent-color: var(--terracotta); margin-top: 3px; }
+    .actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 4px; }
+    .button { border-radius: 99px; padding: 11px 18px; border: 1px solid var(--border); background: var(--card-bg); color: var(--dark); }
+    .button.primary { border-color: var(--terracotta); background: var(--terracotta); color: var(--paper); }
+    .button:disabled { cursor: not-allowed; color: var(--warm-gray); border-color: var(--border); background: var(--card-bg); }
+    .status { border-left: 2px solid var(--terracotta); padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .status.error { border-color: var(--danger); color: var(--danger); }
+    .status.done { border-color: var(--success); color: var(--success); }
+    .completion { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; overflow: hidden; background: var(--paper); color: var(--ink); }
+    .completion::before, .completion::after { content: ""; position: absolute; border: 1px solid var(--line); border-radius: 50%; pointer-events: none; }
+    .completion::before { width: min(74vw, 920px); aspect-ratio: 1; left: -18vw; top: -42vw; }
+    .completion::after { width: min(54vw, 700px); aspect-ratio: 1; right: -19vw; bottom: -33vw; border-color: var(--line-soft); }
+    .completion-card { position: relative; width: min(720px, calc(100% - 40px)); padding: clamp(36px, 7vw, 72px); background: var(--card); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); text-align: center; animation: arrive .55s var(--ease) both; }
+    .completion-mark { display: grid; place-items: center; width: 58px; height: 58px; margin: 0 auto 28px; border: 1px solid var(--t1); border-radius: 50%; background: var(--t1-bg); color: var(--t1); font-family: var(--font-mono); font-size: 21px; }
+    .completion-kicker { color: var(--t1); font-family: var(--font-mono); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
+    .completion h2 { max-width: 520px; margin: 14px auto 18px; font-size: clamp(38px, 7vw, 64px); line-height: 1.02; letter-spacing: -.035em; }
+    .completion-copy { max-width: 470px; margin: 0 auto; color: var(--ink-soft); font-size: 15px; line-height: 1.65; }
+    .completion-receipt { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 8px 14px; margin-top: 28px; padding: 10px 14px; border-radius: 99px; background: var(--paper-2); color: var(--ink-faint); font-family: var(--font-mono); font-size: 10px; }
+    .completion-receipt strong { color: var(--ink); font-weight: 500; }
+    @keyframes arrive { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @media (prefers-reduced-motion: reduce) { .completion-card { animation: none; } }
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 24px, 980px); padding-top: 28px; }
+      header { grid-template-columns: 1fr; }
+      .theme-controls { justify-items: start; }
+      .pair-switcher { max-width: 100%; overflow-x: auto; }
+      .pickers, .form-grid { grid-template-columns: 1fr; }
+      label.field.full { grid-column: auto; }
+      .file { grid-template-columns: 1fr auto; }
+      .capability { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">Egregore · org-scoped intake</div>
+        <h1>Bring the source,<br>keep the evidence.</h1>
+        <p class="lede">Selected files stay on this machine. Review their source identity and any retrieval boundaries before they enter unverified organizational intake.</p>
+      </div>
+      <div class="theme-controls" aria-label="Appearance">
+        <div class="pair-switcher" aria-label="Palette pair">
+          <button class="pair" type="button" data-pair="meridian" onclick="__egTheme.setPair('meridian')">Meridian</button>
+          <button class="pair" type="button" data-pair="agronomic" onclick="__egTheme.setPair('agronomic')">Agronomic</button>
+          <button class="pair" type="button" data-pair="sovereign" onclick="__egTheme.setPair('sovereign')">Sovereign</button>
+        </div>
+        <button class="theme" type="button" onclick="__egTheme.cycle()">◐ <span class="theme-label">auto</span></button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" id="choose-panel">
+        <div class="panel-head"><h2>Select material</h2><span class="step">01 · local</span></div>
+        <div class="pickers">
+          <label class="pick" for="file-input"><strong>Choose files</strong><span>Select one or many documents.</span></label>
+          <label class="pick" for="folder-input"><strong>Choose a folder</strong><span>Preserve its visible directory structure.</span></label>
+        </div>
+        <input id="file-input" type="file" multiple>
+        <input id="folder-input" type="file" webkitdirectory multiple>
+      </section>
+
+      <section class="panel hidden" id="review-panel">
+        <div class="panel-head"><h2>Review selection</h2><span class="file-summary" id="file-summary"></span></div>
+        <div class="files" id="files"></div>
+      </section>
+
+      <section class="panel hidden" id="contract-panel">
+        <div class="panel-head"><h2>Source contract</h2><span class="step">02 · review</span></div>
+        <div class="form-grid">
+          <label class="field">Stable source ID<input id="source-id" type="text" autocomplete="off"></label>
+          <label class="field">Source name<input id="source-name" type="text" autocomplete="off"></label>
+          <label class="field full">Retrieval boundaries · optional<textarea id="boundaries" aria-describedby="boundary-help"></textarea><span class="field-help" id="boundary-help">One <code>key=value</code> per line. Add these only when retrieval must never cross a domain, jurisdiction, project, region, or customer boundary.</span></label>
+        </div>
+        <label class="check"><input id="authoritative" type="checkbox"><span>This is an authoritative full snapshot. On later runs, absent files should become tombstones.</span></label>
+      </section>
+
+      <div class="status hidden" id="status" role="status"></div>
+      <div class="actions">
+        <button class="button" id="cancel" type="button">Cancel</button>
+        <button class="button primary" id="confirm" type="button" disabled>Send to agent</button>
+      </div>
+    </main>
+  </div>
+
+  <section class="completion hidden" id="completion" aria-live="polite">
+    <div class="completion-card">
+      <div class="completion-mark" id="completion-mark" aria-hidden="true">···</div>
+      <div class="completion-kicker" id="completion-kicker">Egregore is processing</div>
+      <h2 id="completion-title">You can go back to the terminal now.</h2>
+      <p class="completion-copy" id="completion-copy">Your active agent is validating the files, extracting their contents, and attaching the intake to this organization. Leave this page open for the final receipt.</p>
+      <div class="completion-receipt"><strong id="completion-source">source</strong><span id="completion-files">0 files</span><span id="completion-outcome">local · unverified</span></div>
+    </div>
+  </section>
+
+  <script>
+    var token = __EGREGORE_TOKEN_JSON__;
+    var capabilities = __EGREGORE_CAPABILITIES_JSON__;
+    var selected = [];
+    var busy = false;
+    var supported = new Set(['txt','md','markdown','rst','csv','tsv','json','jsonl','yaml','yml','xml','html','htm','docx']);
+    var fileInput = document.getElementById('file-input');
+    var folderInput = document.getElementById('folder-input');
+    var statusBox = document.getElementById('status');
+    __egTheme.paint();
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    }
+    function slug(value) {
+      return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'local-files';
+    }
+    function relativePath(file) {
+      return file.webkitRelativePath || file.name;
+    }
+    function extractionLabel(file) {
+      var ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+      if (supported.has(ext)) return ['local extraction', ''];
+      if (ext === 'pdf' && capabilities.pdftotext) return ['PDF text layer', ''];
+      if (ext === 'pdf') return ['agent/PDF reader needed', 'attention'];
+      return ['unsupported until an adapter is available', 'attention'];
+    }
+    function setStatus(message, kind) {
+      statusBox.textContent = message;
+      statusBox.className = 'status' + (kind ? ' ' + kind : '');
+    }
+    function showCompletion(result) {
+      document.getElementById('completion-source').textContent = result.source_id;
+      document.getElementById('completion-files').textContent = result.files + (result.files === 1 ? ' file' : ' files') + ' · ' + formatBytes(result.bytes);
+      document.querySelector('.shell').classList.add('hidden');
+      document.getElementById('completion').classList.remove('hidden');
+      document.title = 'Return to the terminal — Egregore';
+    }
+    function choose(files) {
+      var seen = new Set();
+      selected = Array.from(files).filter(function (file) {
+        var path = relativePath(file);
+        if (path.split('/').some(function (part) { return part.startsWith('.'); })) return false;
+        if (seen.has(path)) return false;
+        seen.add(path);
+        return true;
+      });
+      if (!selected.length) {
+        setStatus('No visible files were selected.', 'error');
+        return;
+      }
+      document.getElementById('review-panel').classList.remove('hidden');
+      document.getElementById('contract-panel').classList.remove('hidden');
+      document.getElementById('confirm').disabled = false;
+      statusBox.classList.add('hidden');
+      var total = selected.reduce(function (sum, file) { return sum + file.size; }, 0);
+      document.getElementById('file-summary').textContent = selected.length + ' files · ' + formatBytes(total);
+      document.getElementById('files').innerHTML = selected.map(function (file) {
+        var capability = extractionLabel(file);
+        return '<div class="file"><span class="file-name"></span><span class="file-meta"></span><span class="capability ' + capability[1] + '"></span></div>';
+      }).join('');
+      Array.from(document.querySelectorAll('.file')).forEach(function (row, index) {
+        var file = selected[index];
+        row.querySelector('.file-name').textContent = relativePath(file);
+        row.querySelector('.file-meta').textContent = formatBytes(file.size);
+        row.querySelector('.capability').textContent = extractionLabel(file)[0];
+      });
+      var firstPath = relativePath(selected[0]);
+      var root = firstPath.includes('/') ? firstPath.split('/')[0] : selected.length === 1 ? selected[0].name.replace(/\.[^.]+$/, '') : 'local-files';
+      document.getElementById('source-id').value = slug(root);
+      document.getElementById('source-name').value = root.replace(/[-_]+/g, ' ');
+    }
+    function boundaries() {
+      var result = {};
+      document.getElementById('boundaries').value.split('\n').forEach(function (line) {
+        line = line.trim();
+        if (!line) return;
+        var split = line.indexOf('=');
+        if (split < 1 || !line.slice(split + 1).trim()) throw new Error('Boundaries must use key=value, one per line.');
+        result[line.slice(0, split).trim()] = line.slice(split + 1).trim();
+      });
+      return result;
+    }
+    async function post(path, options) {
+      options = options || {};
+      options.headers = Object.assign({}, options.headers || {}, {'X-Egregore-Token': token});
+      var response = await fetch(path, options);
+      var value = await response.json();
+      if (!response.ok) throw new Error(value.error || 'Local ingest request failed.');
+      return value;
+    }
+    window.__saveEgTheme = function () {
+      post('/api/preferences', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({pair: localStorage.getItem('eg-theme-pair') || 'sovereign', mode: localStorage.getItem('eg-theme-mode') || 'auto'})
+      }).catch(function () {});
+    };
+    function renderReceipt(result) {
+      var state = result.status || 'processing';
+      var mark = document.getElementById('completion-mark');
+      var kicker = document.getElementById('completion-kicker');
+      var title = document.getElementById('completion-title');
+      var copy = document.getElementById('completion-copy');
+      document.getElementById('completion-outcome').textContent = result.outcome || ('local · ' + state);
+      if (state === 'complete') {
+        mark.textContent = '✓'; kicker.textContent = 'Indexed into Egregore';
+        title.textContent = 'The source is ready to retrieve.';
+        copy.textContent = result.message || 'The files were validated, normalized, and added to the organization-scoped retrieval index.';
+        document.title = 'Ingest complete — Egregore';
+      } else if (state === 'attention') {
+        mark.textContent = '!'; kicker.textContent = 'Ingest needs attention';
+        title.textContent = 'Some material could not be indexed.';
+        copy.textContent = result.message || 'The successful files are available; review the terminal for files that still need extraction.';
+        document.title = 'Ingest needs attention — Egregore';
+      } else if (state === 'failed') {
+        mark.textContent = '×'; kicker.textContent = 'Indexing failed';
+        title.textContent = 'The source is not retrieval-ready yet.';
+        copy.textContent = result.message || 'The local recovery record was retained. Return to the terminal for the failure and repair command.';
+        document.title = 'Ingest failed — Egregore';
+      }
+    }
+    async function waitForReceipt() {
+      for (;;) {
+        try {
+          var result = await post('/api/status', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+          renderReceipt(result);
+          if (['complete', 'attention', 'failed'].includes(result.status)) {
+            await post('/api/ack', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).catch(function () {});
+            return;
+          }
+        } catch (_) {}
+        await new Promise(function (resolve) { setTimeout(resolve, 900); });
+      }
+    }
+    async function confirmSelection() {
+      if (busy) return;
+      var contract;
+      try {
+        contract = {
+          source: {
+            id: document.getElementById('source-id').value,
+            name: document.getElementById('source-name').value,
+            boundaries: boundaries(),
+            authoritative_snapshot: document.getElementById('authoritative').checked
+          }
+        };
+      } catch (error) {
+        setStatus(error.message, 'error');
+        return;
+      }
+      busy = true;
+      document.getElementById('confirm').disabled = true;
+      fileInput.disabled = true;
+      folderInput.disabled = true;
+      try {
+        for (var index = 0; index < selected.length; index += 1) {
+          var file = selected[index];
+          setStatus('Staging ' + (index + 1) + ' of ' + selected.length + ' · ' + relativePath(file));
+          await post('/api/upload', {
+            method: 'POST',
+            headers: {'X-Egregore-Path': encodeURIComponent(relativePath(file)), 'Content-Type': file.type || 'application/octet-stream'},
+            body: file
+          });
+        }
+        setStatus('Finalizing the local selection manifest…');
+        var result = await post('/api/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(contract)});
+        showCompletion(result);
+        waitForReceipt();
+      } catch (error) {
+        busy = false;
+        document.getElementById('confirm').disabled = false;
+        fileInput.disabled = false;
+        folderInput.disabled = false;
+        setStatus(error.message, 'error');
+      }
+    }
+    async function cancelSelection() {
+      if (busy) return;
+      busy = true;
+      try { await post('/api/cancel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}); } catch (_) {}
+      setStatus('Selection cancelled. This window can be closed.');
+      document.getElementById('confirm').disabled = true;
+      document.getElementById('cancel').disabled = true;
+    }
+    fileInput.addEventListener('change', function () { choose(fileInput.files); });
+    folderInput.addEventListener('change', function () { choose(folderInput.files); });
+    document.getElementById('confirm').addEventListener('click', confirmSelection);
+    document.getElementById('cancel').addEventListener('click', cancelSelection);
+  </script>
+</body>
+</html>

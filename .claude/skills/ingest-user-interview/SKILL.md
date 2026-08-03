@@ -45,6 +45,22 @@ Target per interview:
 
 ## What to do
 
+### Canonical ingest projection (mandatory)
+
+Write each approved interview and its extracted artifacts to one durable
+`egregore-knowledge-projection/v1` manifest under
+`memory/ingest/knowledge/interviews/`, then validate and apply it:
+
+```bash
+bash bin/ingest-graph.sh validate "<manifest>"
+bash bin/ingest-graph.sh apply "<manifest>"
+```
+
+The manifest is the authoritative graph write contract. Raw graph batches later
+in this document are schema reference for legacy data and must not be executed
+as a second write path. Known researchers and participants link existing
+members; others require explicit source-scoped external identities.
+
 ### Step 0: Source selection
 
 Determine transcript source from `$ARGUMENTS`:
@@ -736,7 +752,17 @@ Category to directory mapping:
 
 Omit sections that have no data.
 
-#### Step 6e: Batch Neo4j operations
+#### Step 6e: Durable graph projection
+
+Create
+`memory/ingest/knowledge/interviews/{interview-id}.json` using the canonical
+manifest contract described above. Include the Interview source, current
+session, researcher and participant identities, quests, extracted artifacts,
+and explicit relations. Validate and apply it through `bin/ingest-graph.sh`;
+retain partial deliveries for replay through `bin/ingest.sh reindex`.
+
+The raw batch mappings below are legacy schema reference only. Do not execute
+them as a parallel write path.
 
 Build a JSON array of queries for `bash bin/graph-batch.sh` calls.
 

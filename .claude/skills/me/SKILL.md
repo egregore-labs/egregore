@@ -1,109 +1,103 @@
-# /me — View or set your display name
+# /me — View or reconcile your identity
 
-Show your profile or change how you're known across Egregore.
+Show the current member identity or change how the member wants to be called.
+All writes go through one portable identity spine shared by Claude Code, Codex,
+and Pi.
 
 ## When to invoke
 
 - "who am I", "my profile", "my name", "what's my name"
-- "call me oz", "I go by cem", "change my name to X"
+- "call me Oz", "I go by Cem", "change my name to X"
+- "use me@example.com for me", "add/change my email"
 - User runs `/me` or `/me <name>`
 
-## Mode detection
+## Identity contract
+
+`bin/person.sh` is the only writer for person identity. It reconciles:
+
+- `.egregore-state.json` — local runtime identity;
+- `memory/people/{github_username}.md` — durable organizational profile;
+- Supabase `users` + `memberships` — platform identity and per-org display name;
+- Neo4j `Person` — knowledge-graph identity and relationships.
+
+The durable identity is GitHub's numeric user id (`person_id=github:<id>`)
+when available. GitHub login, preferred/display name, historical names, and
+emails are aliases/addresses of that identity. A login rename or preferred-name
+change must update the same person, not create another member.
+
+External people introduced by `$ingest` remain source-scoped external
+identities and are never promoted into members by this workflow.
+
+## No arguments
+
+Run:
 
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+bash bin/person.sh show
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` calls — do NOT run them. Do NOT show any graph-related messaging (Person node, "synced to graph", Neo4j, orphan merge, etc.). `/me` in local mode is file-based only: read `memory/people/{github}.md` for the profile, update the `# {display_name}` header + the `.egregore-state.json` display_name field when setting a name. Skip uniqueness check against the graph (optional TODO: check against other `memory/people/*.md` files).
+Display the useful fields only:
 
-## Behavior
+```text
+Name: {display_name}
+GitHub: {github_username}
+Email: {email or "not shared"}
+Aliases: {github_aliases + previous_names, if any}
+```
 
-### No arguments → Show profile
+Never expose internal platform ids unless the user asks for diagnostics.
+
+## With a name
+
+Run:
 
 ```bash
-AUTHOR=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
-DISPLAY_NAME=$(jq -r '.display_name // empty' .egregore-state.json 2>/dev/null)
+bash bin/person.sh set-name "$ARGUMENTS"
 ```
 
-**Connected mode:** Query the graph for the full Person node:
-```bash
-RESULT=$(bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) RETURN p.name AS name, p.github AS github, p.fullName AS fullName, p.telegramUsername AS telegram" "{\"gh\":\"$AUTHOR\"}" 2>/dev/null)
-```
+The command validates the name, preserves the old display name as an alias,
+updates the canonical markdown profile, reconciles simple duplicate/alias
+profiles, syncs Supabase, updates the graph, and moves known relationships from
+duplicate Person nodes onto the canonical member.
 
-**Local mode:** Read from people file:
-```bash
-PEOPLE_FILE="memory/people/${AUTHOR}.md"
-FILE_NAME=$(head -1 "$PEOPLE_FILE" 2>/dev/null | sed 's/^# //')
-ROLE=$(grep '^Role:' "$PEOPLE_FILE" 2>/dev/null | cut -d: -f2- | xargs)
-```
+Report:
 
-Display:
-```
-  Name: {display_name or file header name}
-  GitHub: {github_username}
-  Role: {role or "not set"}
-```
+- `synced` → `You're now known as **{name}** everywhere in this Egregore.`
+- `synced-local` → `You're now known as **{name}** in this Egregore.`
+- `partial` → the local state and markdown are durable; say which projection
+  (`supabase` or `graph`) is pending and that a later `bin/person.sh sync`
+  retries it.
 
-### With argument → Set display name
+## With an email
 
-`$ARGUMENTS` is the new display name.
-
-**Validate:**
-1. Length: 1-30 characters
-2. Characters: alphanumeric, spaces, hyphens only (`^[a-zA-Z0-9 -]+$`)
-3. If validation fails, tell the user what's wrong and stop.
-
-**Check uniqueness** — no other Person node should have the same name (case-insensitive):
+When the user explicitly supplies their own email, run:
 
 ```bash
-AUTHOR=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
-RESULT=$(bash bin/graph.sh query "MATCH (p:Person) WHERE toLower(p.name) = toLower(\$name) AND p.github <> \$gh RETURN p.name AS name, p.github AS github LIMIT 1" "{\"name\":\"$ARGUMENTS\",\"gh\":\"$AUTHOR\"}" 2>/dev/null)
+bash bin/person.sh set-email "person@example.com"
 ```
 
-If a match is found: `"That name is already taken by {github}. Pick something else."`
+This makes the supplied address primary and retains earlier addresses as
+aliases. Never infer an address from git configuration.
 
-**Update** (all five in parallel):
+## Reconciliation
 
-1. **State file:**
-   ```bash
-   jq --arg dn "$ARGUMENTS" '.display_name = $dn' .egregore-state.json > .egregore-state.json.tmp && mv .egregore-state.json.tmp .egregore-state.json
-   ```
+When onboarding, a GitHub login changes, an email is added, or a profile looks
+duplicated, run:
 
-2. **People file** (canonical in local mode):
-   ```bash
-   PEOPLE_FILE="memory/people/${AUTHOR}.md"
-   if [ -f "$PEOPLE_FILE" ]; then
-     sed -i '' "1s/^# .*/# $ARGUMENTS/" "$PEOPLE_FILE" 2>/dev/null \
-       || sed -i "1s/^# .*/# $ARGUMENTS/" "$PEOPLE_FILE"
-   fi
-   ```
+```bash
+bash bin/person.sh sync
+```
 
-4. **Neo4j — update name + store previous name (connected mode only):**
-   ```bash
-   bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) WITH p, p.name AS oldName SET p.name = \$name, p.previousNames = CASE WHEN oldName IS NOT NULL AND oldName <> \$name THEN coalesce(p.previousNames, []) + oldName ELSE coalesce(p.previousNames, []) END RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$ARGUMENTS\"}"
-   ```
-
-5. **Neo4j — merge orphaned duplicate (connected mode only)** (absorb any Person node with the new name that has no github):
-   ```bash
-   bash bin/graph.sh query "MATCH (real:Person {github: \$gh}), (orphan:Person) WHERE toLower(orphan.name) = toLower(\$name) AND (orphan.github IS NULL OR orphan.github = '') AND orphan <> real WITH real, orphan OPTIONAL MATCH (s1)-[:BY]->(orphan) FOREACH (_ IN CASE WHEN s1 IS NOT NULL THEN [1] ELSE [] END | MERGE (s1)-[:BY]->(real)) WITH real, orphan OPTIONAL MATCH (s2)-[:HANDED_TO]->(orphan) FOREACH (_ IN CASE WHEN s2 IS NOT NULL THEN [1] ELSE [] END | MERGE (s2)-[:HANDED_TO]->(real)) WITH real, orphan OPTIONAL MATCH (m)-[:INVOLVES]->(orphan) FOREACH (_ IN CASE WHEN m IS NOT NULL THEN [1] ELSE [] END | MERGE (m)-[:INVOLVES]->(real)) WITH real, orphan OPTIONAL MATCH (a)-[:CONTRIBUTED_BY]->(orphan) FOREACH (_ IN CASE WHEN a IS NOT NULL THEN [1] ELSE [] END | MERGE (a)-[:CONTRIBUTED_BY]->(real)) WITH real, orphan OPTIONAL MATCH (i)-[:CONDUCTED_BY]->(orphan) FOREACH (_ IN CASE WHEN i IS NOT NULL THEN [1] ELSE [] END | MERGE (i)-[:CONDUCTED_BY]->(real)) WITH real, orphan DETACH DELETE orphan RETURN 'merged' AS status" "{\"gh\":\"$AUTHOR\",\"name\":\"$ARGUMENTS\"}" 2>/dev/null || true
-   ```
-   This is best-effort — transfers known relationship types from the orphan to the real node, then deletes the orphan.
-
-6. **Supabase (connected mode only)** (via API, non-blocking):
-   ```bash
-   API_URL=$(jq -r '.api_url // empty' egregore.json)
-   API_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)
-   curl -sf "${API_URL}/api/user/ensure" \
-     -H "Authorization: Bearer $API_KEY" \
-     -H "Content-Type: application/json" \
-     -d "{\"github_username\":\"$AUTHOR\",\"display_name\":\"$ARGUMENTS\"}" \
-     --max-time 5 2>/dev/null || true
-   ```
-
-**Confirm:** `You're now known as **{name}**.`
+Do not hand-write Person Cypher, call `/api/user/ensure` independently, or edit
+only the H1 in a people file. Those partial updates caused the original
+cross-surface identity inconsistency.
 
 ## Rules
 
-- All Neo4j via `bin/graph.sh`
-- Never show raw JSON to the user
-- Suppress bash output — only show formatted status
+- Preferred/display name is per organization.
+- GitHub numeric id is durable; GitHub login is mutable.
+- Persist only email addresses already supplied by the authenticated user or
+  their public GitHub profile. Never infer an email from git config.
+- Markdown remains authoritative and replayable in local mode.
+- All graph access goes through `bin/graph.sh`/`bin/graph-op.sh`.
+- Suppress raw JSON in the user-facing response.

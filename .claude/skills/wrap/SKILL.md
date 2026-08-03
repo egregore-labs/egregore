@@ -17,12 +17,14 @@ Topic: $ARGUMENTS
 MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, and `bin/graph-wal.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, Session node, enriched, etc.). Local-mode wrap is file-based only: write the wrap file to `memory/wraps/YYYY-MM/DD-{author}-{slug}.md`, commit + push memory, show a clear one-line confirmation (`✓ Wrapped · memory/wraps/...`). Skip all graph context queries, Artifact linking, and Session enrichment. The memory-side /save at the end still runs (git operations work the same in both modes).
+**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-op.sh`, and `bin/graph-wal.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, Session node, enriched, etc.). Still call `bin/capture-run.sh --mode personal`; it writes and pushes the file-backed capture while automatically skipping graph reconciliation. Show a clear one-line confirmation (`✓ Wrapped · memory/wraps/...`). Skip all graph context queries, Artifact linking, and Session enrichment. The memory-side /save at the end still runs (git operations work the same in both modes).
 
 ## Execution rules
 
 **Neo4j-first (connected mode only).** In connected mode, all queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j.
-**WAL-first for writes (connected mode only).** All graph mutations go through `bash bin/graph-wal.sh append` first, then direct write as best-effort.
+**Queue-first for writes (connected mode only).** Foreground graph mutations
+append to `bin/graph-wal.sh`; lifecycle reconciliation and network latency stay
+in the detached worker.
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/graph-wal.sh` calls MUST redirect stdout: pipe to `/dev/null` or capture in a variable. Only show formatted progress lines.
 
 - 1 Bash call: `git config user.name`
@@ -176,56 +178,29 @@ multiSelect: true
 
 If no relevant links found, skip this step entirely.
 
-## Step 3.5: Notify handoff authors (if implementing)
+## Step 3.5: Handoff completion evidence
 
-Check if this session implements any handoffs:
-```bash
-bash bin/graph-op.sh check-implements "$SID" 2>/dev/null
-```
+Do not query or mutate handoff lifecycle state in the foreground. An explicit
+wrap is strong completion evidence only when the current Session already has
+an `IMPLEMENTS` relationship created by a claimed handoff.
 
-If results are returned (this session IMPLEMENTS a handoff):
-1. Collect what was produced this session: PRs (from `git log`), files changed, commits
-2. For each implemented handoff, notify the original author via Telegram:
-   ```bash
-   bash bin/notify.sh send "$AUTHOR_NAME" "$IMPLEMENTOR worked on your handoff '$TOPIC' — $SUMMARY" 2>/dev/null &
-   ```
-   Where `$SUMMARY` is a brief description like "PR #265 opened, 3 commits" or "3 files changed".
-3. Mark the handoff as `done`:
-   ```bash
-   bash bin/graph-op.sh mark-done "$HANDOFF_SESSION_ID" 2>/dev/null &
-   ```
-
-This fires only when someone explicitly claimed a handoff at session start. No false positives.
+`capture-run.sh --mode personal` appends the idempotent completion transition
+to `graph-wal.sh` and starts `capture-reconcile.sh` detached. The worker drains
+the queue, closes only single-recipient claimed handoffs, and notifies the
+original author. Ambiguous or unclaimed work remains open for `/activity`.
 
 ## Step 4: Execute batch
 
-All writes go through WAL first (`bash bin/graph-wal.sh append`), then direct write (`bash bin/graph.sh query`). Suppress all output.
+Selected quest/todo connection writes go through `graph-wal.sh`. Do not follow
+them with direct graph calls in this foreground flow. The personal Session
+state and handoff lifecycle transition are owned by the shared capture engine.
 
-### 4.1 Update personal Session node
+### 4.1 Personal Session state
 
-```cypher
-MATCH (s:Session {id: $sid})
-SET s.status = 'wrapped', s.topic = $topic, s.summary = $summary,
-    s.wrappedAt = datetime(), s.filePath = $filePath,
-    s.openThreads = $openThreads
-RETURN s.id
-```
-
-Where `$openThreads` is a JSON array of strings from the "Open threads" list generated in Step 1 (e.g. `["finish retry logic", "review pricing copy"]`). This powers the "PICK UP WHERE YOU LEFT OFF" section in `/dashboard`.
-
-If no Session node exists (auto-capture missed), create one:
-```cypher
-MERGE (s:Session {id: $sid})
-ON CREATE SET s.date = date($date), s.status = 'wrapped',
-  s.startedAt = datetime(), s.branch = $branch
-SET s.topic = $topic, s.summary = $summary,
-    s.wrappedAt = datetime(), s.filePath = $filePath,
-    s.openThreads = $openThreads
-WITH s
-MATCH (p:Person) WHERE toLower(p.name) = $author
-MERGE (s)-[:BY]->(p)
-RETURN s.id
-```
+Pass the Session ID, topic, summary, branch, and open-threads JSON to
+`capture-run.sh` in Step 5. The engine writes the personal record first, then
+queues a `MERGE` of the Session with `status: wrapped`, `wrappedAt`,
+`captureSchema`, `captureMode`, `filePath`, and `openThreads`.
 
 ### 4.2 Link to quests (if selected in Step 3)
 
@@ -248,44 +223,39 @@ RETURN t.id
 
 Same pattern as `/todo` command — create Todo node, link to person, link to quest if relevant.
 
-## Step 5: Write wrap file
+## Step 5: Capture through the shared engine
 
-Path: `memory/wraps/YYYY-MM/DD-author-topic-slug.md`
+Build `$OPEN_THREADS_JSON` from the validated open-thread list. Pipe only the
+supplemental material on stdin; the engine writes the canonical title,
+capture-schema fields, author, self-recipient, branch, Session ID, and summary.
 
-Create directory first: `mkdir -p memory/wraps/YYYY-MM`
-
-Derive topic-slug: lowercase, replace spaces with hyphens, strip non-alphanumeric except hyphens, max 40 chars.
-
-Write via Bash heredoc (memory/ symlink boundary):
 ```bash
-cat > memory/wraps/YYYY-MM/DD-author-topic-slug.md << 'EOF'
-# Wrap: [Topic]
-
-**Date**: YYYY-MM-DD
-**Author**: [author]
-**Branch**: [branch]
-**Session**: [session ID]
-
-## Summary
-[validated summary]
-
+bash bin/capture-run.sh \
+  --mode personal \
+  --author "$AUTHOR" \
+  --topic "$TOPIC" \
+  --summary "$SUMMARY" \
+  --session-id "$SID" \
+  --branch "$BRANCH" \
+  --open-threads-json "$OPEN_THREADS_JSON" <<'CAPTUREEOF'
 ## What Changed
+
 [files touched, commits — from git context]
 
 ## Open Threads
+
 - [ ] [unfinished items from open threads]
 
 ## Connections
+
 - Quest: [quest links, if any]
 - Done: [completed todos, if any]
 - Added: [new todos, if any]
-EOF
+CAPTUREEOF
 ```
 
-Then commit and push from the memory repo:
-```bash
-cd memory && git add -A && git commit -m "Wrap: [topic-slug]" && git push && cd -
-```
+Read `$TMPDIR/capture-run-result.json` for the written path and graph queue
+status. Never wait for `capture-reconcile.sh`; it is deliberately detached.
 
 ## Step 6: Auto-save
 

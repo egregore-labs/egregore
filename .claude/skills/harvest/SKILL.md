@@ -12,7 +12,7 @@ Arguments: $ARGUMENTS (Optional: [topic] [--respondents name1,name2] [--seed pat
 
 ## What to do
 
-**This command is a thin entry point.** The intelligence lives in `skills/harvest/SKILL.md`. Load and apply it.
+**This command is a thin entry point.** The intelligence lives in the sibling contracts next to this file — `.claude/skills/harvest/PROCESS.md` (the cognitive process), `.claude/skills/harvest/QUESTION_PALETTE.md` (question intent → move → answer shape), `.claude/skills/harvest/FORMAT.md` (synthesis format), `.claude/skills/harvest/AUDIT.md` (persistence contracts + design audit; §14 owns the rendered-surface absorb machine). Load and apply them.
 
 ### Step 0: Parse invocation
 
@@ -69,16 +69,16 @@ If topic is clear and respondents are known, proceed. Otherwise, use AskUserQues
 
 ### Step 4: Run the harvest
 
-**Apply `skills/harvest/SKILL.md` from here.** The skill describes the cognitive process — seeding, question generation, evaluation, checkpoints, cascade, synthesis. Follow its rhythm.
+**Apply `.claude/skills/harvest/PROCESS.md` from here.** It describes the cognitive process — seeding, question generation, evaluation, checkpoints, cascade, synthesis. Follow its rhythm.
 
-For each respondent, create a HarvestSession (non-fatal — continue if graph is unavailable):
+For each respondent, create a HarvestSession (non-fatal — continue if graph is unavailable). `$HARVEST_SESSION_ID` is the harvest's own session id (`{harvest_id}-{handle}`), distinct from the framework's `$SESSION_ID`:
 ```bash
-bash bin/graph-op.sh create-harvest-session "$HARVEST_ID" "$SESSION_ID" "$PERSON_NAME" 2>/dev/null || true
+bash bin/graph-op.sh create-harvest-session "$HARVEST_ID" "$HARVEST_SESSION_ID" "$PERSON_NAME" 2>/dev/null || true
 ```
 
 For each question-answer turn (non-fatal — continue if graph is unavailable):
 ```bash
-bash bin/graph-op.sh record-harvest-turn "$SESSION_ID" "$TURN_NUMBER" "$QUESTION" "$QUESTION_INTENT" "$ANSWER" "$EVALUATION" 2>/dev/null || true
+bash bin/graph-op.sh record-harvest-turn "$HARVEST_SESSION_ID" "$TURN_NUMBER" "$QUESTION" "$QUESTION_INTENT" "$ANSWER" "$EVALUATION" 2>/dev/null || true
 ```
 
 ### Step 5: Synthesize
@@ -139,12 +139,36 @@ date: {YYYY-MM-DD}
 Q1 {decision-id}: {option-key}  ("{label}")
    note: {reasoning}
 Q2 {decision-id}: UNDECIDED
+Q3 {decision-id}: [{key-a}, {key-b}]  ("{Label A}" + "{Label B}")   # multi
+Q4 {decision-id}: {key-a} > {key-c} > {key-b}                      # rank
+Q5 {decision-id}: {position}  ({left-pole}→{right-pole})           # spectrum
+Q6 {decision-id}: {key-a}:60 {key-b}:40                            # weight
 ```
 
 **Design the surface strategically — this is where harvest's craft shows.** A flat verdict form wastes the surface. Instead:
 - A card earns its place only as a genuine fork (≥3 interrelated forks → a surface; 1–2 quick choices → ask inline).
 - Each option carries a structural **visual** of what it *means* (mono mock / diagram / badges), honest `+/−` tradeoffs (every option needs ≥1 real minus — an option with no minus is propaganda), and at most one recommendation that's a position to push on.
 - **Order for cascade**: open with the choice that frames the rest; let later cards build on earlier ones. Surface the real tension instead of flattening it — the goal is to extract sharp judgment and its *why* (the note rides back), not collect a checklist.
+
+**Pick an answer mode per card — explicitly.** `QUESTION_PALETTE.md`
+is the canonical intent-to-shape rubric and owns the probe moves and
+hard bans. The renderer ships five modes; this table owns only their
+data fields and return shapes:
+
+| `mode` | Card fields | Returned answer |
+|---|---|---|
+| `single` | `options[]` | one option key |
+| `multi` | `options[]` + optional `max` | selected key array |
+| `rank` | `options[]` | ordered keys |
+| `weight` | `options[]` | `key:amount` allocations |
+| `spectrum` | `ends: ["{left}", "{right}"]` | position between the labeled poles |
+
+Absent `mode` falls back to `single` for backward compatibility only.
+Never rely on that default in a new surface.
+
+**Grouping (optional):** a top-level `sections: [{id, label, desc}]` plus a `section: "<id>"` per decision renders a category rail; without it the surface stays flat. Additive — old surfaces are unaffected.
+
+Each mode returns its own line shape in the paste-back block (examples above); `UNDECIDED` and an indented `note:` are valid under every mode. Absorb on `--resume` handles all five.
 
 **Render** the data model (JSON) — see `packages/egregore-artifacts/lib/parsers/decision-surface.js` for the shape:
 ```bash
@@ -154,16 +178,16 @@ node packages/egregore-artifacts/bin/cli.js decision-surface {surface}.json --ou
 Renderer type: `decision-surface` (meridian-locked). Visuals use a **safe structured schema** (`mono`/`badges`/`diagram`) — never raw HTML/SVG, since directed surfaces are sent to others.
 
 - **Self** (no `--to`): render, open locally, fill, paste back into this session.
-- **Directed** (`--to <name>`): render + publish, deliver the link via `/ask` with the async-harvest frontmatter (`harvest_id`, `harvest_session_id`, `context_mode`); mark the HarvestSession `pending`.
+- **Directed** (`--to <name>`): render + publish, deliver the link via `/ask` with the async-harvest frontmatter (`harvest_id`, `harvest_session_id`, `context_mode`); mark the HarvestSession `pending`. At dispatch, declare the **review gate**: **gated** (the default; the author reviews the return) or **trusted** (add this named respondent to the surface's `trusted` list for auto-absorb). Social-choice mechanisms such as voting and quorum are future work, not v1.
 
-**Absorb on `--resume`:** re-key the pasted block by `surface`/`harvest`, record each choice as a `HarvestTurn` answer (the `note` is the rationale), apply the resolved decisions to `source`, log to `memory/knowledge/decisions/` if others will build on them, then synthesize. `UNDECIDED` lines stay open — never force a pick.
+**Absorb on `--resume`:** the canonical statement of the absorb & review machine — event grammar, author/trusted gate, accept / decline-with-required-reason / synthesize dispositions, idempotent `turn-applied` — is `AUDIT.md` §14 (*Absorb & review*). Apply it exactly; this file does not restate it. `UNDECIDED` lines stay open — never force a pick.
 
 The block is the **transport-agnostic return contract**: `/harvest --resume` absorbs it today; an emissary response (`kind: decision`) will carry the identical payload for people without egregore (designed, not built — AUDIT §14).
 
 ### Async harvest (multi-person, not all present)
 
 When respondents aren't in the current session:
-1. Generate questions for each absent respondent based on intent + seed context + any completed sessions
+1. Generate questions for each absent respondent from intent, seed context, RoleSheet, and only the prior-answer context allowed by `PROCESS.md` §3.5. In a blind shared-artifact round, dispatch the frozen question set unchanged.
 2. Deliver via `/ask [person]` with harvest context
 3. Mark HarvestSession as `pending`
 4. When answers arrive (via graph — QuestionSet answered), resume synthesis

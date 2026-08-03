@@ -3,7 +3,7 @@ set -o pipefail
 
 # Framework version — bumped on greeting/startup changes.
 # Used for drift detection across team members.
-FRAMEWORK_VERSION="2"
+FRAMEWORK_VERSION="7"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
@@ -18,9 +18,20 @@ if [ -f "$SCRIPT_DIR/.git" ]; then
   MAIN_PROJECT_DIR=$(cd "$WT_GITDIR/../../.." 2>/dev/null && pwd)
 fi
 
+# Defensive net: re-link worktree shared state (symlinks to the main checkout's
+# memory/, .env, state files). worktree-create.sh links at creation; this heals
+# links that were removed or broke since.
+if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
+  source "$SCRIPT_DIR/bin/lib/worktree-links.sh" >/dev/null 2>/dev/null || true
+  egregore_link_shared_state "$SCRIPT_DIR" "$MAIN_PROJECT_DIR" >/dev/null 2>/dev/null || true
+fi
+
 # Clear any branch-guard consent from a previous session — consent to write on
 # a protected branch is asked fresh each session (see CLAUDE.md branch-guard protocol).
 rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch-consent" 2>/dev/null
+# Same for boundary-crossing consent — grants are session-scoped (CLAUDE.md
+# environment-isolation protocol); durable grants belong in .egregore-boundary.local.json.
+rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
 
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
@@ -46,38 +57,33 @@ source "$SCRIPT_DIR/bin/lib/time.sh"
 source "$SCRIPT_DIR/bin/lib/identity.sh"
 
 # ============================================================
-# 2. Ensure develop branch exists (needed before onboarding creates working branches)
+# 2. Ensure the base branch exists (needed before onboarding creates working branches)
 # ============================================================
-if ! git show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
-  if git show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-    git checkout -b develop origin/develop --quiet 2>/dev/null
+# BASE_BRANCH is "develop" unless egregore.json sets base_branch. With
+# base_branch: "main" this whole block is a no-op — main already exists locally
+# and on the remote — which is the point: single-branch instances never get a
+# second branch created, and never get one pushed to their remote.
+if ! BASE_BRANCH=$(_get_base_branch); then
+  echo "ERROR: Could not resolve the configured base branch; startup stopped before branch changes." >&2
+  exit 1
+fi
+if ! git show-ref --verify --quiet "refs/heads/$BASE_BRANCH" 2>/dev/null; then
+  if git show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" 2>/dev/null; then
+    git checkout -b "$BASE_BRANCH" "origin/$BASE_BRANCH" --quiet 2>/dev/null
     git checkout - --quiet 2>/dev/null
   else
-    git branch develop --quiet 2>/dev/null
-    git push -u origin develop --quiet 2>/dev/null &
+    git branch "$BASE_BRANCH" --quiet 2>/dev/null
+    # Double-fork: detached from the job table so later `wait`s don't block on
+    # it. stdout must be redirected too — a detached child inheriting the
+    # hook's stdout pipe keeps it open and the harness waits on it anyway.
+    ( git push -u origin "$BASE_BRANCH" --quiet >/dev/null 2>&1 & ) 2>/dev/null
   fi
 fi
 
-# ============================================================
-# 2.5 Sync managed repos — fetch and ensure base branch tracking (background)
-# ============================================================
-(
-  _managed_repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  [ -z "$_managed_repos" ] && exit 0
-  _parent_dir="$(dirname "$SCRIPT_DIR")"
-  for _repo in $_managed_repos; do
-    _repo_path="$_parent_dir/$_repo"
-    [ -d "$_repo_path/.git" ] || continue
-    git -C "$_repo_path" fetch origin --quiet 2>/dev/null || true
-    # Ensure local tracking branch for repo's base branch
-    _base=$(_get_base_branch "$_repo")
-    if ! git -C "$_repo_path" show-ref --verify --quiet "refs/heads/$_base" 2>/dev/null; then
-      if git -C "$_repo_path" show-ref --verify --quiet "refs/remotes/origin/$_base" 2>/dev/null; then
-        git -C "$_repo_path" branch "$_base" "origin/$_base" --quiet 2>/dev/null || true
-      fi
-    fi
-  done
-) &
+# Managed repos are fetched (in parallel) and their base branches ensured by
+# git-sync.sh below. A previous version also fetched them here sequentially in
+# a background subshell — git-sync's `wait` then blocked on that subshell,
+# adding ~2s per repo of duplicate network time to every boot.
 
 # ============================================================
 # 3. Check onboarding state
@@ -134,32 +140,56 @@ KEY_NEEDS_FIX="false"
 HEALTH_APIKEY="skip"
 
 if [ "$LOCAL_MODE" != "true" ]; then
-  # Check if key is missing OR if the key's slug doesn't match egregore.json slug
+  # A key needs fixing only when it's missing or the API rejects it (401/403).
+  # A slug mismatch alone is NOT failure: after an org rename the old-slug key
+  # can be the only key bound to the org's data — replacing it silently empties
+  # every graph read. Slug match is just the no-network fast path.
   if [ -f "$ENV_FILE" ]; then
     CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
     EXPECTED_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
     if [ -z "$CURRENT_KEY" ]; then
       KEY_NEEDS_FIX="true"
-    elif [ -n "$EXPECTED_SLUG" ]; then
+      HEALTH_APIKEY="fail"
+    else
       # Extract slug from key: ek_<slug>_<secret> → <slug>
       KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
-      if [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
-        KEY_NEEDS_FIX="true"
+      if [ -n "$EXPECTED_SLUG" ] && [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+        # Slug differs from config — ask the API whether the key actually works
+        PROBE_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+        PROBE_CODE="000"
+        if [ -n "$PROBE_URL" ]; then
+          PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $CURRENT_KEY" \
+            "${PROBE_URL}/api/graph/test" \
+            --connect-timeout 3 --max-time 5 2>/dev/null || echo "000")
+        fi
+        case "$PROBE_CODE" in
+          401|403)
+            KEY_NEEDS_FIX="true"
+            HEALTH_APIKEY="fail"
+            ;;
+          *)
+            # 200: valid key under a legacy slug — keep it.
+            # Anything else: network/API down — never replace a key on a blip;
+            # the graph health check surfaces outages separately.
+            HEALTH_APIKEY="ok"
+            ;;
+        esac
+      else
+        HEALTH_APIKEY="ok"
       fi
     fi
-  fi
-
-  # Track API key health
-  if [ "$KEY_NEEDS_FIX" = "true" ]; then
-    HEALTH_APIKEY="fail"
-  elif [ -f "$ENV_FILE" ] && grep -q '^EGREGORE_API_KEY=.' "$ENV_FILE" 2>/dev/null; then
-    HEALTH_APIKEY="ok"
   else
     HEALTH_APIKEY="fail"
   fi
 fi
 
 if [ "$KEY_NEEDS_FIX" = "true" ]; then
+  # Plain background job, NOT double-forked: git-sync's `wait` must join this
+  # before the graph bootstrap runs — a repaired key that lands after boot
+  # means that launch already skipped auto-capture with no WAL entry to
+  # recover the Session. The join costs nothing on healthy boots (the key is
+  # fine, this block never runs) and bounds broken-key boots at curl's 10s cap.
   (
     GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
     API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
@@ -192,7 +222,7 @@ if [ "$KEY_NEEDS_FIX" = "true" ]; then
         fi
       fi
     fi
-  ) &
+  ) >/dev/null 2>&1 &
 fi
 
 # ============================================================
@@ -203,7 +233,7 @@ fi
 # Worktrees should NOT register as separate instances
 # Wrapped in subshell — registration is optional, must not block session start
 if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
-  (
+  ( (
     REGISTRY_DIR="$HOME/.egregore"
     REGISTRY="$REGISTRY_DIR/instances.json"
     INST_SLUG=$(jq -r '.slug // empty' "$CONFIG")
@@ -225,7 +255,7 @@ if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]
           && mv "$REGISTRY.tmp" "$REGISTRY"
       fi
     fi
-  ) 2>/dev/null || true
+  ) >/dev/null 2>&1 & ) 2>/dev/null || true
 fi
 
 # --- Compute session boundary for environment isolation ---
@@ -277,13 +307,52 @@ compute_boundary() {
       "$registry" 2>/dev/null || echo "[]")
   fi
 
+  # --- Boundary policy: posture + read roots (two-tier consent model) ---
+  # Org layer: egregore.json .boundary { posture, read[], locked } — committed.
+  # Personal layer: .egregore-boundary.local.json { posture, read[] } — gitignored,
+  # ignored entirely when the org layer sets locked: true.
+  local posture locked personal_file="$SCRIPT_DIR/.egregore-boundary.local.json"
+  posture=$(jq -r '.boundary.posture // "standard"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  locked=$(jq -r '.boundary.locked // false' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  case "$posture" in strict|standard|open) ;; *) posture="standard" ;; esac
+  [ "$locked" = "true" ] || locked="false"
+  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
+    local p_posture
+    p_posture=$(jq -r '.posture // empty' "$personal_file" 2>/dev/null)
+    case "$p_posture" in strict|standard|open) posture="$p_posture" ;; esac
+  fi
+
+  # Read roots: inbox defaults (unless strict) + org read[] + personal read[] (unless locked)
+  local read_roots_json="[]" raw_roots=""
+  if [ "$posture" != "strict" ]; then
+    raw_roots="$HOME/Downloads
+$HOME/Desktop"
+  fi
+  local org_roots
+  org_roots=$(jq -r '.boundary.read[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+  [ -n "$org_roots" ] && raw_roots="$raw_roots
+$org_roots"
+  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
+    local personal_roots
+    personal_roots=$(jq -r '.read[]? // empty' "$personal_file" 2>/dev/null)
+    [ -n "$personal_roots" ] && raw_roots="$raw_roots
+$personal_roots"
+  fi
+  if [ -n "$raw_roots" ]; then
+    read_roots_json=$(printf '%s\n' "$raw_roots" | sed -e '/^$/d' -e "s|^~|$HOME|" | sort -u | jq -R . | jq -s -c .)
+    [ -z "$read_roots_json" ] && read_roots_json="[]"
+  fi
+
   # Write boundary file (atomic: write to tmp, then mv)
   jq -n \
     --arg project_dir "$project_dir" \
     --arg memory_dir "$memory_dir" \
+    --arg posture "$posture" \
+    --argjson locked "$locked" \
+    --argjson read_roots "$read_roots_json" \
     --argjson managed_repos "$managed_repos_json" \
     --argjson denied_paths "$denied_paths_json" \
-    '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
+    '{project_dir: $project_dir, memory_dir: $memory_dir, posture: $posture, locked: $locked, read_roots: $read_roots, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
     > "$boundary_file.tmp" && mv "$boundary_file.tmp" "$boundary_file"
 
   # Generate dynamic deny rules in .claude/settings.local.json
@@ -321,9 +390,11 @@ source "$SCRIPT_DIR/bin/lib/git-sync.sh"
 # ============================================================
 
 # --- Bootstrap graph on first launch (deferred from web setup to avoid orphans) ---
-# Runs in background — must not block session start
+# Runs detached (double-fork) — must not block session start, and context.sh's
+# `wait` must not block on it either. stdout goes to /dev/null: the session
+# MERGE query RETURNs s.id, which used to leak a raw JSON line into the greeting.
 if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
-  (
+  ( (
     API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
     if [ -n "$API_KEY" ]; then
       ORG_NAME=$(jq -r '.org_name // empty' "$CONFIG" 2>/dev/null)
@@ -342,41 +413,18 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
             2>/dev/null || true
         fi
 
-        # Always ensure Person node exists (idempotent)
-        # Match by github username first (stable across renames), fall back to name
+        # Reconcile one canonical member across markdown, Supabase, and Neo4j.
+        # GitHub's numeric id is stable across login and preferred-name changes.
         if [ -n "$AUTHOR" ]; then
-          GH_USERNAME_STATE=""
-          GH_FULLNAME_STATE=""
-          if [ -f "$STATE_FILE" ]; then
-            GH_USERNAME_STATE=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
-            GH_FULLNAME_STATE=$(jq -r '.github_name // empty' "$STATE_FILE" 2>/dev/null)
+          PERSON_SYNC_RESULT=$(bash "$SCRIPT_DIR/bin/person.sh" sync 2>/dev/null || true)
+          if printf '%s' "$PERSON_SYNC_RESULT" | jq -e \
+            '.status == "removed"' >/dev/null 2>&1; then
+            exit 0
           fi
-          # Use display_name for p.name when set, otherwise fall back to github username
-          GRAPH_NAME="${DISPLAY_NAME_STATE:-$AUTHOR}"
-          PERSON_PARAMS=$(jq -n \
-            --arg name "$GRAPH_NAME" \
-            --arg github "${GH_USERNAME_STATE:-$AUTHOR}" \
-            --arg fullName "${GH_FULLNAME_STATE:-}" \
-            --arg hasDisplayName "$([ -n "$DISPLAY_NAME_STATE" ] && echo "true" || echo "false")" \
-            '{name: $name, github: $github, fullName: $fullName, hasDisplayName: $hasDisplayName}')
-          bash "$SCRIPT_DIR/bin/graph.sh" query \
-            "MERGE (p:Person {github: \$github}) ON CREATE SET p.name = \$name SET p.fullName = CASE WHEN \$fullName <> '' THEN \$fullName ELSE p.fullName END SET p.name = CASE WHEN \$hasDisplayName = 'true' THEN \$name ELSE p.name END WITH p MATCH (o:Org {id: \$_org}) MERGE (p)-[:MEMBER_OF]->(o) RETURN p.name" \
-            "$PERSON_PARAMS" 2>/dev/null || true
-
-          # Sync user + membership to Supabase (non-blocking, non-fatal)
-          SB_API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
-          if [ -n "$SB_API_URL" ]; then
-            SB_BODY=$(jq -n --arg gu "${GH_USERNAME_STATE:-$AUTHOR}" --arg gn "${GH_FULLNAME_STATE:-}" \
-              '{github_username: $gu, github_name: $gn}')
-            if [ -n "$DISPLAY_NAME_STATE" ]; then
-              SB_BODY=$(echo "$SB_BODY" | jq --arg dn "$DISPLAY_NAME_STATE" '. + {display_name: $dn}')
-            fi
-            curl -sf "${SB_API_URL}/api/user/ensure" \
-              -H "Authorization: Bearer $API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "$SB_BODY" \
-              --max-time 5 >/dev/null 2>&1 || true
-          fi
+          GH_USERNAME_STATE=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
+          PERSON_ID_STATE=$(jq -r \
+            '.person_id // ("github-login:" + ((.github_username // "") | ascii_downcase))' \
+            "$STATE_FILE" 2>/dev/null)
 
           # Auto-capture: create personal Session node with status='active'
           AUTO_CAPTURE="true"
@@ -385,7 +433,26 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
           fi
 
           if [ "$AUTO_CAPTURE" = "true" ]; then
-            SESSION_CYPHER="MATCH (p:Person {github: \$github})
+            # Match by canonical personId OR github login. State files written
+            # before the numeric-id migration carry person_id
+            # "github-login:<name>" while the graph Person holds
+            # "github:<numeric>" — the exact-personId MATCH found no row, the
+            # MERGE below silently never ran, and no Session was captured.
+            # Filters mirror the canonical Person lookup in identity.sh
+            # (active, not ingested), and the ORDER BY makes the pick TOTALLY
+            # ordered — exact personId first, then personId, then the node's
+            # internal id as final tie-breaker (personId has no uniqueness
+            # constraint) — so a later WAL replay resolves to the same node as
+            # the direct write and the Session never gains two BY edges.
+            SESSION_CYPHER="MATCH (p:Person)
+              WHERE (p.personId = \$personId OR toLower(p.github) = toLower(\$github))
+                AND NOT coalesce(p.kind, '') IN ['external', 'identity_alias']
+                AND coalesce(p.status, 'active') = 'active'
+                AND p.ingestRef IS NULL
+              WITH p ORDER BY
+                CASE WHEN p.personId = \$personId THEN 0 ELSE 1 END,
+                p.personId, id(p)
+              LIMIT 1
               MERGE (s:Session {id: \$sid})
               ON CREATE SET s.date = date(\$date), s.branch = \$branch,
                 s.startedAt = datetime(), s.status = 'active'
@@ -394,9 +461,10 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
               --arg sid "$EGREGORE_SESSION_ID" \
               --arg author "$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]')" \
               --arg github "${GH_USERNAME_STATE:-$AUTHOR}" \
+              --arg personId "$PERSON_ID_STATE" \
               --arg branch "$BRANCH" \
               --arg date "$(date +%Y-%m-%d)" \
-              '{sid: $sid, author: $author, github: $github, branch: $branch, date: $date}')
+              '{sid: $sid, author: $author, github: $github, personId: $personId, branch: $branch, date: $date}')
 
             # WAL first (guaranteed persistence)
             bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$SESSION_CYPHER" "$SESSION_PARAMS" 2>/dev/null || true
@@ -406,7 +474,7 @@ if [ -f "$CONFIG" ] && [ -f "$ENV_FILE" ]; then
         fi
       fi
     fi
-  ) &
+  ) >/dev/null 2>&1 & ) 2>/dev/null
 fi
 
 # ============================================================
@@ -418,7 +486,7 @@ RETRY_QUEUE="$SCRIPT_DIR/.transcript-retry-queue"
 TRANSCRIPTS_DIR=$(jq -r '.transcripts_dir // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 [ -z "$TRANSCRIPTS_DIR" ] && TRANSCRIPTS_DIR="$SCRIPT_DIR/../egregore-transcripts"
 if [ -f "$RETRY_QUEUE" ] && [ -s "$RETRY_QUEUE" ]; then
-  (
+  ( (
     RETRIED=false
     # If git repo exists, retry push (CL internal)
     if [ -d "$TRANSCRIPTS_DIR/.git" ]; then
@@ -449,11 +517,11 @@ if [ -f "$RETRY_QUEUE" ] && [ -s "$RETRY_QUEUE" ]; then
     if [ "$RETRIED" = "true" ]; then
       rm -f "$RETRY_QUEUE"
     fi
-  ) >/dev/null 2>&1 &
+  ) >/dev/null 2>&1 & ) 2>/dev/null
 fi
 
-# --- Drain WAL (background, non-blocking) ---
-bash "$SCRIPT_DIR/bin/graph-wal.sh" drain >/dev/null 2>&1 &
+# --- Drain WAL (detached, non-blocking) ---
+( bash "$SCRIPT_DIR/bin/graph-wal.sh" drain >/dev/null 2>&1 & ) 2>/dev/null
 
 # ============================================================
 # 7b. Session baseline (for session-log.sh delta computation)
@@ -468,9 +536,37 @@ jq -n \
   > "$BASELINE_FILE" 2>/dev/null || true
 
 # ============================================================
+# 7c. Attendant — ambient capture daemon (fire-and-forget)
+# ============================================================
+# Watches for sessions that die without ceremony (terminal closed) and
+# pulls the ripcord: auto-handoff + auto-push of stranded dev branches.
+# `ensure` is a pidfile check (~ms); the daemon itself runs detached.
+( bash "$SCRIPT_DIR/bin/attendant.sh" ensure >/dev/null 2>&1 & ) 2>/dev/null
+
+# ============================================================
+# 7d. Autosave sweep — rescue non-coding leftovers (fire-and-forget)
+# ============================================================
+# Terminal-close cover: sessions that died before SessionEnd leave dirty
+# checkouts/worktrees behind. The sweep saves + auto-merges any whose
+# pending changes are entirely non-coding (gate + idle guard inside).
+( bash "$SCRIPT_DIR/bin/session-autosave.sh" --sweep >/dev/null 2>&1 & ) 2>/dev/null
+
+# ============================================================
 # 8. Gather context
 # ============================================================
+# Read-only greeting queries go through the graph cache the attendant keeps
+# warm — zero round-trips when warm, live queries on a cold cache. Mutating
+# queries are never cached (guard lives in graph.sh).
+# CTX_SEED_TAR points at the attendant's pre-baked context snapshot tar
+# (_prebake_context); context.sh validates provenance (author, mode, config,
+# freshness) and falls back to a full live gather when anything is off.
+# _ATT_KEY comes from git-sync.sh and matches the attendant's own state key.
+if [ -n "${_ATT_KEY:-}" ]; then
+  export CTX_SEED_TAR="${ATTENDANT_HOME:-$HOME/.egregore/attendant}/${_ATT_KEY}.ctx.tar"
+fi
+export EGREGORE_GRAPH_CACHE_TTL=600
 source "$SCRIPT_DIR/bin/lib/context.sh"
+unset EGREGORE_GRAPH_CACHE_TTL CTX_SEED_TAR
 
 # ============================================================
 # 8b. Generate session dashboard artifact
@@ -490,4 +586,77 @@ fi
 # ============================================================
 # 9. Render greeting
 # ============================================================
-source "$SCRIPT_DIR/bin/lib/greeting.sh"
+# Loom stage-1 drift surfacing: fail-soft alias-drift warning for the greeting.
+# A full `doctor --brief` pass is ~2s of jq. Its config inputs (routes.json,
+# org overrides, ANTHROPIC_* env, harness settings env) change rarely, so the
+# brief is cached keyed on a hash of those inputs. The 6h age floor forces a
+# real pass often enough that ledger-derived warnings (instrument blind, trace
+# gaps, pending proposals) still surface within the day.
+LOOM_DOCTOR_BRIEF=""
+if command -v jq >/dev/null 2>&1; then
+  _LOOM_HASH=$(_md5 "$(cat "$SCRIPT_DIR/loom/routes.json" 2>/dev/null; \
+    jq -c '.loom // {}' "$CONFIG" 2>/dev/null; \
+    env | grep '^ANTHROPIC_' | sort; \
+    jq -c '.env // {}' "$HOME/.claude/settings.json" 2>/dev/null)")
+  _LOOM_CACHE="$HOME/.egregore/loom-doctor-brief-$(echo -n "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" | cksum | cut -d' ' -f1)"
+  _LOOM_FRESH="false"
+  if [ -f "$_LOOM_CACHE" ] && [ "$(head -1 "$_LOOM_CACHE" 2>/dev/null)" = "$_LOOM_HASH" ]; then
+    _LOOM_AGE=$(( $(date +%s) - $(stat -f %m "$_LOOM_CACHE" 2>/dev/null || stat -c %Y "$_LOOM_CACHE" 2>/dev/null || echo 0) ))
+    [ "$_LOOM_AGE" -lt 21600 ] && _LOOM_FRESH="true"
+  fi
+  if [ "$_LOOM_FRESH" = "true" ]; then
+    LOOM_DOCTOR_BRIEF=$(tail -n +2 "$_LOOM_CACHE" 2>/dev/null)
+  else
+    LOOM_DOCTOR_BRIEF=$(bash "$SCRIPT_DIR/bin/loom.sh" doctor --brief 2>/dev/null || true)
+    mkdir -p "$HOME/.egregore" 2>/dev/null
+    { printf '%s\n' "$_LOOM_HASH"; printf '%s' "$LOOM_DOCTOR_BRIEF"; } > "$_LOOM_CACHE.tmp.$$" 2>/dev/null \
+      && mv "$_LOOM_CACHE.tmp.$$" "$_LOOM_CACHE" 2>/dev/null || rm -f "$_LOOM_CACHE.tmp.$$" 2>/dev/null || true
+  fi
+fi
+# Render the greeting into a buffer first (redirection on a brace group keeps
+# variable/file side effects in this shell). The buffer lets us (a) cache the
+# visible card for external launchers and (b) emit a slim reply when the
+# launcher already displayed the card — the model then answers in one short
+# message instead of re-typing ~1k tokens of box art.
+_GREETING_BUF="${TMPDIR:-/tmp}/egregore-greeting-$$.txt"
+{ source "$SCRIPT_DIR/bin/lib/greeting.sh"; } > "$_GREETING_BUF"
+
+# Cache the visible card (everything before the hidden context sections) for
+# bin/greeting-card.sh. Keyed by the main checkout + framework version so a
+# greeting format change invalidates old cards instead of replaying them.
+# Worktree boots skip the write — their branch/status would clobber the card
+# launchers show for the main checkout. Atomic write; fail-soft.
+_CARD_KEY=$(echo -n "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" | cksum | cut -d' ' -f1)
+_CARD_FILE="$HOME/.egregore/greeting-card-v${FRAMEWORK_VERSION}-${_CARD_KEY}"
+if [ "$IS_WORKTREE" != "true" ]; then
+  mkdir -p "$HOME/.egregore" 2>/dev/null
+  rm -f "$HOME/.egregore/greeting-card-${_CARD_KEY}" 2>/dev/null  # pre-versioning cache name
+  awk '/^<!-- session-context/{exit} {print}' "$_GREETING_BUF" > "$_CARD_FILE.tmp.$$" 2>/dev/null \
+    && mv "$_CARD_FILE.tmp.$$" "$_CARD_FILE" 2>/dev/null \
+    || rm -f "$_CARD_FILE.tmp.$$" 2>/dev/null || true
+fi
+
+if [ "${EGREGORE_CARD_SHOWN:-}" = "1" ]; then
+  # Launcher already rendered the card in the terminal. Emit only the fresh
+  # signal lines (pending questions, handoffs, health warnings, autosaves,
+  # scroll turns, framework updates) for the model to relay, plus the hidden
+  # context sections. CLAUDE.md's greeting rule branches on this marker.
+  echo "<!-- card_shown_by_launcher -->"
+  echo "<!-- greeting-reply"
+  awk '/^<!-- session-context/{exit}
+       /^  ◐/ || /^  ◇/ || /^  ⚠/ || /^  ⟲/ || /^  ⧖/ || /^  loom: / {print; fu=0; next}
+       /^  ✓ Auto-saved/ {print; fu=0; next}
+       /^  ◆ framework updated/ {print; fu=1; next}
+       fu && /^    / {print; fu=0; next}
+       {fu=0}' "$_GREETING_BUF" 2>/dev/null || true
+  # Visible guidance printed after the hidden context sections (tutorial tip,
+  # first-session welcome) — copy it into greeting-reply so the fast path
+  # surfaces it instead of silently dropping it.
+  awk '/^<!-- session-context/{insec=1; next}
+       insec && (/^  Tip: / || /^  Welcome!/) {print}' "$_GREETING_BUF" 2>/dev/null || true
+  echo "-->"
+  sed -n '/^<!-- session-context/,$p' "$_GREETING_BUF"
+else
+  cat "$_GREETING_BUF"
+fi
+rm -f "$_GREETING_BUF" 2>/dev/null || true

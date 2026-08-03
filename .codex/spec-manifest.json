@@ -11,37 +11,55 @@
     {
       "section": "Identity & Upstream",
       "action": "keep",
-      "sourceHash": "4acbf9bc2866",
+      "sourceHash": "ddcbc0083aff",
       "note": "Kept; /update, /contribute, /save tokens rendered as $skill tokens."
+    },
+    {
+      "section": "Cross-Runtime Compatibility",
+      "action": "keep",
+      "sourceHash": "75d02e2603f5",
+      "note": "Kept verbatim — framework parity applies equally to Claude Code, Codex, and Pi."
+    },
+    {
+      "section": "Voice",
+      "action": "keep",
+      "sourceHash": "af73d4eaa7cd",
+      "note": "Kept — all runtimes can consult the shared voice rules and register-specific skills."
     },
     {
       "section": "On Launch — MANDATORY FIRST ACTION",
       "action": "replace",
-      "sourceHash": "d2f6595756c8",
+      "sourceHash": "3def4421213a",
       "note": "Claude SessionStart hook does not run on Codex; the egregore launcher renders the card via bin/codex-session-start.sh before the session. Greeting-replay instruction dropped (card is already on screen)."
     },
     {
       "section": "After Greeting — BRANCH ON FIRST RESPONSE",
       "action": "replace",
-      "sourceHash": "c71340e68c9e",
+      "sourceHash": "88410d7c6c00",
       "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout kept verbatim (pure git)."
     },
     {
       "section": "Config Files",
       "action": "keep",
-      "sourceHash": "81b7bf09901b",
+      "sourceHash": "8d7f1bd0f2d9",
       "note": "Kept verbatim — shell facts, runtime-neutral."
     },
     {
       "section": "Knowledge Graph",
       "action": "keep",
-      "sourceHash": "5c0953aee955",
+      "sourceHash": "b5d9a149f1a6",
       "note": "Kept verbatim — bin/graph.sh is runtime-neutral."
+    },
+    {
+      "section": "Egregore Retrieval Beat",
+      "action": "keep",
+      "sourceHash": "0c4d4715fb13",
+      "note": "Kept verbatim — product attribution applies across runtimes."
     },
     {
       "section": "Notifications",
       "action": "keep",
-      "sourceHash": "e155d669f5bd",
+      "sourceHash": "1649d6eebb96",
       "note": "Kept verbatim — bin/notify.sh is runtime-neutral."
     },
     {
@@ -63,21 +81,27 @@
       "note": "Kept verbatim."
     },
     {
+      "section": "Loom Routing",
+      "action": "replace",
+      "sourceHash": "b6a6ca2bc2b7",
+      "note": "Loom delegation rides the Claude Code Agent tool; Codex has no subagent delegation — commands run inline. Preambles and bin/loom.sh calls marked skippable."
+    },
+    {
       "section": "Git Workflow",
       "action": "keep",
-      "sourceHash": "d058d1f8da11",
+      "sourceHash": "fe3d9dabd03d",
       "note": "Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence)."
     },
     {
       "section": "Working Conventions",
       "action": "keep",
-      "sourceHash": "37a5318e9ee0",
+      "sourceHash": "2e4ec18b72a6",
       "note": "Kept verbatim."
     },
     {
       "section": "Command Awareness",
       "action": "keep",
-      "sourceHash": "d3ea48ebf938",
+      "sourceHash": "d6fe47a75c00",
       "note": "Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
     },
     {
@@ -89,7 +113,7 @@
     {
       "section": "Telemetry",
       "action": "keep",
-      "sourceHash": "f8b242d0fd64",
+      "sourceHash": "f45afa2da8ac",
       "note": "Kept verbatim — bin/telemetry.sh is runtime-neutral."
     },
     {
@@ -101,8 +125,8 @@
     {
       "section": "Environment Isolation",
       "action": "replace",
-      "sourceHash": "ed47e96248bd",
-      "note": "boundary-check is a Claude PreToolUse hook with no .codex equivalent — behavior stated as a standing instruction; AskUserQuestion remediation -> numbered options."
+      "sourceHash": "086e2c1d9019",
+      "note": "boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options, now including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[])."
     }
   ]
 }

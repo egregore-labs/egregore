@@ -11,8 +11,10 @@ if ! pwd >/dev/null 2>&1; then
   exit 0
 fi
 
-# Stable key per project directory (survives across script invocations)
-PROJECT_HASH=$(echo "$PWD" | md5sum 2>/dev/null | cut -c1-8 || md5 -q -s "$PWD" 2>/dev/null | cut -c1-8 || echo "default")
+# Stable key per project directory (survives across script invocations).
+# NB: `cmd | cut || fallback` doesn't work — cut succeeds on empty input, so
+# on macOS (md5, not md5sum) every project collapsed to one cooldown file.
+PROJECT_HASH=$( { md5sum <<<"$PWD" 2>/dev/null || md5 -q -s "$PWD" 2>/dev/null || echo default; } | cut -c1-8 )
 COOLDOWN_FILE="/tmp/.egregore-save-reminder-${PROJECT_HASH}"
 COOLDOWN_SECONDS=600  # 10 minutes
 

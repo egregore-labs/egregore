@@ -1039,6 +1039,7 @@ while true; do
     cat > "$INV_PERSON_FILE" <<EOF
 ---
 name: $INV_USER
+person_id: github-login:$(printf '%s' "$INV_USER" | tr '[:upper:]' '[:lower:]')
 github: $INV_USER
 invited_by: $USER_LOGIN
 joined: $TODAY

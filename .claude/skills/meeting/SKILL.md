@@ -262,6 +262,24 @@ Extracted, not turned into Artifact files. Schema per action:
 
 Mechanical steps that stay precise. Exact Cypher queries, exact file paths, exact state management.
 
+### Canonical ingest projection (mandatory)
+
+Write the approved meeting and extracted artifacts to one durable
+`egregore-knowledge-projection/v1` manifest under
+`memory/ingest/knowledge/meetings/`, then validate and apply it:
+
+```bash
+bash bin/ingest-graph.sh validate "<manifest>"
+bash bin/ingest-graph.sh apply "<manifest>"
+```
+
+This manifest is the authoritative write contract for Meeting, Person,
+Decision, Finding, and provenance relationships. The route-specific Cypher
+later in this document is schema reference for legacy data and must not be
+executed as a second write path. Attendees resolve existing members by default;
+an unknown attendee requires an explicit source-scoped external identity and
+must never be auto-created as an organization member.
+
 ### Step 0: Check Granola MCP connection
 
 Granola data is accessed exclusively via MCP. The Granola MCP server must be configured in `.claude/mcp.json` and authenticated.
@@ -575,9 +593,16 @@ ARTIFACTEOF
 
 Omit sections that have no data.
 
-### Step 11: Neo4j batch
+### Step 11: Durable graph projection
 
-Build a JSON array of queries for `bash bin/graph-batch.sh` calls.
+Create `memory/ingest/knowledge/meetings/{meeting-id}.json` using the canonical
+manifest contract described above. Include the Meeting source, current session,
+participants, quests, extracted artifacts, and explicit artifact relations,
+then run `bin/ingest-graph.sh validate` and `apply`. Keep the manifest if graph
+delivery is partial so `bin/ingest.sh reindex` can replay it.
+
+The query mappings below document the legacy schema only. Do not build or
+execute a route-specific batch.
 
 **Batch limit: API accepts max 20 queries per `graph-batch.sh` call.** Count total queries before executing. If >20, split into chunks of <=20 and execute sequentially. Recommended split:
 - **Batch 1** (nodes): Meeting node + INVOLVES relationships + Artifact nodes (typically <=15)

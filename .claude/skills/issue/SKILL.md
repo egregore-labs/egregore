@@ -18,7 +18,7 @@ MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 **Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "will sync", Neo4j, etc.).
 
 Local-mode flow:
-- **Create mode**: Step 0 context capture — run Bash call 1 (git identity + state) normally; skip Bash call 2's `bin/graph.sh test` line (keep the memory-symlink and egregore.json checks); skip the Neo4j recent-session query entirely. Steps 1-2 (description, smart routing) work normally. Step 3 — write the markdown file to `memory/knowledge/issues/` normally, but skip the Neo4j `CREATE (i:Issue)` node and the progress message referencing "graph". Step 4 — skip graph routing updates (Neo4j node creation, relationship updates), but preserve `gh issue create` if the smart routing targets a GitHub repo (GitHub CLI is independent of the graph). Skip Step 5 notifications entirely. Steps 6-7 (auto-save, confirmation TUI) work normally — in the TUI, show `✓ Saved to memory` (omit "graphed" and "team notified").
+- **Create mode**: Step 0 context capture — run Bash call 1 (git identity + state) normally; skip Bash call 2's `bin/graph.sh test` line (keep the memory-symlink and egregore.json checks); skip the Neo4j recent-session query entirely. Steps 1-2 (description, smart routing) work normally. Step 3 — write the markdown file to `memory/knowledge/issues/` normally, but skip the Neo4j `CREATE (i:Issue)` node and the progress message referencing "graph". Step 4 transcript attachment works normally when `--transcript` is present. Step 5 — skip graph routing updates (Neo4j node creation, relationship updates), but preserve `gh issue create` if the smart routing targets a GitHub repo (GitHub CLI is independent of the graph). Skip Step 6 notifications entirely. Steps 7-8 (auto-save, confirmation TUI) work normally — in the TUI, show `✓ Saved to memory` (omit "graphed" and "team notified").
 - **List mode**: Read issues from `memory/knowledge/issues/` directory — derive `id` from filename (e.g., `2026-03-30-memory-bug.md` → `memory-bug`), parse frontmatter for `title`, `status`, `recipient`, `date` (display as created), `topics`, `author` (display as reportedBy). Render same TUI.
 - **Close mode**: Find issue file in `memory/knowledge/issues/`, update frontmatter `status: closed` + add `closed: {date}`. Skip graph update. If frontmatter has `github_url`, still run `gh issue close "{github_url}" 2>/dev/null` — GitHub CLI is independent of the graph.
 - **Search mode**: Grep through `memory/knowledge/issues/` files for matching text. Render same TUI.
@@ -41,7 +41,8 @@ Parse `$ARGUMENTS` to determine mode:
 - `list all` → List mode (all statuses)
 - `close [id-or-title]` → Close mode
 - `search [term]` → Search mode
-- **Anything else** → Create mode (existing Steps 0–7 below)
+- `--transcript` → Create mode modifier. Strip this flag from the description text, parse any absolute or `~`-prefixed `*.jsonl` transcript paths into `selected_transcripts`, remove those paths from the description text, then attach scrubbed Claude Code transcripts during Create mode (for example: `/issue /activity swallowed the board --transcript ~/.claude/projects/.../session.jsonl`).
+- **Anything else** → Create mode (existing Steps 0–8 below)
 
 ---
 
@@ -205,6 +206,7 @@ RETURN s.topic, s.date ORDER BY s.date DESC LIMIT 5
 
 ## Step 1: Description
 
+- If `--transcript` is present → set `transcript_attachment=true`; parse absolute or `~`-prefixed paths ending in `.jsonl` into `selected_transcripts`; remove both the flag and those transcript paths from `$ARGUMENTS`; continue Create mode with the remaining text. This must happen before Step 3 writes the issue file or graph node.
 - If `$ARGUMENTS` is non-empty and doesn't start with `egregore:` → use as description
 - If `$ARGUMENTS` starts with `egregore:` → strip prefix, use rest as description, pre-set recipient to `egregore`
 - If empty → prompt: *"What's the issue?"* (plain text, wait for user response)
@@ -343,13 +345,118 @@ Show progress:
         → memory/knowledge/issues/YYYY-MM-DD-{slug}.md
 ```
 
-## Step 4: Route by Recipient
+## Step 4: Transcript attachment (`--transcript`)
+
+Run this only when `transcript_attachment=true`. Transcripts are full conversation content and sit outside every telemetry envelope. Scrubbing is mandatory, but publication still requires explicit user consent every time.
+
+**Structural consent rule:** transcripts must never sit under `memory/` before consent. `/issue` auto-save and any later `/save` can sweep the memory repo, so pre-consent scrubbed files must live only in a temporary staging directory outside both the repo and `memory/`.
+
+**Pre-consent path privacy rule:** no transcript path, filename, or reference may appear in the issue memory file, the graph node, or any GitHub issue body until the user picks **Attach — commit to org memory**. This includes explicit transcript paths parsed from `$ARGUMENTS`; they live only in `selected_transcripts` until the consent decision is known.
+
+**Upstream privacy rule (load-bearing):** if the recipient is `egregore` (upstream maintainers / public `egregore-labs/egregore` issue), transcripts are NEVER linked or attached publicly. They stay in org memory only. The public issue body gets exactly one transcript note:
+
+```
+Session transcripts captured in org memory; available on maintainer request.
+```
+
+### Locate
+
+If `selected_transcripts` is non-empty from Step 1, use those files. Otherwise:
+
+```bash
+bash bin/transcript-attach.sh locate
+```
+
+The command prints recent Claude Code `*.jsonl` transcript candidates for the current project. If multiple candidates are returned, choose the line with `current:true` for the current session. If the issue description clearly refers to a different or past session, offer the other candidates via AskUserQuestion before choosing.
+
+**Size guard:** before scrubbing, check each selected file size. If any selected transcript is larger than 2MB, warn that the file is large and ask before including it. If the user declines, skip that file and continue with the remaining selected transcripts.
+
+If locate exits 1, say no transcripts were found and continue the issue without attachment.
+
+### Scrub
+
+Use the same issue id generated in Step 3 (`YYYY-MM-DD-{slug}`), but scrub into a temp staging directory outside both the repo and `memory/`:
+
+```bash
+staging_dir="$(mktemp -d "/tmp/egregore-issue-transcripts.XXXXXX")"
+bash bin/transcript-attach.sh scrub "$staging_dir" <files...>
+```
+
+Show the user the scrub summary before asking for consent:
+
+- files selected
+- original sizes
+- redaction counts by category (`env_value`, `token`)
+- temporary staging path (`$staging_dir`)
+
+If the scrub summary reports `0` redactions, that is fine. The scrubber is best-effort; the consent gate is the real content-level sensitivity check.
+
+### Consent gate (MANDATORY)
+
+AskUserQuestion:
+
+```
+header: "Transcripts"
+question: "Attach scrubbed transcripts to this issue?"
+options:
+  - label: "Attach — commit to org memory"
+    description: "Adds scrubbed transcripts to the private memory repo and references them from the issue"
+  - label: "Keep local only"
+    description: "Leaves the scrubbed copies on disk, uncommitted and unreferenced"
+  - label: "Don't attach"
+    description: "Deletes the scrubbed copies and files the issue without transcripts"
+```
+
+Never commit, push, or publicly reference transcripts unless the user picks **Attach — commit to org memory**.
+
+### On consent
+
+Move the scrubbed files into org memory only after consent:
+
+```bash
+mkdir -p "memory/transcripts/issues/{issue-id}/"
+for file in "$staging_dir"/*.jsonl; do
+  [ -e "$file" ] || continue
+  mv "$file" "memory/transcripts/issues/{issue-id}/"
+done
+rm -rf "$staging_dir"
+```
+
+Then:
+
+1. Add a `transcripts:` list field to the issue file frontmatter with memory-repo-relative paths:
+   ```yaml
+   transcripts:
+     - transcripts/issues/{issue-id}/{basename}.jsonl
+   ```
+2. Add a body section to the issue file:
+   ```markdown
+   ## Transcripts
+
+   - `transcripts/issues/{issue-id}/{basename}.jsonl`
+   ```
+3. Stage explicit paths in the memory repo only. Never use a broad `git add`:
+   ```bash
+   git -C memory add "knowledge/issues/{issue-id}.md" "transcripts/issues/{issue-id}"
+   ```
+4. Commit and push in the memory repo only, following the Step 7 memory-repo convention (`git -C memory ...`, push to `main` with pull-rebase-push retry).
+5. If Step 5 files a GitHub issue on an org repo, append this to the GitHub issue body before creation:
+   ```markdown
+   ## Transcripts
+
+   - `transcripts/issues/{issue-id}/{basename}.jsonl` (org-private memory repo)
+   ```
+6. If Step 5 files an `egregore` upstream/public issue, do not list transcript paths. Use only the upstream privacy note above.
+
+If the user chooses **Keep local only**, tell them the temp staging path, leave the scrubbed copies there, and do not put anything under `memory/`, do not add transcript references to the issue file, and do not include them in any GitHub issue body. If the user chooses **Don't attach**, delete the temp staging directory (`rm -rf "$staging_dir"`) and continue without transcript references.
+
+## Step 5: Route by Recipient
 
 Simple conditional on the selected recipient value.
 
 ### "Just memory" → Done
 
-No external action. Issue lives in the graph and memory. Skip to Step 5.
+No external action. Issue lives in the graph and memory. Skip to Step 6.
 
 ### "egregore" → Sanitize + Send Upstream
 
@@ -432,25 +539,29 @@ Show progress:
 
 Prompt: *"Which repo? (owner/name)"* — then use `gh issue create` with that repo.
 
-## Step 5: Notify (org issues only)
+## Step 6: Offer notification (org issues only)
 
 **Only for org-level issues** (GitHub repos or "Just memory"). Skip for `egregore` upstream.
+Filing the issue is not notification consent. Follow
+`.claude/context/notification-consent.md` and prepare without sending:
 
 ```bash
-bash bin/notify.sh group "Issue reported by {author}: {title}"
+PLAN_JSON=$(bash bin/notify.sh plan group "Issue reported by {author}: {title}")
 ```
 
-If notification fails, show warning but don't fail:
+Show the exact organization, all group channels, and exact message in a
+dedicated Send / Edit / Cancel checkpoint. If planning or dispatch fails, show
+warning but don't fail:
 ```
 Notification failed — team can see this on /activity
 ```
 
 Show progress:
 ```
-  [3/N] ✓ Team notified
+  [3/N] ✓ Notification sent
 ```
 
-## Step 6: Auto-save
+## Step 7: Auto-save
 
 Run the full `/save` flow:
 
@@ -462,7 +573,7 @@ Show progress:
   [N/N] ✓ Auto-saved
 ```
 
-## Step 7: Confirmation TUI
+## Step 8: Confirmation TUI
 
 ~72 char width. Sigil: `✱ ISSUE CAPTURED` or `✱ ISSUE REPORTED` (if filed externally).
 
@@ -546,6 +657,45 @@ The separator lines are ALWAYS identical — copy-paste the same 72-char string.
 | File already exists at path | Append timestamp to slug to avoid collision |
 | Empty description | Ask: "What's the issue?" — don't proceed without content |
 | `bin/issue.sh` missing for egregore route | Show "(coming soon)" message with sanitized body for manual sharing |
+| No transcripts found with `--transcript` | `locate` exits 1 → say no transcripts were found, continue the issue without attachment |
+| Scrub reports 0 redactions | Fine — still show the consent gate; scrubbing is best-effort and consent is mandatory |
+| User declines at transcript gate | Issue proceeds without transcripts; delete staged scrubbed copies for "Don't attach" |
+
+## Full example: transcript attachment
+
+```
+> /issue /activity took 2m and never rendered --transcript
+
+  [1/5] ✓ Issue saved to memory + graph
+        → memory/knowledge/issues/2026-07-06-activity-took-2m.md
+
+  [transcripts] located current session transcript
+  [transcripts] scrubbed 1 file → /tmp/egregore-issue-transcripts.a8F3q2/
+                redactions: env_value=2, token=1
+
+Attach scrubbed transcripts to this issue?
+  1. Attach — commit to org memory
+  2. Keep local only
+  3. Don't attach
+
+> 1
+
+  [2/5] ✓ Transcript attached in org memory
+  [3/5] ✓ Filed on acme-org/egregore-core · #44
+  [4/5] ✓ Team notified
+  [5/5] ✓ Auto-saved
+
+┌──────────────────────────────────────────────────────────────────────┐
+│  ✱ ISSUE REPORTED                                bob · Jul 06       │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Title: /activity took 2m and never rendered                         │
+│  For: acme-org/egregore-core · issue #44                           │
+│                                                                      │
+│  ✓ Saved to memory · graphed · team notified                         │
+│  → memory/knowledge/issues/2026-07-06-activity-took-2m.md            │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
 ## Full example: smart routing (high confidence → egregore-core)
 

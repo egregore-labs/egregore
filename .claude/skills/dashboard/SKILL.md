@@ -1,6 +1,6 @@
 See your recent sessions, open handoffs, and current work at a glance.
 
-Display it immediately — no preamble, no narration, no reasoning text. Output the box and nothing else before AskUserQuestion.
+Display it immediately — no preamble, no narration, no reasoning text. The rendered box must be the FINAL text of the turn — never follow it with AskUserQuestion in the same turn. The harness hides text that precedes a tool call, so a box rendered before AskUserQuestion is never seen by the user.
 
 ## When to invoke
 
@@ -11,7 +11,7 @@ Topic: $ARGUMENTS
 
 ## Execution rules
 
-**CRITICAL: Suppress raw output.** Never show raw JSON. Capture all script output in variables, only show formatted TUI.
+**CRITICAL: Suppress raw output.** Never show raw JSON. Shell variables do NOT persist between tool calls, so `DATA=$(...)` alone cannot hide it — use the temp-file + compact-slice pattern in Step 1.
 **One data call.** `bash bin/dashboard-data.sh` returns everything as JSON. Do NOT call `bin/graph.sh` directly.
 **Render immediately.** No "Let me check..." or "Here's your dashboard...". Straight to the TUI box.
 
@@ -24,9 +24,18 @@ Map `$ARGUMENTS` to time range:
 - `month` → `P30D`
 - `all` → `P365D`
 
+**Quiet fetch — never print the raw JSON.** This command renders inline (terminal-render, undelegatable), so a bare data-script call dumps hundreds of JSON lines into the terminal before the box. Write to a temp file and read compact slices, in ONE command:
+
 ```bash
-DATA=$(bash bin/dashboard-data.sh "" "$TIME_RANGE" 2>/dev/null)
+DATA="${TMPDIR:-/tmp}/egregore-dashboard-$$.json"
+bash bin/dashboard-data.sh "" "$TIME_RANGE" > "$DATA" 2>/dev/null
+jq -c '{me, org, date, range_label, graph_status, graph_reason, stats, current_session, identity_hint, git}' "$DATA"
+jq -c '.sessions[:8][] | {id, date, topic, branch, status, handedTo}' "$DATA"
+jq -c '(.todos[:8][] | {id, text: (.text | tostring | .[0:120]), status, priority, quest}), (.quests[:5][]), (.handoffs[:5][]), (.open_threads[:5][])' "$DATA"
+rm -f "$DATA"
 ```
+
+If a later step needs a field not sliced above (e.g. a session's `summary`), re-fetch and run another targeted `jq` — never `cat` the file, never run the data script bare.
 
 The script auto-detects the user from `.egregore-state.json`. Returns JSON with:
 - `me`, `org`, `date`, `range_label`, `graph_status`, `graph_reason`
@@ -219,7 +228,11 @@ When displaying a session topic anywhere in the dashboard:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Step 3: Follow-up (AskUserQuestion)
+## Step 3: Follow-up
+
+**Sequencing (MANDATORY):** end the turn with the rendered box as your final text — do NOT call AskUserQuestion (or any tool) after it in the same turn; the harness hides text that precedes a tool call, which swallows the box. Close the box with `What's next?` and wait.
+
+When the user replies, act on it directly. Only if their reply is ambiguous between concrete next steps, present options via AskUserQuestion in that NEXT turn:
 
 ```
 header: "Action"

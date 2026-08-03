@@ -6,7 +6,10 @@ description: Wrap an Egregore session when the user invokes /wrap or $wrap, or s
 # Egregore Wrap
 
 Native Codex Egregore skill. Use this inside an Egregore checkout with
-`bin/agent.sh`.
+`bin/agent.sh`. The command routes through `bin/capture-run.sh --mode personal`.
+It writes the personal record first, appends graph and handoff-completion events
+to the local WAL, and reconciles them detached; do not wait for or repeat that
+background work.
 
 ## Flow
 

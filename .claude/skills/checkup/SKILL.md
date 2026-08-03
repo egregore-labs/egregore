@@ -28,8 +28,8 @@ In **connected mode**, all checks run as below.
 
 Run checks in **3 sequential batches**. Within each batch, checks can run in parallel. **Never run network checks (5-6) in the same parallel batch as local checks (7-10)** — a network timeout will cascade-cancel the siblings.
 
-**Batch 1** (local, fast): Checks 1-2, GitHub token. In connected mode also Check 4 (API key slug).
-**Batch 2** (network, may timeout, connected mode only): Checks 3b, 5-6 — identity (Person node), graph, telegram
+**Batch 1** (local, fast): Checks 1-2, GitHub token.
+**Batch 2** (network, may timeout, connected mode only): Checks 3b, 4, 5-6 — identity (Person node), API key, graph, telegram
 **Batch 3** (local + git): Checks 7-10 — memory, git, framework, alias
 
 Collect results into a `checks` array, then render the diagnostic box.
@@ -92,29 +92,34 @@ fi
 
 Show `known as {p.name} ({p.github})` on pass, `drift: local={display_name}, graph={p.name}` on warn.
 
-### Check 4: API key slug — connected mode only
+### Check 4: API key — connected mode only
 
 **In local mode, skip this check entirely. Do not run the bash block below.** There is no API key.
+
+The test is whether the API **accepts** the key — not whether its slug prefix matches `egregore.json`. After an org rename, the old-slug key can be the only key bound to the org's data, and the new-slug key may authenticate against an empty namespace. **Never replace a key that authenticates just because its slug differs from the config.**
 
 ```bash
 if [ "$MODE" = "connected" ]; then
   CURRENT_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)
-  EXPECTED_SLUG=$(jq -r '.slug // empty' egregore.json)
   KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
+  PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $CURRENT_KEY" \
+    "${API_URL}/api/graph/test" --max-time 10)
 fi
 ```
 
-- **Pass** if `KEY_SLUG == EXPECTED_SLUG`
-- **Fail** if mismatch or key missing
-- **Fix**: fetch correct key via API:
+- **Pass** if `PROBE_CODE` is 200 (key authenticates)
+- **Fail** if key missing, or `PROBE_CODE` is 401/403 (API rejects it)
+- **Warn** if any other code (API unreachable — can't validate; do NOT touch the key)
+- **Fix** (fail only): fetch a key for the config slug via API:
   ```bash
-  API_URL=$(jq -r '.api_url' egregore.json)
+  EXPECTED_SLUG=$(jq -r '.slug // empty' egregore.json)
   TOKEN=$(grep '^GITHUB_TOKEN=' .env | cut -d'=' -f2-)
   curl -s -X GET "${API_URL}/api/org/${EXPECTED_SLUG}/key" -H "Authorization: Bearer $TOKEN" --max-time 10
   ```
   Then update `.env` with the returned `api_key`.
 
-Show `valid (slug: {slug})` on pass, `slug mismatch (key={KEY_SLUG}, config={EXPECTED_SLUG})` on fail.
+Show `valid (authenticates)` on pass — append `legacy slug: {KEY_SLUG}` if the slug differs from the config slug. Show `rejected by API ({PROBE_CODE})` on fail, `API unreachable — not validated` on warn.
 
 ### Check 5: Graph (Neo4j) — connected mode only
 
@@ -140,9 +145,11 @@ if [ "$MODE" = "connected" ]; then
 fi
 ```
 
-- **Pass** if output contains "connected"
-- **Fail** if timeout (exit 124) or error
+- **Pass** if `.status` is `ok` (connected) or `configured` (local)
+- **Fail** if timeout (exit 124), error, or `.status` is `offline`
 - **Fix**: report status. No user action needed — Telegram is optional.
+
+`notify.sh test` returns JSON, not prose — read the `status` field, never a substring of the whole output.
 
 **Important**: Run checks 5 and 6 together in their own batch, separate from all other checks. Append `EXIT:$?` so you always get output even on timeout — this prevents Claude Code from treating it as a tool error.
 
@@ -225,7 +232,7 @@ After collecting all results, render a diagnostic box. In **connected mode**, re
 │  ✓ Person — known as {name} ({github})                              │
 │                                                                      │
 │  SERVICES                                                            │
-│  ✓ API key — valid (slug: {slug})                                   │
+│  ✓ API key — valid (authenticates)                                  │
 │  ✓ Graph — connected                                                │
 │  ✓ Telegram — connected                                             │
 │                                                                      │
@@ -282,8 +289,10 @@ For failures, add a `→` line immediately after showing what Claude will do:
 After rendering the box, **automatically fix** what you can. Items 2, 3, and 8 apply in connected mode only — in local mode, skip them (the underlying services don't exist).
 
 1. **GitHub token expired** → run `bash bin/github-auth.sh` and report result
-2. **Identity drift** *(connected mode only)* → re-sync: `bash bin/graph.sh query "MATCH (p:Person {github: \$gh}) SET p.name = \$name RETURN p.name" "{\"gh\":\"$AUTHOR\",\"name\":\"$DISPLAY_NAME\"}"` (only if local `display_name` is set)
-3. **API key mismatch** *(connected mode only)* → fetch correct key from API and update `.env`
+2. **Identity drift** → re-sync with `bash bin/person.sh sync`. This replays the
+   canonical markdown identity to Supabase and the graph without creating a
+   second Person node.
+3. **API key missing or rejected (401/403)** *(connected mode only)* → fetch key for the config slug from API and update `.env`. Never swap a key that authenticates — slug mismatch alone is not an issue.
 4. **Memory not linked** → run `/setup`
 5. **Git diverged** → run `/pull`
 6. **Framework outdated** → run `/update`
@@ -294,7 +303,7 @@ After fixing, re-check the fixed items and report:
 ```
 Fixed 2 of 3 issues:
 ✓ GitHub — re-authenticated as {login}
-✓ API key — updated to correct slug
+✓ API key — refetched, authenticates now
 ✗ Graph — still unreachable (API may be down)
 ```
 

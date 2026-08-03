@@ -45,9 +45,12 @@ git -C memory commit -m "quest: $SLUG $ACTION" --quiet
 git -C memory push origin main --quiet
 ```
 
-7. In connected mode only, mirror changes best-effort with `bin/graph.sh` and
-   notify named people with `bin/notify.sh send`. If graph or notification
-   fails, report that the quest was saved to memory and continue.
+7. In connected mode only, mirror changes best-effort with `bin/graph.sh`.
+   For each named person, follow `.claude/context/notification-consent.md`:
+   create a direct-message plan, then show a separate exact Send / Edit /
+   Cancel checkpoint. Selecting quest participants is not notification
+   consent, and approvals cannot be batched across recipients. If planning or
+   dispatch fails, report that the quest was saved to memory and continue.
 
 ## Interaction
 

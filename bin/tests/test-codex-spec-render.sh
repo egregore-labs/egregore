@@ -35,10 +35,13 @@ fi
 
 # 6. The Codex translations are present.
 printf '%s' "$block" | grep -q 'bin/agent.sh branch --topic'
-printf '%s' "$block" | grep -q 'git checkout -b dev/{author}/{slug} origin/develop'
+printf '%s' "$block" | grep -q 'git checkout -b dev/{author}/{slug} origin/{base}'
 printf '%s' "$block" | grep -q 'numbered'
 printf '%s' "$block" | grep -q '\.codex/hooks/branch-guard\.js'
 printf '%s' "$block" | grep -q '`\$save`'
+printf '%s' "$block" | grep -q 'Your stable project is protected'
+printf '%s' "$block" | grep -q '↳ Context restored:'
+printf '%s' "$block" | grep -q 'intent → safe workspace → relevant context → consequential assumptions → execution'
 
 # 7. The thin universal protocol stays above the generated block.
 head -1 "$AGENTS" | grep -q '^# Egregore Agent Protocol'

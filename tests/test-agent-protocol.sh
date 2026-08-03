@@ -15,6 +15,8 @@ copy_runtime() {
   mkdir -p "$dest/bin" "$dest/bin/lib"
   cp "$ROOT/bin/agent.sh" "$dest/bin/agent.sh"
   cp "$ROOT/bin/worktree.sh" "$dest/bin/worktree.sh"
+  cp "$ROOT/bin/capture-run.sh" "$dest/bin/capture-run.sh"
+  cp "$ROOT/bin/capture-reconcile.sh" "$dest/bin/capture-reconcile.sh"
   cp "$ROOT/bin/handoff-run.sh" "$dest/bin/handoff-run.sh"
   cp "$ROOT/bin/repo-state.sh" "$dest/bin/repo-state.sh"
   cp "$ROOT/bin/index-handoff.sh" "$dest/bin/index-handoff.sh"
@@ -34,6 +36,7 @@ write_config() {
   "github_org": "local",
   "slug": "agent-protocol-smoke",
   "repo_name": "egregore",
+  "base_branch": "main",
   "repos": []
 }
 JSON
@@ -67,7 +70,7 @@ EOF
   git -C "$core" config user.email "$person@example.test"
   git -C "$core" add bin egregore.json .gitignore
   git -C "$core" commit -m "Init portable agent runtime" --quiet
-  git -C "$core" branch develop
+  git -C "$core" branch -M main
 
   git clone --quiet "$TMP/memory.git" "$memory"
   git -C "$memory" config user.name "$person"
@@ -134,6 +137,8 @@ WRAP_OUT="$(bash "$A/bin/agent.sh" wrap \
   --body "The wrap command writes to memory/wraps and pushes through the shared memory repo.")"
 echo "$WRAP_OUT" | grep -q "wrap: memory/wraps/"
 [ -n "$(find "$A/memory/wraps" -type f -name '*wrap-smoke.md' | head -1)" ]
+grep -q '^\*\*Capture Schema\*\*: egregore-capture/v1$' \
+  "$(find "$A/memory/wraps" -type f -name '*wrap-smoke.md' | head -1)"
 
 HANDOFF_OUT="$(bash "$A/bin/agent.sh" handoff \
   --from codex-a \
@@ -145,6 +150,15 @@ HANDOFF_OUT="$(bash "$A/bin/agent.sh" handoff \
 echo "$HANDOFF_OUT" | grep -q "status: ⇌ saved"
 echo "$HANDOFF_OUT" | grep -q "handoff: memory/handoffs/"
 echo "$HANDOFF_OUT" | grep -q "result: "
+HANDOFF_FILE="$(find "$A/memory/handoffs" -type f -name '*relay-smoke.md' | head -1)"
+[ -n "$HANDOFF_FILE" ]
+grep -q '^intent: action$' "$HANDOFF_FILE"
+grep -q '^capture_schema: egregore-capture/v1$' "$HANDOFF_FILE"
+grep -q '^capture_mode: addressed$' "$HANDOFF_FILE"
+grep -q '^content_mode: supplied$' "$HANDOFF_FILE"
+grep -q '^addressed_to: "codex-b"$' "$HANDOFF_FILE"
+grep -q '^codex-a leaves a runtime-neutral handoff for codex-b\.$' "$HANDOFF_FILE"
+! grep -q '^## Next Steps$' "$HANDOFF_FILE"
 
 bash "$B/bin/agent.sh" sync
 ACTIVITY_B="$(bash "$B/bin/agent.sh" activity --for codex-b)"

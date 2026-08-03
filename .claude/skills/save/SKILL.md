@@ -7,6 +7,17 @@ Save your contributions to Egregore. Pushes working branch, creates PR to develo
 User says: "push my work", "sync changes", "commit and push", "save everything", "push this up"
 Not this: user is leaving/done → `/handoff` (which auto-saves)
 
+## Base branch
+
+Every `develop` in this skill — branch points, rebase targets, `gh pr create --base`, `git diff` bases — means **the instance's base branch**, not the literal string. Resolve it once at the start and substitute it everywhere below:
+
+```bash
+BASE=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch') ||
+  { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
+```
+
+It is `develop` unless `egregore.json` sets `base_branch`. Instances running single-branch mode set it to `main`; opening a PR against a `develop` that does not exist there will fail.
+
 ## Mode detection
 
 ```bash
@@ -18,6 +29,41 @@ MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
 ## Execution rules
 
 **CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` calls MUST capture output in a variable and only show formatted status lines (e.g. "Synced 2 sessions, 1 artifact to graph").
+
+## Product distribution checkpoint
+
+Before any commit or push, run this checkpoint when
+`capability-distribution.json` exists:
+
+```bash
+node bin/capability-distribution.mjs validate --root .
+node bin/capability-distribution.mjs changes --root . --base "origin/$BASE" --json
+```
+
+Inspect the diff as well as the receipt. Ask when this work introduces a new or
+unclassified Egregore component, or changes a component's placement without an
+explicit user decision in the current conversation. Components include skills,
+packages, APIs, sites, workers, infrastructure, schemas, assets, and runtime
+tools. Ordinary edits to an already classified component do not prompt.
+
+Show the tracker before asking:
+
+`artifacts/capability-pipeline.html`
+
+Use AskUserQuestion once:
+
+1. **Where should `{name}` live?**
+   - **OSS + Connect** — part of the open runtime; Connect inherits it
+   - **Connect only** — delivered only to authenticated Connect users
+   - **Curve Labs / Egregore** — used only in this development instance
+
+Record every new component as `queued` under the selected placement and attach
+all of its governed source paths. Availability is changed separately after
+review. Group components into one checkpoint only when they share the same
+placement. Apply the answer to `capability-distribution.json`, regenerate
+`skill-distribution.json` and both artifacts, then validate again. Rebuild
+runtime packs when an available runtime component changes placement. If the
+user already made this exact decision during the current work, do not ask twice.
 
 ## What to do
 
@@ -123,6 +169,7 @@ If the remote branch is gone:
        ```bash
        gh pr create --base develop --title "..." --body "..."
        ```
+       Title and body follow `.claude/context/pr-format.md`: title `type(scope): imperative summary`; body `## What` (1–4 bullets) + `## Why` (1–3 sentences), plus `## Verification` when the diff touches non-markdown files (how it was checked — honest "Not verified" beats silence). Never `--fill`, never an empty body — the `pr-format` CI check gates every PR.
    - **If PR creation fails**: stop here. The branch was pushed, so tell the user:
      > PR creation failed, but your branch `{BRANCH}` was pushed.
      > Your commits are safe. Try again with `/save` or create the PR manually.
@@ -135,11 +182,15 @@ If the remote branch is gone:
      bash bin/graph-op.sh create-pr "$SID" "$PR_NUMBER" "$REPO_NAME" "$GH_USER" "$PR_TITLE" 2>/dev/null &
      ```
      Where `$PR_NUMBER` is extracted from the `gh pr create` output (parse the URL for the number).
-   - Then detect if markdown-only or has code:
+   - Then detect if the diff is non-coding or has code. The policy lives in `bin/lib/noncode.sh` (non-coding = `.md` anywhere + anything under `artifacts/`, `docs/`, `.threads/` — html/css/images there are authored content, not shipped code):
      ```bash
-     NON_MD=$(git diff develop --name-only | grep -v '\.md$' | head -1)
+     NON_CODE=$(bash -c '. bin/lib/noncode.sh && noncode_blockers origin/develop')
      ```
-     - **Markdown-only** (NON_MD is empty) → `gh pr merge --auto --merge` → auto-merges
+     - **Non-coding** (NON_CODE is empty) → merge it now:
+       ```bash
+       gh pr merge "$PR_NUMBER" --auto --merge 2>/dev/null || gh pr merge "$PR_NUMBER" --merge
+       ```
+       `--auto` only works when the repo has auto-merge enabled AND required checks are pending; on a repo without branch protection it always errors. The direct-merge fallback is the path that actually merges — do NOT stop or report success after a failed `--auto` alone. Verify with `gh pr view "$PR_NUMBER" --json state` before showing `auto-merged`.
      - **Has code/config changes** → run preflight check, then leave PR open for review:
        ```bash
        bash bin/preflight.sh
@@ -173,8 +224,9 @@ If the remote branch is gone:
      ```bash
      # Get repo name (supports both string and object format)
      REPO_NAME=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' egregore.json)
-     # Get base branch for a repo (object format has base_branch, default "develop")
-     BASE_BRANCH=$(jq -r --arg name "$REPO" '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // "develop" else "develop" end' egregore.json)
+     # A valid config with no repo base_branch defaults to "develop".
+     BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch "$1"' _ "$REPO") ||
+       { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
      ```
    - For each repo, check for uncommitted changes:
      ```bash
@@ -227,6 +279,7 @@ If the remote branch is gone:
           ```bash
           gh pr create --repo "$GITHUB_ORG/$REPO" --base "$BASE_BRANCH" --title "..." --body "..."
           ```
+          Body per `.claude/context/pr-format.md` (`## What` + `## Why`, `## Verification` for non-markdown diffs) — never `--fill` or empty.
      6. Track PR in graph (fire-and-forget):
         ```bash
         bash bin/graph-op.sh create-pr "$SID" "$PR_NUMBER" "$REPO" "$GH_USER" "$PR_TITLE" 2>/dev/null &
@@ -409,19 +462,20 @@ Saving to Egregore...
 Done.
 ```
 
-## Markdown-only egregore PR (auto-merges)
+## Non-coding egregore PR (auto-merges)
 
 ```
 [egregore]
   On branch: dev/bob/2026-02-08-session
   Changes:
-    .claude/commands/onboarding.md (modified)
+    artifacts/pricing-cards.html (new)
+    docs/specs/emissary-notes.md (modified)
 
   Pushing and creating PR...
     gh pr create --base develop
-    gh pr merge --auto --merge
+    gh pr merge --auto --merge || gh pr merge --merge
 
-  ✓ Markdown-only — auto-merged to develop
+  ✓ Non-coding — auto-merged to develop
 ```
 
 ## If no changes
@@ -454,7 +508,7 @@ Do NOT auto-deploy. Explicit is better than implicit for production deploys.
 - Non-technical users never see git complexity
 - Memory pushes directly to main (instant availability, no PR delay)
 - Pull-rebase-push retry handles concurrent users safely
-- Egregore markdown changes auto-merge to develop via PR
+- Egregore non-coding changes (markdown, artifacts, docs) auto-merge to develop via PR
 - Code/config changes get reviewed before merging to develop
 - `/activity` shows contributions clearly
 - `/release` controls what reaches main

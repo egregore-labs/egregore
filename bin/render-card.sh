@@ -422,6 +422,7 @@ graph_status="$(json_string '.graphStatus')"
 memory_status="$(json_string '.memoryStatus')"
 notify_status="$(json_string '.notifyStatus')"
 artifact_url="$(json_string '.artifactUrl')"
+publish_status="$(json_string '.publishStatus')"
 recipient="$(clean_inline "$(json_string '.recipient')")"
 topic="$(clean_inline "$(json_string '.topic')")"
 author="$(clean_inline "$(json_string '.author')")"
@@ -451,16 +452,10 @@ done < <(jq -r '(.artifacts // []) | .[]? | [((.type // "Artifact") | tostring |
 STATUS_BITS=("saved")
 [ "$graph_status" = "ok" ] && STATUS_BITS+=("graphed")
 [ "$memory_status" = "ok" ] && STATUS_BITS+=("pushed")
-if [ "$notify_status" = "sent" ]; then
-  if [ -n "$recipient" ]; then
-    STATUS_BITS+=("$(lowercase "$recipient") notified")
-  else
-    STATUS_BITS+=("group notified")
-  fi
-elif [ "$notify_status" = "unknown" ] && [ -n "$recipient" ]; then
-  STATUS_BITS+=("$(lowercase "$recipient") relayed to group")
-fi
+[ "$notify_status" = "approval_required" ] && STATUS_BITS+=("notify approval pending")
 [ -n "$artifact_url" ] && STATUS_BITS+=("published")
+[ "$publish_status" = "relay-off" ] && STATUS_BITS+=("not published")
+[ "$publish_status" = "fidelity-failed" ] && STATUS_BITS+=("not published")
 
 status_text=""
 for bit in "${STATUS_BITS[@]}"; do
@@ -479,8 +474,11 @@ fi
 if [ "$memory_status" = "failed" ]; then
   echo "⚠ memory push failed — commits are local"
 fi
-if [ "$notify_status" = "failed" ]; then
-  echo "⚠ notification to ${recipient:-group} failed — they can see this on /activity"
+if [ "$publish_status" = "fidelity-failed" ]; then
+  echo "Artifact not published — restore missing source content and preview it again."
+fi
+if [ "$notify_status" = "unavailable" ]; then
+  echo "Notification unavailable — no message was sent."
 fi
 
 printf '```\n'
@@ -524,4 +522,10 @@ if [ -n "$artifact_url" ]; then
   printf '[view this handoff →](%s)  ·  `/view handoff %s` (open locally)\n' "$artifact_url" "$slug"
 else
   printf '`/view handoff %s` (open locally)\n' "$slug"
+fi
+
+if [ "$publish_status" = "relay-off" ]; then
+  printf 'Not published — this handoff stayed on your machine. Sharing links need the public relay (unauthenticated, expires in 7 days): `bin/settings.sh relay on`.\n'
+elif [ "$publish_status" = "hosting-off" ]; then
+  printf 'Not published — artifact hosting is off for this egregore: `bin/settings.sh hosting on`.\n'
 fi

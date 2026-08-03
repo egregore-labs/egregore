@@ -72,9 +72,10 @@ function truncate(value, max) {
 }
 
 function padLine(left, right = '') {
-  const l = truncate(left, WIDTH - 4);
-  const r = truncate(right, WIDTH - 4);
-  const space = Math.max(1, WIDTH - 4 - l.length - r.length);
+  const inner = WIDTH - 4;
+  const r = right ? truncate(right, Math.min(18, inner - 1)) : '';
+  const l = truncate(left, inner - (r ? r.length + 1 : 0));
+  const space = Math.max(0, inner - l.length - r.length);
   return `│ ${l}${' '.repeat(space)}${r} │`;
 }
 
@@ -142,14 +143,17 @@ function renderActivity(data) {
   const graph = classifyGraph(data, { mode: data.mode || 'connected', attempt: 'retry' });
   const org = data.org || data.organization || 'Egregore';
   const date = data.date || '';
-  const me = data.me?.github || data.me?.name || data.github_username || '';
-  const handoffs = firstArray(data, ['handoffs', 'pending_handoffs', 'me.handoffs', 'addressed_handoffs']);
+  const me = typeof data.me === 'string'
+    ? data.me
+    : data.me?.github || data.me?.name || data.github_username || '';
+  const handoffs = firstArray(data, ['handoffs_to_me', 'handoffs', 'pending_handoffs', 'me.handoffs', 'addressed_handoffs']);
   const questions = firstArray(data, ['questions', 'pending_questions', 'me.questions']);
   const prs = asArray(data.prs);
   const mine = firstArray(data, ['local_sessions.my_sessions', 'my_sessions', 'sessions']);
   const team = firstArray(data, ['local_sessions.team_sessions', 'team_sessions', 'team.sessions']);
 
-  const lines = [topRule(), padLine('ACTIVITY', [org, me, date].filter(Boolean).join(' · ')), rule()];
+  const brand = `${truncate(org, 20).toUpperCase()} EGREGORE ✦ ACTIVITY DASHBOARD`;
+  const lines = [topRule(), padLine(brand), padLine([me, date].filter(Boolean).join(' · ')), rule()];
   if (graph.status !== 'connected') {
     lines.push(padLine(`graph: ${graph.status}`, graph.reason));
     lines.push(rule());
@@ -159,12 +163,30 @@ function renderActivity(data) {
   if (questions.length === 0 && handoffs.length === 0) {
     lines.push(padLine('nothing pending'));
   } else {
-    questions.slice(0, 4).forEach((q) => {
-      lines.push(padLine(`? ${valueOf(q, ['from', 'author', 'asker'], 'someone')}: ${valueOf(q, ['topic', 'title', 'question'], 'question')}`));
-    });
-    handoffs.slice(0, 4).forEach((h) => {
-      lines.push(padLine(`> ${valueOf(h, ['author', 'from'], 'someone')}: ${valueOf(h, ['topic', 'title'], 'handoff')}`));
-    });
+    if (questions.length > 0) {
+      lines.push(padLine('QUESTIONS'));
+      questions.slice(0, 4).forEach((q) => {
+        lines.push(padLine(`● ${valueOf(q, ['from', 'author', 'asker'], 'someone')}: ${valueOf(q, ['topic', 'title', 'question'], 'question')}`));
+      });
+    }
+    if (handoffs.length > 0) {
+      lines.push(padLine('HANDOFFS'));
+      const glyph = { pending: '●', read: '◐', claimed: '◆', done: '✓', completed: '✓', expired: '×' };
+      handoffs.slice(0, 6).forEach((h, index) => {
+        const status = valueOf(h, ['status'], 'pending');
+        const age = valueOf(h, ['ageDays', 'age_days'], '');
+        const intent = valueOf(h, ['intent'], '');
+        const meta = [
+          age === '' ? '' : `${age}d`,
+          intent && intent !== 'unclassified' ? intent : '',
+          status,
+        ].filter(Boolean).join(' · ');
+        lines.push(padLine(
+          `[${index + 1}] ${glyph[status] || '○'} ⇌ ${valueOf(h, ['author', 'from'], 'someone')}: ${valueOf(h, ['topic', 'title'], 'handoff')}`,
+          meta,
+        ));
+      });
+    }
   }
 
   lines.push(rule());
@@ -189,7 +211,12 @@ function renderActivity(data) {
   }
 
   lines.push(rule());
-  lines.push(padLine('Focus choices: handoffs, questions, recent work, dashboard, done'));
+  if (handoffs.length > 0) {
+    lines.push(padLine('Handoff actions: done N · expire N · reopen N'));
+    lines.push(padLine('Type a number to act, or keep working.'));
+  } else {
+    lines.push(padLine('Focus choices: questions, recent work, dashboard, done'));
+  }
   lines.push(bottomRule());
   return lines.join('\n');
 }
@@ -282,14 +309,19 @@ function renderHandoff(data) {
     data.graphStatus ? `graph=${data.graphStatus}` : '',
     data.memoryStatus ? `memory=${data.memoryStatus}` : '',
     data.notifyStatus ? `notify=${data.notifyStatus}` : '',
+    data.publishStatus ? `publish=${data.publishStatus}` : '',
   ].filter(Boolean).join(' · ');
 
-  const lines = [topRule(), padLine('HANDOFF', data.author || ''), rule()];
+  const lines = [topRule(), padLine('⇌ HANDOFF', data.author || ''), rule()];
   lines.push(padLine(`Topic: ${data.topic || '(untitled)'}`));
   if (data.recipient) lines.push(padLine(`To: ${data.recipient}`));
   if (file) lines.push(padLine(`Path: ${file}`));
   if (data.artifactUrl) lines.push(padLine(`Link: ${data.artifactUrl}`));
   if (statuses) lines.push(padLine(statuses));
+  if (data.publishStatus === 'fidelity-failed') {
+    lines.push(rule());
+    lines.push(padLine('Artifact not published — restore missing content and preview again.'));
+  }
   lines.push(bottomRule());
   return lines.join('\n');
 }
