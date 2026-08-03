@@ -28,7 +28,6 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   exit 0
 fi
 
-GS="$SCRIPT_DIR/bin/graph.sh"
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 GO="$SCRIPT_DIR/bin/graph-op.sh"
 
@@ -40,7 +39,7 @@ case "$MODE" in
     # 7 detection patterns + 4 health metric queries = 11 queries (under 20 batch limit)
     # All use labeled patterns for API org isolation compliance.
     RESULT=$(bash "$GB" '[
-      {"statement": "MATCH (s:Session)-[:HANDED_TO]->(:Person) WHERE s.handoffStatus = \"pending\" AND s.date < date() - duration(\"P30D\") RETURN s.id AS id, s.topic AS topic, toString(s.date) AS date", "parameters": {}},
+      {"statement": "MATCH (s:Session)-[:HANDED_TO]->(:Person) WHERE coalesce(s.handoffStatus, \"pending\") IN [\"pending\",\"read\",\"claimed\"] AND s.date <= date() - duration(\"P14D\") WITH DISTINCT s ORDER BY s.date RETURN count(s) AS count, collect({id:s.id,topic:s.topic,date:toString(s.date),status:coalesce(s.handoffStatus,\"pending\"),intent:coalesce(s.handoffIntent,\"unclassified\")})[0..20] AS sample", "parameters": {}},
 
       {"statement": "MATCH (q:Quest {status: \"active\"}) OPTIONAL MATCH (a:Artifact)-[:PART_OF]->(q) WITH q, max(a.created) AS lastArtifact WHERE lastArtifact IS NULL OR lastArtifact < date() - duration(\"P30D\") RETURN q.id AS id, q.title AS title, toString(lastArtifact) AS lastArtifact", "parameters": {}},
 
@@ -67,7 +66,12 @@ case "$MODE" in
     #               7=duplicate_persons, 8=session_count, 9=artifact_count, 10=quest_count
     echo "$RESULT" | jq '{
       findings: {
-        stale_handoffs:         { action: "auto-fix", items: (.results[0].values // []) | map({id: .[0], topic: .[1], date: .[2]}) },
+        stale_handoffs:         {
+          action: "plan",
+          count: ((.results[0].values[0][0]) // 0),
+          sample: ((.results[0].values[0][1]) // []),
+          reason: "age alone cannot prove completion; run the hash-bound lifecycle plan"
+        },
         quest_decay:            { action: "auto-fix", items: (.results[1].values // []) | map({id: .[0], title: .[1], lastArtifact: .[2]}) },
         date_type_mix:          { action: "auto-fix", counts: { sessions: ((.results[2].values[0][0]) // 0), artifacts: ((.results[3].values[0][0]) // 0) } },
         disconnected_artifacts: { action: "suggest",  items: (.results[4].values // []) | map({id: .[0], title: .[1], type: .[2]}) },
@@ -89,9 +93,19 @@ case "$MODE" in
 
     case "$PATTERN" in
       stale-handoffs)
-        # Get current user for resolve-handoffs
-        ME=$(git -C "$SCRIPT_DIR" config user.name 2>/dev/null | awk '{print tolower($1)}' || echo "unknown")
-        bash "$GO" resolve-handoffs "$ME"
+        # A no-argument fix is intentionally a dry run. Applying a plan needs
+        # the snapshot hash and explicit confirmation, which prevents age-only
+        # mass closure and stale-plan races.
+        if [[ "${1:-}" == "--apply" ]]; then
+          SNAPSHOT="${2:?missing snapshot after --apply}"
+          shift 2
+          bash "$SCRIPT_DIR/bin/handoff-lifecycle.sh" apply \
+            --snapshot "$SNAPSHOT" \
+            --confirm APPLY_SAFE_HANDOFF_LIFECYCLE \
+            "$@"
+        else
+          bash "$SCRIPT_DIR/bin/handoff-lifecycle.sh" scan "$@"
+        fi
         ;;
       quest-decay)
         QID="${1:?missing quest-id}"

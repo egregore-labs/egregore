@@ -33,12 +33,22 @@ AUTHOR=$(jq -r '.github_username // .display_name // "unknown"' "$STATE_FILE" 2>
 BRANCH="dev/${AUTHOR}/${SLUG}"
 WT_PATH="$REPO_ROOT/.claude/worktrees/${SLUG}"
 
-# --- Ensure origin/develop is available ---
-git -C "$REPO_ROOT" fetch origin develop --quiet 2>/dev/null || true
+# --- Resolve and fetch the configured base branch ---
+SCRIPT_DIR="$REPO_ROOT"
+CONFIG="$REPO_ROOT/egregore.json"
+if [ -f "$REPO_ROOT/bin/lib/config.sh" ]; then
+  # shellcheck source=bin/lib/config.sh
+  source "$REPO_ROOT/bin/lib/config.sh"
+fi
+if ! BASE_BRANCH=$(_get_base_branch); then
+  echo "Error: could not resolve the configured base branch" >&2
+  exit 1
+fi
+git -C "$REPO_ROOT" fetch origin "$BASE_BRANCH" --quiet 2>/dev/null || true
 
 # --- Create branch (idempotent — skip if exists) ---
 if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH" 2>/dev/null; then
-  git -C "$REPO_ROOT" branch "$BRANCH" origin/develop >/dev/null 2>&1 || {
+  git -C "$REPO_ROOT" branch "$BRANCH" "origin/$BASE_BRANCH" >/dev/null 2>&1 || {
     echo "Error: failed to create branch $BRANCH" >&2
     exit 1
   }

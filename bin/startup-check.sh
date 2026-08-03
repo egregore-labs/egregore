@@ -42,7 +42,17 @@ if [ -n "$API_KEY" ]; then
   if [ "$KEY_SLUG" = "$CONFIG_SLUG" ]; then
     KEY_VALID="true"
   else
-    ERR_LIST="\"key_slug_mismatch: key=$KEY_SLUG config=$CONFIG_SLUG\""
+    # Slug mismatch is not proof of a bad key — org renames leave the working
+    # key on the old slug. Ask the API before reporting it broken.
+    PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer $API_KEY" \
+      "${API_URL}/api/graph/test" \
+      --connect-timeout 3 --max-time 5 2>/dev/null || echo "000")
+    if [ "$PROBE_CODE" = "401" ] || [ "$PROBE_CODE" = "403" ]; then
+      ERR_LIST="\"key_auth_failed: key=$KEY_SLUG config=$CONFIG_SLUG\""
+    else
+      KEY_VALID="true"
+    fi
   fi
 else
   ERR_LIST="\"no_api_key\""

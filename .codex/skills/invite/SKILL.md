@@ -21,8 +21,11 @@ and, in connected mode, create the Egregore join link.
    - Parse the response and show invite status, memory access status, and the
      returned invite URL.
    - Best-effort graph record with `bin/graph.sh`.
-   - Best-effort direct notification with `bin/notify.sh send` only if a
-     contact channel exists.
+   - If a contact channel exists, follow
+     `.claude/context/notification-consent.md`: prepare a direct-message plan
+     and show the exact organization, recipient, channel, and message in a
+     separate Send / Edit / Cancel checkpoint. The invite request is not
+     notification consent.
 5. Local mode:
    - Use GitHub API collaborator endpoints for the core repo, memory repo, and
      managed repos.
@@ -38,3 +41,4 @@ and, in connected mode, create the Egregore join link.
 - Only org admins can complete the connected invite flow; report API denial
   clearly and give the manual GitHub access URL.
 - Do not use Claude Code commands.
+- Never fall back from an invite DM to a group or dispatch from detached work.

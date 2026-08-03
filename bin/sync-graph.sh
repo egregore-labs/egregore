@@ -52,6 +52,7 @@ SESSIONS=0
 ARTIFACTS=0
 QUESTS=0
 RESOLVED=0
+INGEST_MANIFESTS=0
 
 # --- Step 1: Fetch existing IDs from graph ---
 EXISTING_JSON=$(bash "$SCRIPT_DIR/bin/graph-batch.sh" '[
@@ -68,10 +69,19 @@ EXISTING_SESSIONS=$(echo "$EXISTING_JSON" | jq -r '.results[0].values[0][0][]? /
 EXISTING_ARTIFACTS=$(echo "$EXISTING_JSON" | jq -r '.results[1].values[0][0][]? // empty' 2>/dev/null | sort || true)
 EXISTING_QUESTS=$(echo "$EXISTING_JSON" | jq -r '.results[2].values[0][0][]? // empty' 2>/dev/null | sort || true)
 
-# Helper: check if ID exists in a sorted list
+# Helper: check if ID exists in a newline-delimited list.
+#
+# Pure bash on purpose. The previous form was `echo "$list" | grep -qxF "$id"`,
+# which is broken under this script's `set -o pipefail`: grep -q exits the moment
+# it matches, echo takes SIGPIPE writing the rest of the ~80KB list, exits 141,
+# and pipefail makes that the pipeline's status — so an id near the TOP of the
+# sorted list reads as absent. 229 of 238 handoffs were re-synced on every run
+# because of it. Matching in-shell also drops ~1,800 spawned processes per run.
 id_exists() {
-  local id="$1" list="$2"
-  echo "$list" | grep -qxF "$id" 2>/dev/null
+  case $'\n'"$2"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Helper: parse YAML front matter value
@@ -172,12 +182,18 @@ if [ -d "$MEMORY/wraps" ]; then
 
       REL_PATH="wraps/${dirmonth}/${fname}.md"
 
-      CYPHER="MATCH (p:Person) WHERE toLower(p.name) = \$author OR p.github = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)]
-        MERGE (s:Session {id: \$sid})
+      # Person is resolved AFTER the MERGE, not before it. Leading with
+      # `MATCH (p:Person)` meant an unresolvable author produced zero rows, so
+      # the MERGE never executed — while the query still returned success. Wraps
+      # by authors with no Person node (e.g. `codex`) were reported synced on
+      # every run and never written. Mirrors the artifacts block below.
+      CYPHER="MERGE (s:Session {id: \$sid})
         ON CREATE SET s.date = date(\$date), s.topic = \$topic, s.summary = \$summary,
           s.filePath = \$filePath, s.status = 'wrapped', s.branch = \$branch,
           s.startedAt = datetime(\$date + 'T00:00:00Z')
-        MERGE (s)-[:BY]->(p)
+        WITH s
+        OPTIONAL MATCH (p:Person) WHERE \$author <> '' AND (toLower(p.name) = \$author OR p.github = \$author OR \$author IN [x IN coalesce(p.previousNames, []) | toLower(x)])
+        FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END | MERGE (s)-[:BY]->(p))
         RETURN s.id"
 
       PARAMS=$(jq -n \
@@ -196,8 +212,8 @@ if [ -d "$MEMORY/wraps" ]; then
 fi
 
 # --- Step 3: Scan artifacts and knowledge files ---
-# Covers: memory/knowledge/decisions/*.md, memory/knowledge/findings/*.md, memory/knowledge/patterns/*.md
-for dir in "$MEMORY/knowledge/decisions" "$MEMORY/knowledge/findings" "$MEMORY/knowledge/patterns"; do
+# Covers: memory/knowledge/decisions/*.md, memory/knowledge/findings/*.md, memory/knowledge/patterns/*.md, memory/knowledge/research/*.md
+for dir in "$MEMORY/knowledge/decisions" "$MEMORY/knowledge/findings" "$MEMORY/knowledge/patterns" "$MEMORY/knowledge/research"; do
   [ ! -d "$dir" ] && continue
   CATEGORY="$(basename "$dir")"
   # Singularize: decisions→decision, findings→finding, patterns→pattern
@@ -265,6 +281,58 @@ RETURN a.id"
   done < <(find "$dir" -maxdepth 1 -name '*.md' -not -name '.gitkeep' -print0 2>/dev/null)
 done
 
+# --- Step 3b: Scan the hosted-artifact registry (memory/artifacts/) ---
+# Published egregore.xyz artifacts (scrolls, /view, /reflect …). Unlike knowledge
+# files these carry a `url:` — set a.url + a.excerpt so the connected-mode finder
+# (bin/artifacts.sh graph path) can rank + return them by content and by author/
+# quest. Recurse (the registry has subdirs). Real-time upserts happen at publish
+# via graph-op.sh register-artifact; this loop is the backfill + /save backstop,
+# skipping ids already synced. Node id = filename stem, matching register-artifact.
+if [ -d "$MEMORY/artifacts" ]; then
+  while IFS= read -r -d '' afile; do
+    fname="$(basename "$afile" .md)"
+    [ "$fname" = ".gitkeep" ] && continue
+    id_exists "$fname" "$EXISTING_ARTIFACTS" && continue
+
+    A_TITLE="$(get_val "$afile" "title" "Title")"
+    [ -z "$A_TITLE" ] && A_TITLE="$(grep -m1 '^# ' "$afile" 2>/dev/null | sed 's/^# //' || true)"
+    [ -z "$A_TITLE" ] && A_TITLE="$fname"
+    A_TYPE="$(yaml_val "$afile" "type")"; [ -z "$A_TYPE" ] && A_TYPE="artifact"
+    A_URL="$(yaml_val "$afile" "url")"
+    A_AUTHOR_HANDLE="$(get_val "$afile" "author" "Author" | awk '{print tolower($1)}')"
+    A_DATE="$(get_val "$afile" "date" "Date")"
+    [ -z "$A_DATE" ] && A_DATE="$(echo "$fname" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || echo "")"
+
+    TOPICS_JSON="[]"
+    TOPICS_RAW="$(yaml_val "$afile" "topics")"
+    if [ -n "$TOPICS_RAW" ] && [[ "$TOPICS_RAW" == \[* ]]; then
+      TOPICS_JSON="$(echo "$TOPICS_RAW" | jq -R 'gsub("^\\[|\\]$"; "") | split(",") | map(gsub("^\\s+|\\s+$"; "") | gsub("^\"|\"$"; "")) | map(select(length > 0))' 2>/dev/null || echo "[]")"
+    fi
+
+    # Excerpt: body sans frontmatter, flattened + capped, for CONTAINS retrieval.
+    A_EXCERPT="$(sed -e '/^---$/,/^---$/d' "$afile" 2>/dev/null | tr '\n' ' ' | cut -c1-2000)"
+    REL_PATH="artifacts/${afile#"$MEMORY"/artifacts/}"
+
+    CYPHER="MERGE (a:Artifact {id: \$id})
+ON CREATE SET a.created = CASE WHEN \$date <> '' THEN datetime(\$date + 'T00:00:00') ELSE datetime() END
+SET a.title = \$title, a.type = \$type, a.filePath = \$filePath, a.topics = \$topics,
+    a.url = \$url, a.excerpt = \$excerpt, a.published = true
+WITH a
+OPTIONAL MATCH (p:Person) WHERE \$author <> '' AND (toLower(p.name) = \$author OR p.github = \$author)
+FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END | MERGE (a)-[:CONTRIBUTED_BY]->(p))
+RETURN a.id"
+
+    PARAMS=$(jq -n \
+      --arg id "$fname" --arg title "$A_TITLE" --arg type "$A_TYPE" \
+      --arg filePath "$REL_PATH" --arg date "${A_DATE:-}" \
+      --argjson topics "$TOPICS_JSON" --arg url "${A_URL:-}" \
+      --arg excerpt "$A_EXCERPT" --arg author "${A_AUTHOR_HANDLE:-}" \
+      '{id: $id, title: $title, type: $type, filePath: $filePath, date: $date, topics: $topics, url: $url, excerpt: $excerpt, author: $author}')
+
+    bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "$PARAMS" >/dev/null 2>&1 && ARTIFACTS=$((ARTIFACTS + 1)) || true
+  done < <(find "$MEMORY/artifacts" -type f -name '*.md' -not -name '.gitkeep' -print0 2>/dev/null)
+fi
+
 # --- Step 4: Scan quests ---
 if [ -d "$MEMORY/quests" ]; then
   while IFS= read -r -d '' qfile; do
@@ -318,15 +386,22 @@ RETURN q.id"
   done < <(find "$MEMORY/quests" -maxdepth 1 -name '*.md' -not -name 'index.md' -not -name '_template.md' -not -name '.gitkeep' -print0 2>/dev/null)
 fi
 
-# --- Step 5: Auto-resolve read handoffs ---
+# --- Step 5: Auto-resolve explicit implementation lineage ---
 ME=$(git -C "$SCRIPT_DIR" config user.name 2>/dev/null | awk '{print tolower($1)}' || echo "unknown")
 RESOLVE_RESULT=$(bash "$SCRIPT_DIR/bin/graph.sh" query \
   "MATCH (s:Session)-[:HANDED_TO]->(p:Person) WHERE toLower(p.name) = \$me AND s.handoffStatus = 'read'
-   WITH s, p, coalesce(s.handoffReadDate, s.date) AS sinceDate
-   MATCH (later:Session)-[:BY]->(p)
-   WHERE later.date > sinceDate
-   WITH s, count(later) AS laterSessions WHERE laterSessions > 0
-   SET s.handoffStatus = 'done'
+   WITH DISTINCT s, p, size([(s)-[:HANDED_TO]->(:Person) | 1]) AS recipientCount
+   WHERE recipientCount = 1
+   MATCH (implementation:Session)-[:IMPLEMENTS]->(s)
+   MATCH (implementation)-[:BY]->(p)
+   WHERE implementation.wrappedAt IS NOT NULL
+      OR implementation.status IN ['completed','handed_off','wrapped']
+   WITH DISTINCT s
+   SET s.handoffStatus = 'done',
+       s.handoffDoneAt = coalesce(s.handoffDoneAt, datetime()),
+       s.handoffUpdatedAt = datetime(),
+       s.handoffLifecycleReason = 'single_recipient_implemented',
+       s.handoffLifecycleVersion = 1
    RETURN count(s) AS resolved" \
   "$(jq -n --arg me "$ME" '{me: $me}')" 2>/dev/null) || true
 
@@ -344,7 +419,20 @@ bash "$SCRIPT_DIR/bin/graph.sh" query \
    RETURN count(q)" \
   '{}' >/dev/null 2>&1 || true
 
+# --- Step 7: Replay durable ingest projections ---
+if [ -d "$MEMORY/ingest" ]; then
+  while IFS= read -r -d '' manifest; do
+    if bash "$SCRIPT_DIR/bin/ingest-graph.sh" apply "$manifest" >/dev/null 2>&1; then
+      INGEST_MANIFESTS=$((INGEST_MANIFESTS + 1))
+    fi
+  done < <(
+    find "$MEMORY/ingest/sources" "$MEMORY/ingest/knowledge" \
+      -type f -name '*.json' -print0 2>/dev/null
+  )
+fi
+
 # --- Output ---
 jq -n --argjson sessions "$SESSIONS" --argjson artifacts "$ARTIFACTS" \
   --argjson quests "$QUESTS" --argjson resolved "$RESOLVED" \
-  '{sessions: $sessions, artifacts: $artifacts, quests: $quests, resolved: $resolved}'
+  --argjson ingest "$INGEST_MANIFESTS" \
+  '{sessions: $sessions, artifacts: $artifacts, quests: $quests, resolved: $resolved, ingest_manifests: $ingest}'

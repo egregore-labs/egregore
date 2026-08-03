@@ -15,18 +15,79 @@ which branch, commit, push, pull request, or memory sync steps are required.
 2. Inspect state silently:
 
 ```bash
+BASE=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch') ||
+  { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
 git status --short
 git status --short memory 2>/dev/null || true
-git branch --show-current
+BRANCH=$(git branch --show-current)
+AHEAD=0
+OPEN_PR=""
+case "$BRANCH" in
+  dev/*|feature/*|bugfix/*)
+    git fetch origin "$BASE" --quiet 2>/dev/null || true
+    AHEAD=$(git rev-list --count "origin/$BASE..HEAD" 2>/dev/null || echo 0)
+    if command -v gh >/dev/null 2>&1; then
+      OPEN_PR=$(gh pr list --head "$BRANCH" --base "$BASE" --state open \
+        --json url --jq '.[0].url // empty' 2>/dev/null || true)
+    fi
+    ;;
+esac
 ```
 
-3. If there are no repo or memory changes, say everything is already saved and
-   stop.
-4. Synthesize:
+3. A clean working tree alone does **not** mean the work is fully saved:
+   - If there are repo or memory changes, continue.
+   - If the task branch is ahead of `origin/$BASE` and `OPEN_PR` is empty,
+     continue even when the tree is clean. The bridge must push any committed
+     work and create the missing PR.
+   - Stop with "everything is already saved" only when there are no repo or
+     memory changes and either the branch has no commits to integrate
+     (`AHEAD=0`) or an open integration PR already exists.
+4. Run the product distribution checkpoint before any commit or push when
+   `capability-distribution.json` exists:
+
+```bash
+node bin/capability-distribution.mjs validate --root .
+node bin/capability-distribution.mjs changes --root . --base "origin/$BASE" --json
+```
+
+   Inspect the diff as well as the receipt. Ask when this work introduces a new
+   or unclassified Egregore component, or changes a component's placement
+   without an explicit user decision in the current conversation. Components
+   include skills, packages, APIs, sites, workers, infrastructure, schemas,
+   assets, and runtime tools. Ordinary edits to an already classified component
+   do not prompt.
+
+   Show the tracker before asking:
+
+   `artifacts/capability-pipeline.html`
+
+   Ask once using structured Codex question tooling when available. Otherwise
+   render the compact numbered question and wait:
+
+```text
+Where should {name} live?
+1. OSS + Connect — part of the open runtime; Connect inherits it
+2. Connect only — delivered only to authenticated Connect users
+3. Curve Labs / Egregore — used only in this development instance
+```
+
+   Record every new component as `queued` under the selected placement and
+   attach all of its governed source paths. Availability is changed separately
+   after review. Group components into one checkpoint only when they share the
+   same placement. Apply the answer to `capability-distribution.json`, regenerate
+   `skill-distribution.json` and both artifacts, then validate again. Rebuild
+   runtime packs when an available runtime component changes placement. If the
+   user already made this exact decision during the current work, do not ask
+   twice.
+5. Synthesize:
    - a short topic from the work,
    - a clear commit message,
-   - a one-line user-facing scope summary.
-5. If the scope is ambiguous or includes unrelated changes, ask for one compact
+   - a one-line user-facing scope summary,
+   - a PR description following `.claude/context/pr-format.md`:
+     `## What` (1–4 bullets), `## Why` (1–3 sentences), and
+     `## Verification` (how the change was checked — required when the
+     diff touches non-markdown files; be honest if unverified).
+6. If the scope is ambiguous or includes unrelated changes, ask for one compact
    confirmation. Use structured Codex question tooling when available;
    otherwise render:
 
@@ -37,16 +98,18 @@ Save these changes?
 Other:
 ```
 
-6. Run the bridge command:
+7. Run the bridge command:
 
 ```bash
-bin/agent.sh save --message "$MESSAGE" --topic "$TOPIC"
+bin/agent.sh save --message "$MESSAGE" --topic "$TOPIC" --pr-body "$PR_BODY"
 ```
 
 The bridge owns the mechanical workflow: sync memory, ensure a task branch,
 commit repo changes, push, and create or reuse a pull request when available.
+Always pass the synthesized `--pr-body` — the bridge only auto-generates a
+skeleton body as a last resort, and the CI `pr-format` check gates every PR.
 
-7. Parse the output and report only useful user information:
+8. Parse the output and report only useful user information:
    - branch name,
    - whether a commit was created,
    - whether push succeeded,

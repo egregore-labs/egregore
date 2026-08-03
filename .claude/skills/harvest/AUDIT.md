@@ -22,7 +22,7 @@ FORMAT.md / a thin SKILL.md — landed alongside this audit.)
 **Pre-rebuild file**: `.claude/skills/harvest/SKILL.md` (145 lines).
 - Procedural Steps 0–6 with graph plumbing
 - Connected-mode ops wired: `create-harvest`, `create-harvest-session`,
-  `record-harvest-turn`, `complete-harvest` (`bin/graph-op.sh:285–365`)
+  `record-harvest-turn`, `complete-harvest` (all in `bin/graph-op.sh`)
 - Step 4 said "Apply `skills/harvest/SKILL.md` from here" — but that path
   resolved back to the same file. There was no separate cognitive layer; the
   reference was recursive/self-referential. The file existed; the intended
@@ -108,43 +108,18 @@ extraction, retrospective — can call harvest. Spiral, `/quest`, `/reflect`,
 and `/onboarding` may consume harvest output. Harvest does not depend on any
 of them.
 
-### 3.3 Invariants (must hold for every harvest)
+### 3.3 Invariants
 
-1. **No hidden role stereotyping.** Every implicit role inference is
-   inspectable in the manifest *and* surfaced into the interaction when
-   confidence is below threshold.
-2. **No survey collapse.** AUQ options never exhaust the answer space.
-   Every question carries a freeform escape hatch. Options are drawn from
-   context, not prefab taxonomies.
-3. **No unmarked cascade contamination.** When prior respondents' positions
-   are disclosed to a later respondent, that disclosure is explicit. Blind
-   vs. disclosed vs. comparative cascade is a deliberate choice per harvest.
-4. **No synthesis without evidence.** Every assertion in synthesis traces
-   to a recorded turn (or to seed context, marked as such). No
-   interpolation the transcript can't support. (Here "assertion" means any
-   factual statement in the artifact — preference, position, pattern,
-   tension — not the Spiral sense of "claim under test.")
+Normative in `PROCESS.md` §2 (five invariants: no hidden role
+stereotyping · no survey collapse · no unmarked cascade contamination ·
+no synthesis without evidence · articulable `questionIntent` per
+question). This document does not restate them; the original audit text
+lives in git history.
 
 ### 3.4 Anti-conflation test
 
-Every protocol rule, invariant, and synthesis convention must make sense
-for a **preference / context / taste** harvest — not just for a
-claim-critique harvest. If a rule only justifies itself when there is a
-proposition under attack, it belongs to Spiral, not Harvest.
-
-Use these as scratch fixtures while drafting `PROCESS.md`:
-
-- *"What's Cem's design taste for the artifact viewer?"* — pure preference,
-  no claim, no convergence target.
-- *"What is Oz carrying about the moat question?"* — tacit position, no
-  decision being forced.
-- *"What does Renc know about go-to-market constraints we haven't
-  documented?"* — knowledge extraction, no stance to recommend.
-- *"What do cem, renc, and oz each prefer for pricing?"* — alignment
-  scan; divergence is information, not a problem to resolve.
-
-If any rule fails to apply cleanly to all four, it's drifted into Spiral
-territory and needs reworking.
+Normative in `PROCESS.md` §8 (the four fixtures every protocol rule
+must pass). Not restated here.
 
 ### 3.5 Failure modes to design against
 
@@ -159,21 +134,24 @@ territory and needs reworking.
 
 ## 4. Architecture
 
-Four artifacts under `.claude/skills/harvest/`:
+Five artifacts under `.claude/skills/harvest/`:
 
 1. **`SKILL.md`** — entry point. Orchestration only: parse args, detect
-   mode, create IDs, load `PROCESS.md` and `FORMAT.md`, persist state, exit.
+   mode, create IDs, load the sibling contracts, persist state, exit.
    No cognitive logic.
 2. **`PROCESS.md`** — the cognitive protocol. Authored fresh from
    `AUDIT.md`; consult the old harvest spec only for the six reusable
    elicitation moves (seed, generate, evaluate, checkpoint, cascade,
    synthesize). Covers role asymmetry, AUQ round protocol, async bridge,
    and resume.
-3. **`FORMAT.md`** — the synthesis grammar. Layered disclosure rules, modality
-   palette, generative emission policy.
-4. **Memory contract** — documented markdown shape for manifest, session,
-   turn, async question, and synthesis files. Lives as a section in
-   `PROCESS.md`; not a separate doc.
+3. **`QUESTION_PALETTE.md`** — the canonical intent → question move →
+   answer shape rubric, conversational-move definitions, and hard bans.
+   PROCESS, FORMAT, SKILL, and scroll point here instead of restating it.
+4. **`FORMAT.md`** — the synthesis grammar. Layered disclosure rules,
+   synthesis blocks, generative emission policy.
+5. **Memory contract** — documented markdown shape for manifest, session,
+   turn, async question, and synthesis files. Lives in this document
+   (§9–§10); not a separate doc.
 
 The current SKILL.md's recursive self-reference ("intelligence lives in
 skills/harvest/SKILL.md") is the first thing to remove.
@@ -188,9 +166,9 @@ spec *prescribes*, what the system *provides*, and what the model *decides*.
 | Guidance (model reads, qualitative) | Tooling (system provides, concrete) | Discretion (model decides) |
 |---|---|---|
 | Role asymmetry — sender vs. receiver | RoleSheet schema and resolution helpers | How much context to include with each question |
-| Anti-bias — when to disclose, when to withhold | AUQ rounds (1 call/round, headers ≤12 chars) | Round count; question count per round |
-| Cascade disclosure choices | `questionIntent` + `evaluation` recorded per turn | Disclosure mode for cascade (blind/disclosed/comparative) |
-| Synthesis grammar (layers + modalities) | Async question metadata (`harvest_id`, `harvest_session_id`, `turn`, `context_mode`, `status`) | Which synthesis layers and modalities to emit |
+| Anti-bias — when to disclose, when to withhold | AskUserQuestion (AUQ) rounds (1 call/round, headers ≤12 chars) | Round count; question count per round |
+| Cascade disclosure choices | `questionIntent` + `evaluation` recorded per turn | Disclosure setting (`context_mode`: blind/disclosed/comparative) |
+| Synthesis grammar (layers + blocks) | Async question metadata (`harvest_id`, `harvest_session_id`, `turn`, `context_mode`, `status`) | Which synthesis layers and blocks to emit |
 | Failure mode awareness | Markdown/session state (local mode), graph nodes (connected mode) | When to checkpoint, deepen, pivot, synthesize |
 
 ---
@@ -244,87 +222,21 @@ The vector matters. `cem-asks-renc-about-pricing` ≠
 
 ## 7. AUQ round protocol
 
-The protocol is an affordance, not a script.
-
-**Per round (mandatory)**:
-- One AUQ call.
-- 1–3 questions (model decides; usually 2).
-- Each question: short header (≤12 chars), 2–3 generated options drawn from
-  context, freeform escape hatch always available.
-- Internally record per question: `questionIntent`, `expectedSignal`.
-- After the call: record `evaluation` per answer (novel framing /
-  unresolved tension / shallow / strong conviction / surprising connection /
-  diminishing returns).
-- Decide next: continue · deepen · pivot · checkpoint · cascade · synthesize.
-
-**Forbidden in round 1**:
-- Leading questions that presuppose a position.
-- Disclosing other respondents' answers (unless the harvest's disclosure mode
-  explicitly permits it).
-- Asking what the seed already answers.
-
-**Always permitted**:
-- Asking the respondent to reframe the harvest's intent.
-- Asking what the model *should* be asking that it isn't.
-- Ending early ("I'm done") at any checkpoint.
-
-The graph already supports `questionIntent` and `evaluation` on
-`HarvestTurn` (`bin/graph-op.sh:320`). We use what's there.
+Normative in `PROCESS.md` §3.2 (round shape, forbidden-in-round-1,
+always-permitted) and §3.3 (evaluation vocabulary). Not restated here.
+The unique tooling fact this document owns: the graph supports
+`questionIntent` and `evaluation` on `HarvestTurn` (the
+`record-harvest-turn` op in `bin/graph-op.sh`). We use what's there.
 
 ---
 
-## 8. Synthesis — layered disclosure + modality palette
+## 8. Synthesis
 
-> **Harvest produces a decision surface, not necessarily a decision.**
+> **A harvest maps the choices; it need not make them.**
 
-For some harvests the output is *"Cem prefers X because…"*, *"Oz sees the
-boundary this way…"*, *"Renc is carrying a go-to-market constraint we
-haven't documented…"* — useful organizational context even when no
-proposition is being tested and no recommendation is appropriate.
-Synthesis interprets-with-evidence; it does not have to converge,
-recommend, or pick a winner.
-
-### 8.1 Layers (progressive disclosure)
-
-| Layer | Required? | Contents |
-|---|---|---|
-| **L0 — Portrait** | Always | One sentence that holds the most: the sharpest finding, preference, or position the harvest produced. No "stance" obligation — for a preference harvest, this is the strongest preference; for an alignment scan, it's the central pattern. |
-| **L1 — Surface** | If the harvest produced anything decision-shaped | Convergence, divergence, open questions, *and* — only where relevant — recommended action. Divergence is presented as information, not a problem to resolve. |
-| **L2 — Person-position** | If multi-respondent or deep elicitation | Per-position section using the modality palette below |
-| **L3 — Transcript** | Always (appendix) | Full turn log with `questionIntent` and `evaluation` per turn |
-
-L0 and L3 are mandatory. L1 and L2 emit only when supported. "Generative"
-means *which layers and which sections within them exist* depends on what
-was harvested.
-
-### 8.2 Modality palette (within L2 sections)
-
-Each position can mix any of:
-
-- **quote** — verbatim, attributed
-- **context** — what the operator/model brings to make the quote legible
-- **reflection** — interpretation; what this position *does* to the broader
-  picture
-- **decision surface** — concrete choice or commitment
-- **open question** — unresolved tension worth a follow-up harvest
-- **pattern** — knowledge / action / antipattern extracted, ready for
-  `/reflect` to consume
-
-The Olivier and Oz fixtures already use this palette. Codify it; don't
-prescribe order.
-
-### 8.3 Synthesis output is `/reflect`-able
-
-Patterns, preferences, positions, and (where present) decisions emit in a
-shape the org's pattern/decision graph can ingest. The harvest is not a
-leaf artifact — it is an entry into organizational reasoning. For a pure
-preference harvest, this means the output node is *"cem prefers X because
-Y, evidence: turn-3 quote"* — a tacit-knowledge artifact other agents can
-reason from. For an alignment scan, it's a divergence-map node. The shape
-varies; the legibility doesn't.
-
-This is also the answer to *"why harvest"* for the receiver: their tacit
-context became something the org can now hold.
+Normative in `FORMAT.md`: the four layers (§2), the six synthesis
+blocks (§3), generative emission (§4), and `/reflect`-able linkability
+(§8). Not restated here.
 
 ---
 
@@ -355,20 +267,23 @@ context_mode:        disclosed    # blind | disclosed | comparative
 2. [Ceiling] {generated text}
 ```
 
-`bin/agent.sh ask` currently writes only `from / to / topic / status /
-created` (`bin/agent.sh:241`). Extend it (or have `/harvest` write
-harvest-flavored question files directly) so the async bridge is
-re-entrant.
+`bin/agent.sh ask` originally wrote only `from / to / topic / status /
+created` (the `ask` writer in `bin/agent.sh`). It has been extended (or
+`/harvest` writes harvest-flavored question files directly) so the async
+bridge is re-entrant.
 
 When the respondent answers via `/ask`, the answers append to the file and
 status moves `pending → answered`. The next time `/harvest` runs and finds
 its session has `answered` files, it incorporates them, sets status to
 `incorporated`, and continues toward synthesis.
 
-**Async initial state**: `create-harvest-session` (`bin/graph-op.sh:307`)
+**Async initial state**: `create-harvest-session` (in `bin/graph-op.sh`)
 accepts an optional 4th `[status]` argument validated against
-`pending|active|answered|complete|incorporated`. Async respondents are
-created with `pending` and transition to `active` when they engage; default
+`pending|active|answered|complete|incorporated` — **this five-value enum
+is the canonical HarvestSession status set**; every other mention cites
+it. (The question *file's* frontmatter `status` is a different, smaller
+enum: `pending|answered|incorporated`.) Async respondents are created
+with `pending` and transition to `active` when they engage; default
 remains `active` for back-compat with synchronous callers.
 
 ---
@@ -391,22 +306,17 @@ For single-session harvests (the common case), the existing flat file at
 manifest + session + synthesis into one. The directory shape is opt-in for
 multi-respondent harvests.
 
-`/ask`'s local-mode pattern (`.claude/skills/ask/SKILL.md:36`) is the model
-to follow: clear local/connected split, no graph-failure messaging in local
-mode, durable markdown is the source of truth.
+`/ask`'s local-mode pattern (in `.claude/skills/ask/SKILL.md`) is the
+model to follow: clear local/connected split, no graph-failure messaging
+in local mode, durable markdown is the source of truth.
 
 ---
 
 ## 11. Resume protocol
 
-Harvests span days. Re-entry is a first-class flow.
-
-- `/harvest --resume {harvest_id}` — explicit resume.
-- Implicit resume: `/harvest <topic>` matches an existing active harvest →
-  surface it and ask whether this is continuation or fresh start.
-- Per session: `pending` (not yet engaged) · `active` (in progress) ·
-  `answered` (async answers received, not yet incorporated) · `complete`.
-- The harvest is `complete` only when synthesis is written and linked.
+Normative in `PROCESS.md` §7. Session status uses the §9 enum
+(`pending | active | answered | complete | incorporated`). The harvest
+is `complete` only when synthesis is written and linked.
 
 ---
 
@@ -449,7 +359,8 @@ remains as the empirical proof the rebuild reproduces the gold fixtures.
    the §3.4 anti-conflation test before keeping it. Spiral vocabulary
    stripped except in a short boundary section.
 4. ✓ Write `FORMAT.md` from §8 using Olivier + Oz harvests as fixtures.
-5. ✓ Document the local-mode markdown contract (§10) inside `PROCESS.md`.
+5. ✓ Document the local-mode markdown contract (§10, this document —
+   `PROCESS.md` §9 points here).
 6. ✓ `bin/graph-op.sh create-harvest-session` accepts an optional
    `[status]` argument with enum validation (§9).
 7. ✓ `bin/agent.sh ask` extended with harvest-flavored frontmatter
@@ -465,8 +376,8 @@ without the operator carrying the form.
 
 ## 14. Decision surface — rendered mode + round-trip
 
-The `decision surface` modality (§8, FORMAT.md) gained a **rendered, fillable
-form**. `/harvest` is the only command: when its findings are decision-shaped, it
+The `choice` block (`FORMAT.md` §3) gained a **rendered, fillable
+form** — the *decision surface*. `/harvest` is the only command: when its findings are decision-shaped, it
 renders them as a *decision surface* — the rendered format/artifact the respondent
 decides on and pastes back. *Decision surface* names the **format**, not a command;
 there is no `/decision-surface` command (everything merges into `/harvest` — one
@@ -483,10 +394,19 @@ verb, one grammar).
 `decision-surface` is a first-class artifact type in `packages/egregore-artifacts`
 (`lib/parsers/decision-surface.js`, `lib/templates/decision-surface.js`, registered
 in `lib/index.js`; `decision-surface` added to `bin/cli.js` known types). It renders
-the data model — `decisions[] → {id, title, context, options[{key, label, visual,
-tradeoffs[{t,text}], recommended}]}` — as an interactive surface: option cards, a
-structural visual per option, honest `+/−` tradeoffs, at most one recommendation,
-selection state, a progress bar, and a copy-back button. Locked to the **meridian**
+the data model — `decisions[] → {id, title, context, mode, max, ends, section,
+options[{key, label, visual, tradeoffs[{t,text}], recommended}]}` — as an
+interactive surface: option cards, a structural visual per option, honest `+/−`
+tradeoffs, at most one recommendation, selection state, a progress bar, and a
+copy-back button.
+
+**Answer modes (canonical):** `mode ∈ single | multi | rank | weight | spectrum`,
+per card. Absent or unknown ⇒ `single` (backward compatibility only — new surfaces
+declare a mode explicitly; see SKILL.md's mode table for selection guidance).
+Mode-specific fields: `max` (multi — optional selection cap), `ends` (spectrum —
+the two labeled poles, `["left","right"]`). **Grouping:** optional top-level
+`sections: [{id, label, desc}]` plus `section: "<id>"` per decision renders a
+category rail; additive — surfaces without it render flat, unchanged. Locked to the **meridian**
 palette by the design-system route. Styled with **role tokens only** (`--t1` decided,
 `--t2` plus, `--t3` minus, `--ink/--paper/--line/--card`) — dark-mode-safe, no
 resolved hex. The output is fully self-contained (CSS + behavior inlined): fillable
@@ -507,7 +427,14 @@ date: {YYYY-MM-DD}
 Q1 {decision-id}: {option-key}  ("{label}")
    note: {reasoning}
 Q2 {decision-id}: UNDECIDED
+Q3 {decision-id}: [{key-a}, {key-b}]  ("{Label A}" + "{Label B}")   # multi
+Q4 {decision-id}: {key-a} > {key-c} > {key-b}                      # rank
+Q5 {decision-id}: {position}  ({left-pole}→{right-pole})           # spectrum
+Q6 {decision-id}: {key-a}:60 {key-b}:40                            # weight
 ```
+
+Each answer mode emits its own Q-line shape (above); `UNDECIDED` and the
+indented `note:` are valid under every mode.
 
 This is the same shape already in field use (`#…-decisions:v1`). It self-identifies
 the surface/harvest it answers, so it re-keys deterministically over *any* channel.
@@ -515,6 +442,66 @@ On `--resume`: re-key, record each choice as a `HarvestTurn` answer (`note` = th
 rationale), apply resolved decisions to `source`, log to
 `memory/knowledge/decisions/` if others will build on them, synthesize. `UNDECIDED`
 stays open — never forced.
+
+### Absorb & review (canonical)
+
+This is the single canonical statement of the rendered-surface absorb
+machine. `SKILL.md` points here; scrolls carry their own version of the
+same machine in `.claude/skills/scroll/SKILL.md` §5–§6 (shared event
+grammar, separate stores).
+
+Rendered decision surfaces have the same durable review substrate as
+scrolls. Store the surface's data model next to `source` with optional
+`"author": "<person-slug>"` and `"trusted": ["<person-slug>", …]`;
+legacy surfaces without `author` are backfilled from unambiguous
+artifact/source authorship, otherwise ask once and write it — never
+silently default open. Append events to
+`memory/harvests/.events/<surface-slug>.jsonl` (the runtime events root,
+sibling of scrolls' `memory/scrolls/.events/` — synthesis artifacts live
+separately under `memory/knowledge/harvests/`) using the same event
+grammar as scrolls: `turn-received`, `turn-reviewed`, and
+surface-specific `turn-applied` (there is no `version-published` for
+surfaces). A `turn-received` may carry optional
+`submitted_by: <person-slug>` event-log metadata recorded only on that
+event from the session person doing the paste; it is never projected
+into the ledger or return block and is not part of the history
+return-block grammar. Event ids are `turn.id`, `review|<turn.id>`, and
+`applied|<turn.id>` respectively.
+
+Re-key the pasted return block by `surface`/`harvest` and create its
+`turn-received` event. Derive the paster from the session person doing
+the paste, not the return block's self-declared `respondent:`
+attribution. If the paster is the `author` or in `trusted`, continue the
+existing apply flow. Otherwise append the pending turn, do **not** apply
+decisions to `source` or log to `memory/knowledge/decisions/`, notify
+the author via `bash bin/notify.sh` in connected mode or an addressed
+handoff in local mode, and stop. The notification names the surface,
+paster, digest, and the same accept / decline-with-required-reason /
+synthesize dispositions; the contributor may also send the acknowledged
+artifact link directly.
+
+The author disposes in agent chat with the same protocol as scrolls:
+accept, decline with a nonblank attributed note, per-answer overrides,
+or synthesize all pending turns and approve the proposal. Append each
+`turn-reviewed` before applying anything. The hybrid rule is identical:
+top-level disposition defaults, `answers` overrides per fork, any
+effective accepted answer is absorbable, a zero-answer turn takes the
+top-level disposition as its effective disposition, zero is a plain
+decline, and a note is required for every effective decline.
+Accepted-but-unapplied turns remain pending and are retryable.
+
+For every successful application — whether it follows an accepted review
+or a direct author/trusted apply — apply resolved decisions to `source`,
+log to `memory/knowledge/decisions/` if others will build on them, and
+only **after both steps complete** append `turn-applied` with
+`{ "id":"applied|<turn.id>", "type":"turn-applied", "turn":"<turn.id>",
+"date":"…", "targets":["<paths written>"] }`. Before re-applying an
+accepted turn, check the targets for its turn id (decision records name
+the turn id) and skip targets already written for that id; this keeps
+retries idempotent. The surface remains pending until `turn-applied`; a
+declined review is the only review projection that clears it without
+application. Then synthesize. `UNDECIDED` lines stay open — never force
+a pick.
 
 ### Two transports — one payload
 
@@ -549,7 +536,8 @@ rejected.
    `decision surface` is the rendered format, not a command — no
    `/decision-surface` command).
 4. ✓ `SKILL.md` + `FORMAT.md` updated: rendered mode, absorb-on-resume,
-   strategic surface-design guidance, promoted modality.
+   strategic surface-design guidance, `choice` block promoted to a
+   rendered form.
 5. ◻ **Deferred:** emissary `kind: decision` + `respond` extension for the
    non-egregore transport.
 6. ◻ **Deferred:** publish `egregore-artifacts` with the new type so

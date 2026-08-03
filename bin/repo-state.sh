@@ -71,21 +71,18 @@ check_repo() {
 }
 
 # Check core repo
-CORE_BASE="develop"
-if [ -f "$CONFIG" ]; then
-  # Core repo base: check if develop exists, otherwise main
-  if git -C "$SCRIPT_DIR" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-    CORE_BASE="develop"
-  else
-    CORE_BASE="main"
-  fi
+if ! CORE_BASE=$(_get_base_branch); then
+  echo "repo-state: could not resolve the configured base branch" >&2
+  exit 1
 fi
 check_repo "$CORE_REPO" "$SCRIPT_DIR" "$CORE_BASE"
 
 # Check managed repos
 for REPO in $MANAGED_REPOS; do
   REPO_DIR="$PARENT_DIR/$REPO"
-  BASE=$(_get_base_branch "$REPO" 2>/dev/null || echo "develop")
+  if ! BASE=$(_get_base_branch "$REPO"); then
+    continue
+  fi
   check_repo "$REPO" "$REPO_DIR" "$BASE"
 done
 

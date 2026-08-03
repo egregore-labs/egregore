@@ -20,9 +20,17 @@ fi
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || \
   BRANCH=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 
-# Only guard protected branches
+# Resolve the configured integration branch before deciding whether the current
+# branch is protected. Single-branch instances may use main; custom instances
+# may use another name such as trunk.
+BASE_BRANCH=$(jq -r 'if (.base_branch | type) == "string" then .base_branch else "develop" end' "$PROJECT_DIR/egregore.json" 2>/dev/null) || BASE_BRANCH="develop"
+if [ -z "$BASE_BRANCH" ] || ! git check-ref-format --branch "$BASE_BRANCH" >/dev/null 2>&1; then
+  BASE_BRANCH="develop"
+fi
+
+# Guard the conventional protected branches plus the configured base branch.
 case "$BRANCH" in
-  develop|main|master) ;;
+  develop|main|master|"$BASE_BRANCH") ;;
   *) exit 0 ;;
 esac
 
@@ -146,18 +154,19 @@ targets_other_repo() {
   return 1
 }
 
-# --- Block message — instructs Claude to confirm the branch with the user ---
-# When the topic is obvious from the last turn, Claude may skip the question and
-# auto-branch. When it's ambiguous, Claude MUST use AskUserQuestion before
-# creating the branch (see CLAUDE.md "Branch-guard protocol").
-BLOCK_MSG="Protected branch (${BRANCH}). Ask the user how to proceed — do NOT auto-branch silently.
+# --- Block message — keep routine branch mechanics out of the user's way ---
+BLOCK_MSG="Protected branch (${BRANCH}). Move project work to a task branch before writing.
 
-Use AskUserQuestion with these options:
-  • Branch off (default) — git fetch origin develop --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/develop
-  • Proceed on ${BRANCH} — record consent, then continue: echo '${BRANCH}' > .egregore-branch-consent
-  • Cancel
+If the work topic is clear, create the branch automatically:
+  git fetch origin ${BASE_BRANCH} --quiet && git checkout -b dev/${AUTHOR}/{topic-slug} origin/${BASE_BRANCH}
+Then continue there and briefly tell the user. Do not ask for routine Git permission.
 
-If they choose 'Proceed on ${BRANCH}', write that consent file and retry; writes on ${BRANCH} are then allowed for the rest of this session. (Cleared on next session start.)"
+AskUserQuestion only when the work topic is genuinely ambiguous; ask for the topic, not whether branching is allowed.
+
+Only when the user explicitly requested writing on ${BRANCH}, record consent and retry:
+  echo '${BRANCH}' > .egregore-branch-consent
+
+Memory, managed-repo, and runtime-state writes should bypass this project guard."
 
 # --- Check based on tool type ---
 case "$TOOL_NAME" in

@@ -225,14 +225,20 @@ If the push fails, warn the user: `Quest saved locally but push failed — run /
 
 **Skip this entire section in local mode.** Do not run `bin/notify.sh` or mention notifications.
 
-When creating a quest that involves specific people, notify them:
+When creating a quest that involves specific people, offer a separate
+notification for each person. Selecting people for the quest is not
+notification consent.
 
 **Detection**: "quest involving bob and alice" → notify both
 
-**Notification API**:
+For each person, follow `.claude/context/notification-consent.md` and prepare:
 ```bash
-bash bin/notify.sh send "bob" "message"
+PLAN_JSON=$(bash bin/notify.sh plan send "bob" "message")
 ```
+
+Show the exact organization, recipient, channel, and message in a dedicated
+Send / Edit / Cancel checkpoint. One approval covers one recipient and one
+immutable message; never batch approvals across people.
 
 **Message format**:
 ```

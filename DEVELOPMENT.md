@@ -24,7 +24,16 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
   bash bin/graph.sh query "MATCH (p:Person {name: \$name}) RETURN p" '{"name":"alice"}'  # With parameters
   bash bin/graph.sh schema                                                 # Show schema (labels + relationships)
   ```
-- **Current schema**: Person, Session, Artifact, Quest, Project, Spirit, Interview, PR. Relationships: BY, CONDUCTED_BY, CONTRIBUTED_BY, FROM_INTERVIEW, GENERATED_BY, HANDED_TO, IMPLEMENTS, INVOKED_BY, INVOLVES, PART_OF, PRODUCED, RELATES_TO, STARTED_BY.
+- **Current schema**: Person, Session, Artifact (with typed secondary labels
+  such as Decision, Finding, Pattern, Claim, and Research), Quest, Project,
+  Spirit, Meeting, Interview, PR, IngestSource, IngestDocument, and
+  IngestChunk. Relationships include BY, CONDUCTED_BY, CONTRIBUTED_BY,
+  FROM_MEETING, FROM_INTERVIEW, FROM_SOURCE, FROM_DOCUMENT,
+  DERIVED_FROM_CHUNK, GENERATED_BY, HANDED_TO, IMPLEMENTS, INGESTED,
+  INVOKED_BY, INVOLVES, MENTIONS, PART_OF, PRODUCED, RELATES_TO, and
+  STARTED_BY. Durable ingestion manifests are projected through
+  `bash bin/ingest-graph.sh apply <manifest>`; route-specific writers must not
+  bypass that contract.
 
 #### `graph-batch.sh`
 - **Purpose**: Execute multiple Cypher queries in a single HTTP call
@@ -35,7 +44,10 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **External deps**: curl, jq
 
 #### `graph-op.sh`
-- **Purpose**: Named graph operations (set-topic, mark-read, merge-person, claim-handoff, create-pr)
+- **Purpose**: Versioned named graph operations. Bounded reads include
+  `open-handoffs`, `pending-questions`, `lineage`, and `meeting-history`;
+  `catalog` exposes their machine-readable routing contract. Writes include
+  set-topic, mark-read, merge-person, claim-handoff, and create-pr.
 - **Called by**: graph-maintenance.sh, activity command, pr command, wrap command, harvest command
 - **Depends on**: graph.sh, graph-wal.sh
 - **Reads**: Nothing directly (delegates to graph.sh)
@@ -188,7 +200,10 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **External deps**: jq, realpath
 - **Session boundary** = this project directory + memory directory (resolved symlink) + managed repos from `egregore.json`
 - **Allowed paths**: this project dir, memory repo (via symlink), managed repos in `egregore.json` → `repos[]`, `~/.claude`, `/tmp`, system paths (`/usr`, `/etc`, `/bin`)
-- **Blocked paths**: other Egregore instance directories (from `~/.egregore/instances.json`), any path outside the boundary that isn't a system path
+- **Two-tier enforcement** (boundary-check.sh, decided 2026-07-08 — see `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md`):
+  - **Hard tier — other Egregore instance directories** (from `~/.egregore/instances.json`): denied for every tool including Bash (path-literal grep). No consent path.
+  - **Soft tier — everything else outside the boundary**: consent-gated for every tool. Read roots (`~/Downloads`, `~/Desktop` by default) are readable without consent; other reads and all outside writes prompt a consent flow whose grant lands in `.egregore-boundary-consent` (session) or `.egregore-boundary.local.json` (instance). Bash is checked best-effort for user-home path literals — a miss degrades to "no prompt", never a hard-tier breach.
+- **Posture** `strict | standard | open` + `locked` from `egregore.json` → `boundary { posture, read[], locked }` merged with the personal local file at session start into `/tmp/egregore-boundary-*.json`. `open` allows outside reads (writes still gated); sessions in `bypassPermissions` skip the soft tier entirely; `locked: true` disables personal extensions, consent, and bypass relaxation — hard tier only ever says no.
 
 #### `preflight.sh`
 - **Purpose**: Multi-tenancy violation detection (hardcoded orgs, direct API calls)

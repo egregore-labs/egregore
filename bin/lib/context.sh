@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # context.sh — Context gathering for session-start.sh
 #
-# Runs 10 parallel background subshells to gather session context:
+# Runs 11 parallel background subshells to gather session context:
 #   1. Recent handoffs
 #   2. Active quests
 #   3. User's last git activity
@@ -13,6 +13,7 @@
 #   8. Telegram health check
 #   9. Lifecycle events (merged PRs, implemented handoffs)
 #   10. Last Pulse brief
+#   11. Momentum metrics
 #
 # All subshells write to $CTX_DIR (a temp directory).
 # Ends with `wait` + reading health results back.
@@ -23,11 +24,78 @@
 
 CTX_DIR=$(mktemp -d)
 
+source "$SCRIPT_DIR/bin/lib/handoff-meta.sh" >/dev/null 2>/dev/null || true
+
 # Time of day
 HOUR=$(date +%H)
 if [ "$HOUR" -lt 12 ]; then TIME_OF_DAY="morning"
 elif [ "$HOUR" -lt 17 ]; then TIME_OF_DAY="afternoon"
 else TIME_OF_DAY="evening"
+fi
+
+# --- Attendant-baked seed ---------------------------------------------------
+# bin/attendant.sh pre-bakes a context snapshot tar every warm cycle
+# (_prebake_context). When the bake is fresh and its provenance matches, reuse
+# its purely graph-bound results — todos, lifecycle, pulse, service health —
+# and run every collector with local git/file inputs live below (handoffs,
+# quests, activity, soul, addressed, questions, team presence, metrics), so
+# everything file/git-derived reflects this instant. Purely graph-derived
+# fields are then at most one warm cycle stale, and the boot path pays
+# near-zero blocking graph round-trips (live collectors ride the warm cache).
+#
+# The seed is trusted only when ALL of these hold — otherwise fall back to a
+# full live gather:
+#   - the tar extracts cleanly (atomic rename on the writer side means we see
+#     a whole bake or none, never a half-written directory)
+#   - .baked-author matches this session's author (shared machines)
+#   - .baked-local-mode matches this session's mode (a connected bake must
+#     not leak graph data into a session that switched to local)
+#   - .baked-config matches this checkout's egregore.json (org/API repoint,
+#     or a worktree branch carrying a different config)
+#   - .baked-scope matches the EFFECTIVE endpoint/credential fingerprint
+#     (EGREGORE_API_URL/KEY overrides can point at a different tenant than
+#     the committed config names)
+#   - .baked-schema matches this checkout's context.sh revision (a bake from
+#     another collector schema may be missing or misformatting files)
+#   - .baked-ts is numeric, not in the future, and younger than 15min
+#   - every seeded collector's file actually landed in CTX_DIR (a partial
+#     copy must not suppress live collectors)
+CTX_SEED_USED="false"
+if [ -n "${CTX_SEED_TAR:-}" ] && [ -f "${CTX_SEED_TAR:-}" ]; then
+  _SEED_TMP=$(mktemp -d)
+  if tar -xf "$CTX_SEED_TAR" -C "$_SEED_TMP" 2>/dev/null; then
+    _SEED_TS=$(cat "$_SEED_TMP/.baked-ts" 2>/dev/null || echo 0)
+    case "$_SEED_TS" in ''|*[!0-9]*) _SEED_TS=0 ;; esac
+    _SEED_AUTHOR=$(cat "$_SEED_TMP/.baked-author" 2>/dev/null || echo "")
+    _SEED_MODE=$(cat "$_SEED_TMP/.baked-local-mode" 2>/dev/null || echo "")
+    _SEED_CONFIG=$(cat "$_SEED_TMP/.baked-config" 2>/dev/null || echo "")
+    _SEED_SCOPE=$(cat "$_SEED_TMP/.baked-scope" 2>/dev/null || echo "")
+    _SEED_SCHEMA=$(cat "$_SEED_TMP/.baked-schema" 2>/dev/null || echo "")
+    _NOW_CONFIG=$(cksum "${CONFIG:-$SCRIPT_DIR/egregore.json}" 2>/dev/null | cut -d' ' -f1)
+    _NOW_SCHEMA=$(cksum "$SCRIPT_DIR/bin/lib/context.sh" 2>/dev/null | cut -d' ' -f1)
+    # Effective endpoint/credential, mirroring bin/graph.sh's resolution order
+    # (process env → .env → committed api_url).
+    _NOW_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "${ENV_FILE:-$SCRIPT_DIR/.env}" 2>/dev/null | cut -d'=' -f2- || true)}"
+    _NOW_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "${ENV_FILE:-$SCRIPT_DIR/.env}" 2>/dev/null | cut -d'=' -f2- || true)}"
+    [ -n "$_NOW_URL" ] || _NOW_URL=$(jq -r '.api_url // empty' "${CONFIG:-$SCRIPT_DIR/egregore.json}" 2>/dev/null)
+    _NOW_SCOPE=$(echo -n "${_NOW_URL}|${_NOW_KEY}" | cksum | cut -d' ' -f1)
+    _SEED_AGE=$(( $(date +%s) - _SEED_TS ))
+    if [ -n "$_SEED_AUTHOR" ] && [ "$_SEED_AUTHOR" = "$AUTHOR" ] \
+      && [ "$_SEED_MODE" = "${LOCAL_MODE:-false}" ] \
+      && [ -n "$_SEED_CONFIG" ] && [ "$_SEED_CONFIG" = "$_NOW_CONFIG" ] \
+      && [ -n "$_SEED_SCOPE" ] && [ "$_SEED_SCOPE" = "$_NOW_SCOPE" ] \
+      && [ -n "$_SEED_SCHEMA" ] && [ "$_SEED_SCHEMA" = "$_NOW_SCHEMA" ] \
+      && [ "$_SEED_AGE" -ge 0 ] && [ "$_SEED_AGE" -lt 900 ]; then
+      if cp "$_SEED_TMP"/* "$CTX_DIR/" 2>/dev/null; then
+        # Completeness: every collector this seed replaces must be present.
+        CTX_SEED_USED="true"
+        for _SEED_REQ in todos lifecycle pulse_brief graph_health telegram_health; do
+          [ -f "$CTX_DIR/$_SEED_REQ" ] || { CTX_SEED_USED="false"; break; }
+        done
+      fi
+    fi
+  fi
+  rm -rf "$_SEED_TMP"
 fi
 
 # 1. Recent handoffs (background)
@@ -58,7 +126,7 @@ fi
     FIRST=true
     for F in "$SCRIPT_DIR/memory/quests/"*.md; do
       [ -e "$F" ] || continue
-      echo "$F" | grep -q draft && continue
+      case "$F" in *draft*) continue ;; esac
       NAME=$(basename "$F" .md)
       $FIRST || JSON="$JSON,"
       JSON="$JSON\"$NAME\""
@@ -74,8 +142,8 @@ fi
   git log --author="$AUTHOR" --format="%ar|%s" -1 2>/dev/null > "$CTX_DIR/activity" || echo "" > "$CTX_DIR/activity"
 ) &
 
-# 3b. Personal todos from graph (background)
-(
+# 3b. Personal todos from graph (background; seeded)
+[ "$CTX_SEED_USED" != "true" ] && (
   _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
   _API_KEY=$(grep '^EGREGORE_API_KEY=' "${ENV_FILE:-$SCRIPT_DIR/.env}" 2>/dev/null | cut -d'=' -f2-)
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
@@ -93,6 +161,9 @@ fi
 ) > "$CTX_DIR/todos" 2>/dev/null &
 
 # 4. Team presence — last seen + active branches (background)
+# Always live, even when seeded: its branch/file inputs are local and cheap
+# (single awk/jq passes), and stale "last seen 2m ago" lines are the most
+# user-visible form of drift. The one graph query inside rides the warm cache.
 (
   # --- Read config inside subshell ---
   _API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
@@ -101,7 +172,13 @@ fi
   # --- Graph: last-seen per person (excluding self) ---
   GRAPH_DATA="[]"
   if [ -n "$_API_URL" ] && [ -n "$_API_KEY" ]; then
-    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, toString(max(coalesce(s.startedAt, datetime(s.date)))) AS lastSeen ORDER BY lastSeen DESC"
+    # String-compare the temporals: `datetime(s.date)` is an invalid cast when
+    # s.date is a Date (Neo.ClientError.Statement.TypeError), which made this
+    # query fail silently on every boot — GRAPH_DATA stayed empty, the greeting
+    # fell back to git/file presence, and the FILE_PRESENCE scan below ran in
+    # connected mode too. ISO-8601 strings order lexicographically, so max()
+    # over toString() is correct across DateTime, Date, and legacy string rows.
+    CYPHER="MATCH (s:Session)-[:BY]->(p:Person) WHERE p.github <> \$me RETURN p.name AS name, max(coalesce(toString(s.startedAt), toString(s.date))) AS lastSeen ORDER BY lastSeen DESC"
     GRAPH_RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "$CYPHER" "$(jq -n --arg me "$AUTHOR" '{me: $me}')" 2>/dev/null || echo "")
     if [ -n "$GRAPH_RAW" ]; then
       GRAPH_DATA=$(echo "$GRAPH_RAW" | jq '[.values[] | {name: .[0], lastSeen: .[1]}]' 2>/dev/null || echo "[]")
@@ -109,19 +186,26 @@ fi
   fi
 
   # --- Git: branch tip commit dates per person (primary recency signal) ---
-  # git for-each-ref is fast and gives the actual last commit date per branch
+  # git for-each-ref is fast and gives the actual last commit date per branch.
+  # Single awk pass — the previous per-branch cut+tr loop spawned 3 processes
+  # per ref, and busy orgs carry hundreds of origin/dev/* refs. Refs arrive
+  # sorted by -committerdate, so the first epoch per author is their newest.
   GIT_COMMIT_DATA="{}"
   GIT_REF_DATA=$(git -C "$SCRIPT_DIR" for-each-ref --sort=-committerdate \
     --format='%(refname:short)|%(committerdate:unix)' refs/remotes/origin/dev/ 2>/dev/null || echo "")
   if [ -n "$GIT_REF_DATA" ]; then
-    GIT_COMMIT_DATA=$(echo "$GIT_REF_DATA" | sed 's|^origin/dev/||' | while IFS='|' read -r REF_PATH REF_EPOCH || [ -n "$REF_PATH" ]; do
-      [ -z "$REF_PATH" ] && continue
-      REF_AUTHOR=$(echo "$REF_PATH" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
-      echo "${REF_AUTHOR}|${REF_EPOCH}"
-    done | sort -t'|' -k1,1 -k2,2rn | sort -t'|' -k1,1 -u | jq -Rn '
+    GIT_COMMIT_DATA=$(printf '%s\n' "$GIT_REF_DATA" | awk -F'|' '
+      {
+        p = $1; sub(/^origin\/dev\//, "", p)
+        split(p, seg, "/"); a = tolower(seg[1])
+        if (a != "" && !(a in best)) best[a] = $2
+      }
+      END { for (a in best) printf "%s|%s\n", a, best[a] }
+    ' 2>/dev/null | jq -Rn '
       [inputs | split("|") | {(.[0]): .[1]}]
       | add // {}
     ' 2>/dev/null || echo "{}")
+    [ -z "$GIT_COMMIT_DATA" ] && GIT_COMMIT_DATA="{}"
   fi
 
   # --- Git: active dev/* branches (excluding self) ---
@@ -134,176 +218,142 @@ fi
 
   BRANCH_MAP="{}"
   if [ -n "$BRANCH_DATA" ]; then
-    BRANCH_MAP=$(echo "$BRANCH_DATA" | while IFS='/' read -r B_AUTHOR B_SLUG_REST || [ -n "$B_AUTHOR" ]; do
-      [ -z "$B_AUTHOR" ] && continue
-      B_AUTHOR_LC=$(echo "$B_AUTHOR" | tr '[:upper:]' '[:lower:]')
-      [ "$B_AUTHOR_LC" = "$SELF_LC" ] && continue
-      [ -n "$SELF_DISPLAY_LC" ] && [ "$B_AUTHOR_LC" = "$SELF_DISPLAY_LC" ] && continue
-      B_HUMAN=$(echo "$B_SLUG_REST" | tr '-' ' ')
-      echo "${B_AUTHOR_LC}|${B_HUMAN}"
-    done | jq -Rn '
-      [inputs | split("|") | {author: .[0], branch: .[1]}]
+    # Single awk pass — the previous per-branch echo+tr loop spawned 2-4
+    # processes per branch over hundreds of refs.
+    BRANCH_MAP=$(printf '%s\n' "$BRANCH_DATA" | awk -v self="$SELF_LC" -v selfd="$SELF_DISPLAY_LC" '
+      {
+        if (split($0, seg, "/") < 2) next
+        a = tolower(seg[1])
+        if (a == "" || a == self || (selfd != "" && a == selfd)) next
+        h = $0; sub(/^[^\/]*\//, "", h); gsub(/-/, " ", h)
+        printf "%s|%s\n", a, h
+      }
+    ' 2>/dev/null | jq -Rn '
+      [inputs | split("|") | {author: .[0], branch: (.[1:] | join("|"))}]
       | group_by(.author)
       | map({(.[0].author): [.[] | .branch]})
       | add // {}
     ' 2>/dev/null || echo "{}")
+    [ -z "$BRANCH_MAP" ] && BRANCH_MAP="{}"
   fi
 
   # --- Local-mode presence: scan session + wrap files for lastSeen ---
-  # When graph has no data, these files provide temporal presence information
+  # When graph has no data, these files provide temporal presence information.
+  # Single awk pass over all candidate files — the previous per-file
+  # grep+sed loop spawned 2-3 processes per file (~60 files) on every boot.
   FILE_PRESENCE="{}"
   if [ "$GRAPH_DATA" = "[]" ]; then
-    FILE_PRESENCE=$(
-      {
-        # Scan session logs, wraps, and handoffs (all use **Author**: / **Date**: format)
-        for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps" "$SCRIPT_DIR/memory/handoffs"; do
-          [ -d "$DIR" ] || continue
-          find -L "$DIR" -name '*.md' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -20 | while read -r SFILE; do
-            [ -z "$SFILE" ] && continue
-            S_AUTH=$(grep -m1 '^\*\*Author\*\*:' "$SFILE" 2>/dev/null | sed 's/^\*\*Author\*\*:[[:space:]]*//')
-            S_DATE=$(grep -m1 '^\*\*Date\*\*:' "$SFILE" 2>/dev/null | sed 's/^\*\*Date\*\*:[[:space:]]*//')
-            [ -z "$S_AUTH" ] && continue
-            echo "${S_AUTH}|${S_DATE}"
-          done
-        done
-      } | sort -t'|' -k1,1 -k2,2r | sort -t'|' -k1,1 -u | while IFS='|' read -r FP_NAME FP_DATE; do
-        [ -z "$FP_NAME" ] && continue
-        FP_LC=$(echo "$FP_NAME" | tr '[:upper:]' '[:lower:]')
-        echo "${FP_LC}|${FP_DATE}"
-      done | jq -Rn '
-        [inputs | split("|") | {(.[0]): .[1]}]
-        | add // {}
-      ' 2>/dev/null || echo "{}"
-    )
+    FP_FILES=$(for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/wraps" "$SCRIPT_DIR/memory/handoffs"; do
+      [ -d "$DIR" ] || continue
+      find -L "$DIR" -name '*.md' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -20
+    done)
+    if [ -n "$FP_FILES" ]; then
+      FILE_PRESENCE=$(printf '%s\n' "$FP_FILES" | tr '\n' '\0' | xargs -0 awk '
+        function flush() { if (a != "") printf "%s|%s\n", a, d }
+        FNR == 1 { if (NR != 1) flush(); a=""; d="" }
+        a == "" && /^\*\*Author\*\*:/ { s = $0; sub(/^\*\*Author\*\*:[ \t]*/, "", s); a = s }
+        d == "" && /^\*\*Date\*\*:/   { s = $0; sub(/^\*\*Date\*\*:[ \t]*/, "", s); d = s }
+        END { flush() }
+      ' 2>/dev/null \
+        | sort -t'|' -k1,1 -k2,2r | sort -t'|' -k1,1 -u \
+        | awk -F'|' '{ print tolower($1) "|" $2 }' \
+        | jq -Rn '
+          [inputs | split("|") | {(.[0]): .[1]}]
+          | add // {}
+        ' 2>/dev/null || echo "{}")
+      [ -z "$FILE_PRESENCE" ] && FILE_PRESENCE="{}"
+    fi
   fi
 
   # --- "Working on": latest session/handoff/wrap topic per person (file-based) ---
+  # Gives every team surface (greeting "around", dashboard) something legible in
+  # local mode, where git branches are usually empty for teammates.
+  # Single awk pass — the previous per-file grep+sed loop spawned ~6 processes
+  # per file over ~90 files on every boot.
   _WM_TAB=$(printf '\t')
-  WORK_MAP=$(
-    {
-      for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/handoffs" "$SCRIPT_DIR/memory/wraps"; do
-        [ -d "$DIR" ] || continue
-        find -L "$DIR" -name '*.md' -not -name 'index*' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -30 | while read -r WFILE; do
-          [ -z "$WFILE" ] && continue
-          W_AUTH=$(grep -m1 '^\*\*Author\*\*:' "$WFILE" 2>/dev/null | sed 's/^\*\*Author\*\*:[[:space:]]*//')
-          W_DATE=$(grep -m1 '^\*\*Date\*\*:' "$WFILE" 2>/dev/null | sed 's/^\*\*Date\*\*:[[:space:]]*//')
-          W_TOPIC=$(grep -m1 '^# ' "$WFILE" 2>/dev/null | sed 's/^#[[:space:]]*//; s/^Session:[[:space:]]*//; s/^Handoff:[[:space:]]*//; s/^Wrap:[[:space:]]*//')
-          [ -z "$W_AUTH" ] && continue
-          [ -z "$W_TOPIC" ] && continue
-          printf '%s%s%s%s%s\n' "$W_AUTH" "$_WM_TAB" "$W_DATE" "$_WM_TAB" "$W_TOPIC"
-        done
-      done
-    } | sort -t"$_WM_TAB" -k1,1 -k2,2r | sort -t"$_WM_TAB" -k1,1 -u | while IFS="$_WM_TAB" read -r WM_NAME WM_DATE WM_TOPIC; do
-      [ -z "$WM_NAME" ] && continue
-      WM_LC=$(echo "$WM_NAME" | tr '[:upper:]' '[:lower:]')
-      printf '%s%s%s\n' "$WM_LC" "$_WM_TAB" "$WM_TOPIC"
-    done | jq -Rn --arg tab "$_WM_TAB" '[inputs | split($tab) | select(length>=2) | {(.[0]): (.[1] // "")}] | add // {}' 2>/dev/null || echo "{}"
-  )
-
-  # --- Relative time + epoch helpers (cross-platform) ---
-  NOW_EPOCH=$(date +%s)
-
-  iso_to_epoch() {
-    local iso="$1"
-    local clean=$(echo "$iso" | sed 's/Z$//; s/+00:00$//; s/\.[0-9]*//')
-    [[ "$clean" != *T* ]] && clean="${clean}T00:00:00"
-    TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$clean" "+%s" 2>/dev/null || \
-      TZ=UTC date -d "$clean" +%s 2>/dev/null || echo "0"
-  }
-
-  epoch_to_relative() {
-    local epoch="$1"
-    [ "$epoch" = "0" ] && echo "--" && return
-    local delta=$(( NOW_EPOCH - epoch ))
-    if [ "$delta" -lt 60 ]; then echo "just now"
-    elif [ "$delta" -lt 3600 ]; then echo "$(( delta / 60 ))m ago"
-    elif [ "$delta" -lt 86400 ]; then echo "$(( delta / 3600 ))h ago"
-    else
-      # Calendar-day based comparison for accurate "yesterday" / "Xd ago"
-      local event_date today_date
-      event_date=$(date -r "$epoch" +%Y-%m-%d 2>/dev/null || \
-                   date -d "@$epoch" +%Y-%m-%d 2>/dev/null || echo "")
-      today_date=$(date +%Y-%m-%d)
-      if [ -z "$event_date" ] || [ "$event_date" = "$today_date" ]; then echo "today"
-      else
-        local today_e event_e
-        today_e=$(date -j -f "%Y-%m-%d" "$today_date" +%s 2>/dev/null || \
-                  date -d "$today_date" +%s 2>/dev/null || echo "$NOW_EPOCH")
-        event_e=$(date -j -f "%Y-%m-%d" "$event_date" +%s 2>/dev/null || \
-                  date -d "$event_date" +%s 2>/dev/null || echo "$epoch")
-        local days=$(( (today_e - event_e) / 86400 ))
-        [ "$days" -lt 1 ] && days=1
-        if [ "$days" -eq 1 ]; then echo "yesterday"
-        else echo "${days}d ago"
-        fi
-      fi
-    fi
-  }
-
-  # --- Merge git commits + graph + file presence + branches into presence array ---
-  ALL_NAMES=$(echo "$GRAPH_DATA" | jq -r '.[].name' 2>/dev/null || echo "")
-  FILE_NAMES=$(echo "$FILE_PRESENCE" | jq -r 'keys[]' 2>/dev/null || echo "")
-  BRANCH_NAMES=$(echo "$BRANCH_MAP" | jq -r 'keys[]' 2>/dev/null || echo "")
-  GIT_NAMES=$(echo "$GIT_COMMIT_DATA" | jq -r 'keys[]' 2>/dev/null || echo "")
-
-  UNION_NAMES=$(printf "%s\n%s\n%s\n%s" "$ALL_NAMES" "$FILE_NAMES" "$BRANCH_NAMES" "$GIT_NAMES" | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' | grep -v "^${SELF_LC}$" | grep -v "^${SELF_DISPLAY_LC}$" || echo "")
-
-  if [ -z "$UNION_NAMES" ]; then
-    echo "[]" > "$CTX_DIR/team"
-    exit 0
+  WM_FILES=$(for DIR in "$SCRIPT_DIR/memory/sessions" "$SCRIPT_DIR/memory/handoffs" "$SCRIPT_DIR/memory/wraps"; do
+    [ -d "$DIR" ] || continue
+    find -L "$DIR" -name '*.md' -not -name 'index*' -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -30
+  done)
+  WORK_MAP="{}"
+  if [ -n "$WM_FILES" ]; then
+    WORK_MAP=$(printf '%s\n' "$WM_FILES" | tr '\n' '\0' | xargs -0 awk '
+      function flush() { if (a != "" && t != "") printf "%s\t%s\t%s\n", a, d, t }
+      FNR == 1 { if (NR != 1) flush(); a=""; d=""; t="" }
+      a == "" && /^\*\*Author\*\*:/ { s = $0; sub(/^\*\*Author\*\*:[ \t]*/, "", s); a = s }
+      d == "" && /^\*\*Date\*\*:/   { s = $0; sub(/^\*\*Date\*\*:[ \t]*/, "", s); d = s }
+      t == "" && /^# / {
+        s = $0; sub(/^#[ \t]*/, "", s)
+        sub(/^Session:[ \t]*/, "", s); sub(/^Handoff:[ \t]*/, "", s); sub(/^Wrap:[ \t]*/, "", s)
+        t = s
+      }
+      END { flush() }
+    ' 2>/dev/null \
+      | sort -t"$_WM_TAB" -k1,1 -k2,2r | sort -t"$_WM_TAB" -k1,1 -u \
+      | awk -F"$_WM_TAB" '{ print tolower($1) "\t" $3 }' \
+      | jq -Rn '[inputs | split("\t") | select(length >= 2) | {(.[0]): (.[1] // "")}] | add // {}' 2>/dev/null || echo "{}")
+    [ -z "$WORK_MAP" ] && WORK_MAP="{}"
   fi
 
-  # --- Build presence JSON ---
-  PRESENCE="["
-  FIRST=true
-  for PNAME in $UNION_NAMES; do
-    # Git commit date is authoritative (actual work shipped).
-    # Graph/file presence are fallbacks only (session opens ≠ real activity).
-    GIT_EPOCH=$(echo "$GIT_COMMIT_DATA" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
-
-    LAST_SEEN_EPOCH="0"
-    if [ -n "$GIT_EPOCH" ] && [ "$GIT_EPOCH" -gt 0 ] 2>/dev/null; then
-      LAST_SEEN_EPOCH="$GIT_EPOCH"
-    else
-      # Fallback: graph session startedAt
-      GRAPH_ISO=$(echo "$GRAPH_DATA" | jq -r --arg n "$PNAME" '.[] | select((.name | ascii_downcase) == $n) | .lastSeen // empty' 2>/dev/null | head -1)
-      if [ -n "$GRAPH_ISO" ]; then
-        LAST_SEEN_EPOCH=$(iso_to_epoch "$GRAPH_ISO")
-      fi
-      # Fallback: file-based presence (local mode)
-      if [ "$LAST_SEEN_EPOCH" -le 0 ] 2>/dev/null; then
-        FILE_ISO=$(echo "$FILE_PRESENCE" | jq -r --arg n "$PNAME" '.[$n] // empty' 2>/dev/null || true)
-        if [ -n "$FILE_ISO" ]; then
-          LAST_SEEN_EPOCH=$(iso_to_epoch "$FILE_ISO")
-        fi
-      fi
-    fi
-
-    if [ "$LAST_SEEN_EPOCH" -gt 0 ] 2>/dev/null; then
-      LAST_SEEN_REL=$(epoch_to_relative "$LAST_SEEN_EPOCH")
-    else
-      LAST_SEEN_EPOCH="0"
-      LAST_SEEN_REL="--"
-    fi
-
-    BRANCHES_JSON=$(echo "$BRANCH_MAP" | jq --arg n "$PNAME" '.[$n] // []' 2>/dev/null || echo "[]")
-    BR_COUNT=$(echo "$BRANCHES_JSON" | jq 'length' 2>/dev/null || echo "0")
-    if [ "$BR_COUNT" -gt 2 ]; then
-      EXTRA=$((BR_COUNT - 2))
-      BRANCHES_JSON=$(echo "$BRANCHES_JSON" | jq --arg e "+${EXTRA} more" '[.[0:2][], $e]' 2>/dev/null || echo "$BRANCHES_JSON")
-    fi
-
-    WORK=$(echo "$WORK_MAP" | jq -r --arg n "$PNAME" '.[$n] // ""' 2>/dev/null)
-    ENTRY=$(jq -n --arg name "$PNAME" --arg seen "$LAST_SEEN_REL" --argjson sort "$LAST_SEEN_EPOCH" --argjson branches "$BRANCHES_JSON" --arg work "$WORK" \
-      '{name: $name, last_seen: $seen, last_seen_sort: $sort, branches: $branches, working_on: $work}')
-    $FIRST || PRESENCE="$PRESENCE,"
-    PRESENCE="$PRESENCE$ENTRY"
-    FIRST=false
-  done
-  PRESENCE="$PRESENCE]"
-
-  PRESENCE=$(echo "$PRESENCE" | jq 'sort_by(-.last_seen_sort)' 2>/dev/null || echo "$PRESENCE")
-  echo "$PRESENCE" > "$CTX_DIR/team"
+  # --- Merge git commits + graph + file presence + branches into presence array ---
+  # One jq pass. The previous version looped over the name union in bash,
+  # spawning ~8 jq/date processes per teammate — at 16+ teammates that was the
+  # single largest block of session-start's boot time (~5s). All epoch parsing,
+  # relative-time formatting, merging, and sorting now happens inside jq.
+  # Git commit date is authoritative (actual work shipped); graph/file presence
+  # are fallbacks only (session opens ≠ real activity).
+  NOW_EPOCH=$(date +%s)
+  PRESENCE=$(jq -nc \
+    --argjson graph "$GRAPH_DATA" \
+    --argjson git "$GIT_COMMIT_DATA" \
+    --argjson branches "$BRANCH_MAP" \
+    --argjson files "$FILE_PRESENCE" \
+    --argjson work "$WORK_MAP" \
+    --arg now "$NOW_EPOCH" --arg self "$SELF_LC" --arg selfdisp "$SELF_DISPLAY_LC" '
+    def iso2e:
+      if . == null or . == "" then 0
+      else (sub("Z$"; "") | sub("\\+00:00$"; "") | sub("\\.[0-9]+"; "")
+            | (if test("T") then . else . + "T00:00:00" end)
+            | (try (strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch 0))
+      end;
+    def day: (try strflocaltime("%Y-%m-%d") catch (gmtime | strftime("%Y-%m-%d")));
+    def rel($nowe): . as $e |
+      if $e <= 0 then "--"
+      else ($nowe - $e) as $d |
+        if $d < 60 then "just now"
+        elif $d < 3600 then "\($d / 60 | floor)m ago"
+        elif $d < 86400 then "\($d / 3600 | floor)h ago"
+        elif ($e | day) == ($nowe | day) then "today"
+        else
+          ((try (($nowe | day | strptime("%Y-%m-%d") | mktime)
+               - ($e | day | strptime("%Y-%m-%d") | mktime)) catch $d) / 86400
+           | floor | if . < 1 then 1 else . end) as $days |
+          if $days == 1 then "yesterday" else "\($days)d ago" end
+        end
+      end;
+    ($now | tonumber) as $nowe |
+    ($graph
+      | map({key: ((.name // "") | ascii_downcase), value: (.lastSeen // "")})
+      | group_by(.key)
+      | map({key: .[0].key, value: (map(.value) | max)})
+      | from_entries) as $g |
+    ([($g, $files, $branches, $git) | keys[]] | map(ascii_downcase) | unique
+      | map(select(. != "" and . != $self and . != $selfdisp))) as $names |
+    [ $names[] | . as $n |
+      (($git[$n] // "0") | (try tonumber catch 0)) as $ge |
+      (if $ge > 0 then $ge
+       else ((($g[$n] // "") | iso2e) as $gge |
+             if $gge > 0 then $gge else (($files[$n] // "") | iso2e) end)
+       end) as $epoch |
+      ($branches[$n] // []) as $b |
+      { name: $n,
+        last_seen: ($epoch | rel($nowe)),
+        last_seen_sort: $epoch,
+        branches: (if ($b | length) > 2 then ($b[0:2] + ["+\(($b | length) - 2) more"]) else $b end),
+        working_on: ($work[$n] // "") }
+    ] | sort_by(-.last_seen_sort)
+  ' 2>/dev/null || echo "[]")
+  echo "${PRESENCE:-[]}" > "$CTX_DIR/team"
 ) &
 
 # 5. Soul self-summary (background)
@@ -344,18 +394,9 @@ fi
     for AF in $ADDRESSED; do
       [ -z "$AF" ] && continue
       AF_NAME=$(basename "$AF" .md)
-      AF_AUTHOR=$(sed -n 's/^\*\*Author\*\*: *//p' "$AF" 2>/dev/null | head -1)
-      if [ -z "$AF_AUTHOR" ]; then
-        AF_AUTHOR=$(sed -n 's/^From: *//p' "$AF" 2>/dev/null | head -1)
-      fi
-      AF_TOPIC=$(sed -n 's/^# Handoff: *//p' "$AF" 2>/dev/null | head -1)
-      if [ -z "$AF_TOPIC" ]; then
-        AF_TOPIC=$(sed -n 's/^# *//p' "$AF" 2>/dev/null | head -1)
-      fi
-      AF_DATE=$(sed -n 's/^\*\*Date\*\*: *//p' "$AF" 2>/dev/null | head -1)
-      if [ -z "$AF_DATE" ]; then
-        AF_DATE=$(sed -n 's/^Date: *//p' "$AF" 2>/dev/null | head -1)
-      fi
+      AF_AUTHOR=$(eg_handoff_author "$AF")
+      AF_TOPIC=$(eg_handoff_topic "$AF")
+      AF_DATE=$(eg_handoff_date "$AF")
       # Extract repo state table if present
       AF_REPO_STATE="[]"
       AF_REPO_TABLE=$(awk '/^## Repo State/{found=1; next} found && /^#/{exit} found && /^\|[^-]/ && !/^\| Repo/{print}' "$AF" 2>/dev/null || true)
@@ -376,9 +417,14 @@ fi
       $FIRST || JSON="$JSON,"
       $FIRST || RICH="$RICH,"
       JSON="$JSON\"$AF_NAME\""
-      AF_TOPIC_ESC=$(echo "$AF_TOPIC" | sed 's/"/\\"/g')
-      AF_AUTHOR_ESC=$(echo "$AF_AUTHOR" | sed 's/"/\\"/g')
-      RICH="$RICH{\"name\":\"$AF_NAME\",\"author\":\"$AF_AUTHOR_ESC\",\"topic\":\"$AF_TOPIC_ESC\",\"date\":\"$AF_DATE\",\"repoState\":$AF_REPO_STATE}"
+      AF_ENTRY=$(jq -cn \
+        --arg name "$AF_NAME" \
+        --arg author "$AF_AUTHOR" \
+        --arg topic "$AF_TOPIC" \
+        --arg date "$AF_DATE" \
+        --argjson repoState "$AF_REPO_STATE" \
+        '{name:$name, author:$author, topic:$topic, date:$date, repoState:$repoState}' 2>/dev/null || echo "{}")
+      RICH="$RICH$AF_ENTRY"
       FIRST=false
     done
     JSON="$JSON]"
@@ -388,8 +434,56 @@ fi
   echo "$RICH" > "$CTX_DIR/addressed_rich"
 ) &
 
-# 7. Graph health (background — zero added latency, runs in parallel)
+# 6.5. Pending questions addressed to user (background)
 (
+  PENDING_JSON="[]"
+  QDIR="$SCRIPT_DIR/memory/knowledge/questions"
+  if [ -d "$QDIR" ]; then
+    # Match against the same identity variants used for handoffs (display name,
+    # github first-name, people-file name) so "to: oz" matches author "oguzhan".
+    _DISPLAY_Q=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
+    _GH_NAME_Q=$(jq -r '.github_name // empty' "$STATE_FILE" 2>/dev/null)
+    _FIRST_NAME_Q=$(echo "$_GH_NAME_Q" | awk '{print tolower($1)}')
+    _PEOPLE_FILE_Q="$SCRIPT_DIR/memory/people/$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]').md"
+    _PEOPLE_NAME_Q=""
+    [ -f "$_PEOPLE_FILE_Q" ] && _PEOPLE_NAME_Q=$(sed -n 's/^# *//p' "$_PEOPLE_FILE_Q" 2>/dev/null | head -1 | awk '{print tolower($1)}')
+
+    LINES=""
+    for QF in "$QDIR"/*.md; do
+      [ -f "$QF" ] || continue
+      Q_TO=$(sed -n 's/^to:[[:space:]]*//p' "$QF" 2>/dev/null | head -1 | tr -d '"' | tr '[:upper:]' '[:lower:]' | awk '{print $1}')
+      [ -z "$Q_TO" ] && continue
+      _MATCH="false"
+      for _V in "$AUTHOR" "$_DISPLAY_Q" "$_FIRST_NAME_Q" "$_PEOPLE_NAME_Q"; do
+        [ -z "$_V" ] && continue
+        _V_LC=$(echo "$_V" | tr '[:upper:]' '[:lower:]')
+        [ "$Q_TO" = "$_V_LC" ] && _MATCH="true" && break
+      done
+      [ "$_MATCH" = "true" ] || continue
+      Q_STATUS=$(sed -n 's/^status:[[:space:]]*//p' "$QF" 2>/dev/null | head -1 | tr -d '"')
+      [ "$Q_STATUS" = "pending" ] || continue
+      Q_FROM=$(sed -n 's/^from:[[:space:]]*//p' "$QF" 2>/dev/null | head -1 | tr -d '"')
+      Q_TOPIC=$(sed -n 's/^topic:[[:space:]]*//p' "$QF" 2>/dev/null | head -1 | tr -d '"')
+      Q_HID=$(sed -n 's/^harvest_id:[[:space:]]*//p' "$QF" 2>/dev/null | head -1 | tr -d '"')
+      Q_REL="${QF#$SCRIPT_DIR/}"
+      LINE=$(jq -nc \
+        --arg from "$Q_FROM" \
+        --arg topic "$Q_TOPIC" \
+        --arg hid "$Q_HID" \
+        --arg file "$Q_REL" \
+        '{from:$from, topic:$topic, harvest_id:$hid, file:$file}' 2>/dev/null)
+      [ -n "$LINE" ] && LINES="$LINES$LINE
+"
+    done
+    if [ -n "$LINES" ]; then
+      PENDING_JSON=$(echo "$LINES" | jq -sc '.' 2>/dev/null || echo "[]")
+    fi
+  fi
+  echo "$PENDING_JSON" > "$CTX_DIR/pending_questions"
+) &
+
+# 7. Graph health (background — zero added latency, runs in parallel; seeded)
+[ "$CTX_SEED_USED" != "true" ] && (
   if [ "$LOCAL_MODE" = "true" ]; then
     echo "skip"
   elif bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
@@ -400,18 +494,24 @@ fi
 ) > "$CTX_DIR/graph_health" 2>/dev/null &
 
 # 8. Telegram health (background)
-(
+# notify.sh test emits JSON, not prose: {"status":"ok"} connected,
+# {"status":"configured"} local, {"status":"offline"} otherwise. Match the
+# status field — an earlier grep for the word "connected" read a human sentence
+# that the consent rewrite removed, so the footer showed telegram ✗ while the
+# bot was answering.
+[ "$CTX_SEED_USED" != "true" ] && (
   if [ "$LOCAL_MODE" = "true" ]; then
     echo "skip"
-  elif bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null | grep -q "connected"; then
+  elif bash "$SCRIPT_DIR/bin/notify.sh" test 2>/dev/null \
+    | jq -e '.status == "ok" or .status == "configured"' >/dev/null 2>&1; then
     echo "ok"
   else
     echo "fail"
   fi
 ) > "$CTX_DIR/telegram_health" 2>/dev/null &
 
-# 9. Lifecycle events: merged PRs + implemented handoffs (background)
-(
+# 9. Lifecycle events: merged PRs + implemented handoffs (background; seeded)
+[ "$CTX_SEED_USED" != "true" ] && (
   GH_USER_LC=""
   if [ -f "$STATE_FILE" ]; then
     GH_USER_LC=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
@@ -446,8 +546,8 @@ fi
     '{merged_prs: $merged, implemented_handoffs: $impl}' 2>/dev/null || echo '{"merged_prs":[],"implemented_handoffs":[]}'
 ) > "$CTX_DIR/lifecycle" 2>/dev/null &
 
-# 10. Last Pulse brief (background) — gated on feature flag + API key
-(
+# 10. Last Pulse brief (background) — gated on feature flag + API key; seeded
+[ "$CTX_SEED_USED" != "true" ] && (
   PULSE_ENABLED=$(jq -r '.features.pulse // "false"' "$CONFIG" 2>/dev/null || echo "false")
   HAS_API_KEY=false
   _env_file="${ENV_FILE:-$SCRIPT_DIR/.env}"
@@ -476,6 +576,15 @@ fi
     echo '{}'
   fi
 ) > "$CTX_DIR/pulse_brief" 2>/dev/null &
+
+# 11. Momentum metrics (background)
+# Always live, even when seeded: _metrics_gather mixes graph reads (which ride
+# the warm cache) with local git/file scans — sessions, commits, handoffs,
+# knowledge — whose freshness the greeting should reflect this instant.
+(
+  source "$SCRIPT_DIR/bin/lib/metrics.sh"
+  _metrics_gather
+) > "$CTX_DIR/metrics" 2>/dev/null &
 
 # Wait for all context gathering + health checks to finish
 wait

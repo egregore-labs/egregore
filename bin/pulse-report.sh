@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Pulse Weekly Report — sends the full week's runs to Sonnet for deep synthesis,
-# then delivers the narrative assessment via Telegram.
+# saves the result, then creates a notification proposal for human approval.
 #
 # Usage: bash bin/pulse-report.sh [days=7] [recipient]
 
@@ -12,8 +12,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: pulse-report.sh [days] [recipient]"
   echo ""
   echo "Generate a weekly pulse report. Collects recent pulse runs,"
-  echo "sends them to Sonnet for deep synthesis, and delivers the"
-  echo "narrative assessment via Telegram."
+  echo "sends them to Sonnet for deep synthesis, saves the result, and"
+  echo "prepares a notification proposal. It never dispatches unattended."
   echo ""
   echo "Arguments:"
   echo "  days       Lookback period (default: 7)"
@@ -60,7 +60,7 @@ RUNS=$(jq -c "select(.timestamp >= \"$CUTOFF\")" "$PULSE_LOG" 2>/dev/null | jq -
 TOTAL=$(echo "$RUNS" | jq 'length' 2>/dev/null || echo "0")
 
 if [ "$TOTAL" -eq 0 ]; then
-  bash "$NOTIFY" send "$RECIPIENT" "Pulse report (${DAYS}d): No runs recorded yet." 2>/dev/null
+  bash "$NOTIFY" plan send "$RECIPIENT" "Pulse report (${DAYS}d): No runs recorded yet."
   exit 0
 fi
 
@@ -77,18 +77,17 @@ RESPONSE=$(curl -sf -X POST "${API_URL}/api/spirits/pulse-report" \
 REPORT=$(echo "$RESPONSE" | jq -r '.report // empty' 2>/dev/null)
 
 if [ -z "$REPORT" ]; then
-  # Fallback: send basic stats if synthesis fails
+  # Fallback: propose basic stats if synthesis fails
   STATS=$(echo "$RUNS" | jq '{
     sessions: length,
     edges: [.[].response.edges[]?] | length,
     signals: [.[].response.signals[]?] | length
   }')
-  bash "$NOTIFY" send "$RECIPIENT" "Pulse report (${DAYS}d): ${TOTAL} sessions pulsed, synthesis unavailable. Stats: $STATS" 2>/dev/null
+  bash "$NOTIFY" plan send "$RECIPIENT" "Pulse report (${DAYS}d): ${TOTAL} sessions pulsed, synthesis unavailable. Stats: $STATS"
   exit 0
 fi
 
-# --- Send via Telegram ---
-bash "$NOTIFY" send "$RECIPIENT" "$REPORT" 2>/dev/null
+# --- Show generated report ---
 echo "$REPORT"
 
 # --- Save locally ---
@@ -108,3 +107,7 @@ bash "$TELEMETRY" emit "pulse_report" \
   "$(jq -n -c --argjson runs "$TOTAL" --argjson days "$DAYS" '{runs: $runs, period_days: $days}')" 2>/dev/null &
 
 echo "Report saved to $REPORT_FILE"
+
+# Prepare only. The caller must show the exact plan and collect separate human
+# approval before using notify.sh approve + dispatch.
+bash "$NOTIFY" plan send "$RECIPIENT" "$REPORT"

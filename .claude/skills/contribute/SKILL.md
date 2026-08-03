@@ -120,7 +120,7 @@ Contributing to {UPSTREAM_REPO}
 
   Fork:   github.com/{GH_USER}/{repo_name}
   Branch: {CONTRIBUTE_BRANCH}
-  Scope:  bin/ · .claude/commands/ · CLAUDE.md · skills/
+  Scope:  bin/ · .claude/commands/ · .claude/agents/ · loom/ · CLAUDE.md · skills/
 
 Make your changes, then run /contribute submit.
 ```
@@ -146,7 +146,7 @@ CURRENT_BRANCH=$(git branch --show-current)
 **If not on a `contribute/*` branch**: Check for framework changes vs upstream:
 
 ```bash
-FRAMEWORK_CHANGES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null)
+FRAMEWORK_CHANGES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/null)
 ```
 
 - If changes exist on a non-contribute branch: offer to cherry-pick into a contribution branch
@@ -157,14 +157,14 @@ FRAMEWORK_CHANGES=$(git diff upstream/main --name-only -- bin/ .claude/commands/
 ### Step 7: Show changes for review
 
 ```bash
-DIFF_STAT=$(git diff upstream/main --stat -- bin/ .claude/commands/ CLAUDE.md skills/)
-DIFF_FILES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ CLAUDE.md skills/)
+DIFF_STAT=$(git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
+DIFF_FILES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
 ```
 
 Show the diff. Also warn about out-of-scope changes:
 
 ```bash
-NON_FRAMEWORK=$(git diff upstream/main --name-only | grep -v '^bin/' | grep -v '^\.claude/commands/' | grep -v '^CLAUDE\.md$' | grep -v '^skills/' | head -5)
+NON_FRAMEWORK=$(git diff upstream/main --name-only | grep -v '^bin/' | grep -v '^\.claude/commands/' | grep -v '^\.claude/agents/' | grep -v '^loom/' | grep -v '^CLAUDE\.md$' | grep -v '^skills/' | head -5)
 ```
 
 If non-empty:
@@ -174,7 +174,7 @@ If non-empty:
 ### Step 8: Stage framework files only
 
 ```bash
-git add bin/ .claude/commands/ CLAUDE.md skills/ 2>/dev/null
+git add bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/null
 ```
 
 If nothing staged: "No framework changes to submit." Stop.
@@ -245,7 +245,7 @@ PR_URL=$(gh pr create \
 $DESCRIPTION
 
 ### Changes
-$(git diff upstream/main --stat -- bin/ .claude/commands/ CLAUDE.md skills/)
+$(git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
 
 ---
 Contributed via \`/contribute\` from an Egregore instance.

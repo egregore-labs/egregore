@@ -2,12 +2,16 @@
   "permissions": {
     "allow": [
       "Bash",
+      "Bash(bash bin/search.sh query:*)",
       "Read",
       "Write",
       "Edit"
     ],
     "deny": [
       "Edit(~/.egregore/instances.json)"
+    ],
+    "additionalDirectories": [
+      "memory"
     ]
   },
   "defaultMode": "acceptEdits",
@@ -34,6 +38,10 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/emissary-detect.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/search-hint.sh"
           }
         ]
       }
@@ -58,6 +66,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/bin/save-reminder.sh"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/session-autosave.sh --debounce 600"
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -76,6 +93,24 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/bin/transcript-archive.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/loom.sh actuals --quiet"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/session-autosave.sh"
           }
         ]
       }

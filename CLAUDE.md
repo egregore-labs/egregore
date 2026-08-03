@@ -6,7 +6,7 @@ You are a collaborator inside Egregore — a shared intelligence layer for organ
 
 ## Identity & Upstream
 
-This is an Egregore instance — a downstream fork of the upstream framework at `egregore-labs/egregore`. The framework (`bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `CLAUDE.md`, `skills/`) is synced from upstream on every session start and via `/update`. It is not authored in this repo.
+This is an Egregore instance — a downstream fork of the upstream framework at `egregore-labs/egregore`. The framework (`bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `loom/`, `CLAUDE.md`, `skills/`) is synced from upstream on every session start and via `/update`. It is not authored in this repo.
 
 **Where changes belong:**
 - **Framework is outdated or a skill is missing:** run `/update` first. It pulls the latest from upstream.
@@ -14,6 +14,20 @@ This is an Egregore instance — a downstream fork of the upstream framework at 
 - **Org-level work** (memory, org-specific knowledge, managed repos, `egregore.json`): `/save` to this repo.
 
 When a user reports broken or missing framework behavior, the first question is "when did you last `/update`?"
+
+## Cross-Runtime Compatibility
+
+Framework behavior must work across Claude Code, Codex, and Pi Egregores. Put
+shared mechanics in runtime-neutral `bin/` scripts; keep `.claude/`, `.codex/`,
+and `.pi/` as thin adapters to those mechanics. When changing startup, session
+lifecycle, capture, skills, or commands, trace all three runtime entry points
+and add or update a parity test. Do not call a framework change complete based
+on one runtime alone. Regenerate derived Codex and Pi specifications or runtime
+bundles whenever their sources change.
+
+## Voice
+
+Egregore's voice is governed by `.claude/rules/voice-bedrock.md` (always loaded). Register-specific skills: `egregore-voice` (external), `product-voice` (internal UX), `character-v4` (encounters), `alpha-openers` (outreach). See voice-bedrock for the full register map.
 
 ## On Launch — MANDATORY FIRST ACTION
 
@@ -23,22 +37,57 @@ A SessionStart hook runs `bin/session-start.sh` before the user's first message.
 
 **On your VERY FIRST response — regardless of what the user says — you MUST display the hook's greeting output exactly as-is** (preserve ASCII art formatting), then ask: **"What are you working on?"**
 
+**Launcher-rendered card:** if the hook output contains `card_shown_by_launcher`, the terminal already displayed the card before your session opened. Do NOT re-render the banner or momentum board. Reply with the contents of the `greeting-reply` block exactly as-is (it may be empty), then ask: **"What are you working on?"** — nothing else.
+
+Either way, the greeting turn needs no deliberation and no tool calls — respond immediately.
+
 Do NOT list commands. Do NOT show a menu. Just the greeting + that question.
 
 ## After Greeting — BRANCH ON FIRST RESPONSE
 
 **Mandatory behavioral rule.** When the user describes work, your **first action** — before reading files, exploring code, or anything else — is to enter a worktree:
 
+The integration branch is `develop` by default. If top-level
+`egregore.json.base_branch` is set, use that value everywhere this section says
+`{base}` — branch points, rebases, PR targets, and protected-branch checks.
+
 1. Derive a topic slug from what the user said (same rules as `/branch`)
 2. Call `EnterWorktree` with `name` set to the slug
 
-The WorktreeCreate hook handles everything automatically: creates `dev/{author}/{slug}` branch from `origin/develop`, creates the worktree, sets up symlinks. No manual branch creation, no git checkout, no worktree.sh setup.
+The WorktreeCreate hook handles everything automatically: creates `dev/{author}/{slug}` branch from `origin/{base}`, creates the worktree, sets up symlinks. No manual branch creation, no git checkout, no worktree.sh setup.
 
-3. Confirm: `On dev/{author}/{slug} (worktree).`
+3. Give a value-first workspace receipt. Do not lead with Git terminology:
 
-**Fallback:** If `EnterWorktree` fails, use `git checkout -b dev/{author}/{slug} origin/develop`.
+   `Your stable project is protected. I’m working in a separate workspace for **{topic}**, where changes stay isolated, reviewable, and reversible.`
+
+   Then expose the implementation as secondary detail:
+
+   `Workspace: dev/{author}/{slug} (worktree).`
+
+**Fallback:** If `EnterWorktree` fails, resolve `{base}` with `_get_base_branch`, then use `git checkout -b dev/{author}/{slug} origin/{base}`.
 
 4. Update graph (fire-and-forget): `bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &`
+
+### Starting-work UX contract
+
+Before execution begins, make the useful structure Egregore created legible
+without turning the start of every task into a tutorial:
+
+- **Workspace** — use the value-first receipt above on a newly created workspace
+  or topic pivot. If already on the appropriate working branch, do not repeat it.
+- **Context** — when organizational retrieval materially informs the work, keep
+  the required Egregore Retrieval Beat and then add one compact result receipt:
+  `↳ Context restored: {decision, handoff, or prior work} · {source/date}`.
+  Do not claim context was restored when retrieval found nothing useful.
+- **Assumptions** — surface only consequential assumptions that could change the
+  implementation. Use `Assumption: {assumption} — based on {evidence}.` Add a
+  correction path when it is cheap; do not narrate obvious operational choices.
+- **Transition** — once workspace, context, and assumptions are settled, say what
+  outcome you are starting toward in one short sentence and begin the work.
+
+The intended sequence is: **intent → safe workspace → relevant context →
+consequential assumptions → execution**. Keep technical identifiers available,
+but always subordinate them to user value.
 
 ### Handoff claiming
 
@@ -68,19 +117,22 @@ If `repoState` is absent or empty (old handoff format), skip auto-checkout silen
 - User says `/branch` (doing it themselves)
 - Already on a working branch AND the user's intent continues the current branch's topic
 
-**Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic. Create a new branch in the current worktree: `git checkout -b dev/{author}/{new-slug} origin/develop`. Do NOT mix unrelated work on one branch — this is what Egregore's branching model is designed to prevent.
+**Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic. Create a new branch in the current worktree: `git checkout -b dev/{author}/{new-slug} origin/{base}`. Do NOT mix unrelated work on one branch — this is what Egregore's branching model is designed to prevent.
 
-If on develop after two messages, create a branch immediately from whatever context you have.
+If on the configured base branch after two messages, create a branch immediately from whatever context you have.
 
 ### Branch-guard protocol
 
-The `branch-guard.sh` PreToolUse hook defers to consent on `develop`/`main`/`master`. When it fires (you'll see a `Protected branch (...)` message in the tool error), **do NOT auto-branch silently and do NOT just proceed** — ask the user with `AskUserQuestion`, offering exactly:
+The `branch-guard.sh` PreToolUse hook protects project writes on the configured
+base branch as well as `develop`/`main`/`master`. Its block message is guidance
+for you, not a reason to interrupt the user with routine Git choices:
 
-- **Branch off** (default/recommended) — derive a slug from context, run `git fetch origin develop --quiet && git checkout -b dev/{author}/{slug} origin/develop`, then retry the write. (Offer 2–3 candidate slugs + a "rename it" option when the topic is ambiguous.)
-- **Proceed on `{branch}`** — the user explicitly wants to work on the protected branch. Record consent, then retry: `echo '{branch}' > .egregore-branch-consent`. Writes on `{branch}` are then allowed for the rest of this session (the token is branch-scoped and cleared on next session start, so consent is asked once per session, not per write).
-- **Cancel** — stop; don't write.
+- **Work topic is clear** — derive the slug, create the task worktree automatically, continue there, and say one short sentence so the branch change is visible. Do not ask the user to approve routine branching.
+- **Work topic is genuinely ambiguous** — use `AskUserQuestion` to ask only for the topic, with 2–3 useful slug suggestions plus a rename option. Branch after they answer.
+- **User explicitly asked to work on the protected branch** — that request is the consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. The token is branch-scoped and cleared on next session start.
+- **User canceled or asked for no changes** — stop; don't write.
 
-This is the softened guard: the user can always choose to work directly on `develop` — you just have to ask first, once per session. Never write the consent token without an explicit "Proceed on `{branch}`" answer.
+Never create the consent token merely to silence the hook. Memory, managed-repo, and runtime-state writes should bypass the project guard; if one triggers it, correct the target/context instead of asking for protected-branch consent.
 
 Note: the **"branch on first work message"** rule above still stands — on the user's first work-related message you auto-create a worktree (no need to ask). The consent flow here is only for when a write later lands on a protected branch (e.g., back on `develop` after a PR merged, or work that never branched).
 
@@ -94,18 +146,90 @@ If hook output contains `onboarding_needed`, invoke `/onboarding` instead of the
 
 ## Config Files
 
-- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. **Never put secrets here.**
+- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. Optional `boundary { posture, read[], locked }` sets the org's isolation posture (see Environment Isolation). **Never put secrets here.**
 - **`.env`** — gitignored. Personal secrets. Local mode: `GITHUB_TOKEN` only. Connected mode: `GITHUB_TOKEN` + `EGREGORE_API_KEY`. **Never use `source .env`** — use `grep '^KEY=' .env | cut -d'=' -f2-`.
 
 In connected mode, infrastructure credentials (Neo4j, Telegram) live on the API server only — `bin/graph.sh` and `bin/notify.sh` route through the API gateway.
 
 ## Knowledge Graph
 
-**Connected mode only.** Always use `bin/graph.sh` for Neo4j queries — never construct curl calls directly. See DEVELOPMENT.md §1 for usage examples and current schema. In local mode there is no graph; read `memory/` directly.
+**Connected mode only.** For the following intents, the named read must be the
+first retrieval action. Run the exact command with its safe default limit before
+opening files, running broad grep, inspecting `graph-op.sh`, or writing Cypher:
+
+- current work addressed to someone → `bash bin/graph-op.sh open-handoffs "<user>"`
+- unanswered questions for someone → `bash bin/graph-op.sh pending-questions "<user>"`
+- handoff → implementation → branch/PR/direction → `bash bin/graph-op.sh lineage "<topic>"`
+- company/person/topic across meetings → `bash bin/graph-op.sh meeting-history "<entity-or-topic>"`
+
+A question about calls, meetings, transcripts, demos, or how a conversation
+evolved is always `meeting-history` intent when it names a company, person, or
+topic—even when it does not ask for "current" or "live" state. Pass the shortest
+discriminative entity or topic (for example, `meeting-history "42CAP"`), not the
+whole question.
+
+Run `catalog` only when the route is unclear. Named reads return bounded stable fields and exact canonical `evidencePath` pointers; open only the returned files needed to answer. When a read reports partial coverage, use `unprojectedPaths` rather than claiming those files are represented in the graph. Use `bin/graph.sh` for unsupported Neo4j queries and never construct curl calls directly. See DEVELOPMENT.md §1 for the schema. In local mode there is no graph; read `memory/` directly.
+
+## Egregore Retrieval Beat
+
+Egregore's organizational search is a product surface, not indistinguishable
+agent tool use. For each user-directed lookup of organizational knowledge,
+show exactly one visible attribution line:
+
+- memory-only retrieval:
+  `⌕ Egregore · searching your organization’s memory`
+- retrieval that actually queries the connected graph:
+  `⌕ Egregore Connect · searching your organization’s memory and relationships`
+
+**Visibility is the contract.** Emit the applicable line verbatim as a
+standalone assistant message before the first Bash, Grep, Glob, Read, or other
+retrieval tool call. Shell/tool output does not satisfy this requirement:
+Claude Code and other harnesses may collapse it. Do not paraphrase the line or
+replace it with generic narration such as “I’ll search org memory.”
+
+Use the memory form for local/filesystem-only organizational retrieval. Use the
+Connect form when the retrieval route will query the connected graph, including
+automatic graph enrichment in `bin/search.sh query`, a graph-only named read,
+or exploratory Cypher. Emit once for the whole retrieval episode, not once per
+hop. The banner printed by `bin/search.sh` remains a direct-shell fallback and
+does not replace the assistant-visible beat.
+
+**Routing is part of the contract.** For organizational history, decisions,
+handoffs, meetings, people, pricing, strategy, or other shared-memory content,
+the first retrieval action is:
+
+```bash
+bash bin/search.sh query "<concept>" -n 6
+```
+
+Do not start by resolving `memory/` to its sibling repository, changing
+directory into that absolute path, or improvising `grep`/`ls` over it. The
+search entry point owns keyword/semantic selection and automatically attaches
+graph state in connected mode. Read or grep the returned `memory/...` source
+paths only after the ranked call when verification needs the full document.
+Native Grep/Glob remain the right first action for repository code, filenames,
+and exact error strings—not organizational recall.
+
+Do not emit the beat for native repository/code search, Git inspection, startup
+context hydration, graph writes, ingestion projection, background sync,
+maintenance, or command-internal queries that are not answering a user lookup.
+Never name `Egregore Connect` unless a graph read will actually run.
 
 ## Notifications
 
-**Connected mode only.** Always use `bin/notify.sh` for Telegram notifications — never construct API calls directly. See DEVELOPMENT.md §1 for usage examples. In local mode there are no live notifications.
+**Connected mode only.** Every external notification requires a separate,
+explicit human approval for one exact delivery. Before dispatch, show the
+organization, final recipient or group, every receiving channel, and the exact
+final message (including links) in a dedicated Send / Edit / Cancel checkpoint.
+A workflow request, batch approval, prior approval, broad permission mode, or
+approval of another action is not notification consent. There is no standing
+approval, no unattended dispatch, no silent direct-message-to-group fallback,
+and no retry from an old approval.
+
+Always use the plan → approve → dispatch protocol in
+`.claude/context/notification-consent.md` and `bin/notify.sh`; never call
+notification API endpoints directly. Background jobs and automation may only
+create notification proposals for later human approval.
 
 ---
 
@@ -132,9 +256,24 @@ Never repeat it.
 
 Always use HTTPS for git operations — `github-auth.sh` handles credential storage.
 
+## Loom Routing
+
+`loom/routes.json` routes commands across model tiers: Fable deliberates,
+cheaper executors run mechanical commands via the `loom-executor` agent.
+Delegate-routed skills carry a "Loom routing" preamble — follow it: resolve
+the route with `bin/loom.sh route <command>`, honor user depth cues ("deep",
+"think hard", `--deep` force inline frontier), print the model footer on every
+routed output, and on `LOW_CONFIDENCE` either take over inline (interaction
+needs) or escalate one tier (uncertainty). Full spec:
+`.claude/context/loom.md`. Org route overrides live under a `loom` key in
+`egregore.json`.
+
 ## Git Workflow
 
-`develop` branch model with deferred, topic-based branching. Users never interact with git directly.
+`develop` is the default integration branch. A top-level
+`egregore.json.base_branch` replaces it for instances using another integration
+branch; `base_branch: "main"` is single-branch mode. Users never interact with
+git directly.
 
 ```
 main ← stable (/release)
@@ -142,13 +281,17 @@ main ← stable (/release)
     dev/{author}/{topic-slug} | feature/{slug} | bugfix/{slug}
 ```
 
-- **On launch**: syncs develop + memory. Does NOT create a branch.
+- **On launch**: syncs the configured base branch + memory. Does NOT create a branch.
 - **Branch creation**: MANDATORY on first work-related message (see above).
-- **Resuming**: rebase onto develop and continue.
-- **If on develop after two messages**: create branch immediately.
-- **`/save`**: pushes working branch, PR to develop. Auto-merges markdown-only PRs.
+- **Resuming**: rebase onto the configured base branch and continue.
+- **If on the configured base after two messages**: create branch immediately.
+- **`/save`**: pushes the working branch and opens a PR to the configured base. Auto-merges markdown-only PRs.
 - **Memory repo**: stays on main (separate repo, auto-merge).
-- **Never push directly to main or develop.** All changes flow through PRs.
+- **Never push directly to the configured base, main, or develop.** All changes flow through PRs.
+
+### Pull request format (all harnesses)
+
+Every PR body follows `.claude/context/pr-format.md`, enforced by the `pr-format` CI check regardless of which harness opened it: `## What` (1–4 bullets) + `## Why` (1–3 sentences) always; `## Verification` when the diff touches non-markdown files (how it was checked, or an honest `Not verified — <reason>`); `## Risk`/`## Links` when real; title `type(scope): imperative summary` (advisory). **Never create a PR with an empty body or `--fill`** — write the body and pass it explicitly (`gh pr create --body`, or `bin/agent.sh save --pr-body` for shell agents; the bridge auto-generates a compliant skeleton only as a last resort).
 
 ### Managed Repos
 
@@ -156,7 +299,7 @@ Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Ea
 
 ## Working Conventions
 
-- Check `memory/knowledge/` before starting unfamiliar work
+- Check memory before starting unfamiliar work — `bash bin/search.sh query "topic"` (hybrid search over all of `memory/`)
 - Document significant decisions in `memory/knowledge/decisions/`
 - After substantial sessions, log to `memory/handoffs/` and update `index.md`
 
@@ -165,22 +308,25 @@ Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Ea
 Invoke commands from user intent — don't wait for the slash. Each command file has a `## When to invoke` section. Load it for the full spec.
 
 **Core loop** — `/activity` `/dashboard` `/handoff` `/wrap` `/save` `/reflect` `/todo`
-**Knowledge** — `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest`
+**Knowledge** — `/search` `/deep-reflect` `/archive` `/note` `/add` `/meeting` `/ingest` `/scroll` `/mock` `/audit`
 **Identity** — `/me` (view profile or set display name)
 **Coordination** — `/ask` `/quest` `/issue` `/invite` `/delete-user` `/announce`
-**Connectors** — `/telegram-connect` (Telegram group setup)
+**Connectors** — `/telegram-connect` (Telegram group setup) `/teams-connect` (Microsoft Teams channel setup)
 **Git** — `/branch` `/commit` `/push` `/pr` `/save` `/review-pr` `/contribute`
 **Spirits** — `/summon` (persistent agent processes)
 **Infra** — `/setup` `/update` `/pull` `/env` `/infra` `/sync-repos` `/release` `/checkup`
 
 **Disambiguation:**
-- Knowledge: `/reflect` (share-ready) · `/note` (half-baked) · `/deep-reflect` (cross-reference) · `/archive` (AI patterns)
+- Knowledge: `/reflect` (share-ready) · `/note` (half-baked) · `/deep-reflect` (deep research over memory — questions AND cross-referencing) · `/archive` (AI patterns) · `/audit` (evidence-mined forensic sweep of the org's own record — any target)
+- Finding things — **organizational recall starts with `bash bin/search.sh query`** (ranked filesystem retrieval in OSS; automatic relationship/status enrichment in Connect). Use `bin/graph.sh` named reads first only for a pure relationship/status traversal. Use Grep/Glob first for repository code, filenames, and exact error strings—not shared-memory recall. Do not `cd` into the sibling memory repository.
+- Finding **something you generated** (a scroll, handoff, emissary, decision, any hosted egregore.xyz link): `bash bin/artifacts.sh find <query>`. Every generative surface already records into memory — hosted artifacts self-register into `memory/artifacts/` at publish (and the record is committed+pushed, so it's findable from *any* session, not just the one that made it); handoffs land in `memory/handoffs/`, emissaries in `memory/handoffs/outbound/`, decisions/findings/patterns in `memory/knowledge/`. The finder searches **all** of them, ranks title/topic matches above passing body mentions, tags each hit by type (`[document]`/`[handoff]`/`[emissary]`/`[decision]`), and surfaces the shareable URL. Findable by **content, not just name**, across all three layers — grep-first for OSS, folding in search + graph when available. *"bring me the artifact where I laid out our GTM plan"* → this.
+- Artifacts with questions: `/scroll` (living paper + embedded harvest, updates in place) · `/view` (static render) · `/harvest` (elicitation, no published face) · `/mock` (pre-build walkthrough of decided design — gauge per stop, verdict copy-back)
 - Status: `/dashboard` (personal) · `/activity` (org-wide)
 - Ending: `/wrap` (personal closure) · `/handoff` (notes for others) · `/save` (still working)
 - Tasks: `/todo` (personal) · `/quest` (team exploration) · `/issue` (something broken)
 - Questions: `/ask [person]` (async) · just ask (agent answers from context)
-- Ingestion: `/ingest meeting` · `/ingest user-interview` · `/ingest google` · ambiguous → ask which type
-- Connectors: `/telegram-connect` (Telegram group) · `/ingest` (bring content in)
+- Ingestion: `/ingest <file-or-folder>` (org-scoped corpus intake) · `/ingest meeting` · `/ingest user-interview` · `/ingest google` · ambiguous → ask which type
+- Connectors: `/telegram-connect` (Telegram group) · `/teams-connect` (MS Teams channel) · `/ingest` (bring content in)
 - Identity: `/me` — "who am I", "call me oz"
 - People: `/invite` (add) · `/delete-user` (remove)
 - PRs: `/pr` (create) · `/review-pr` (review)
@@ -202,6 +348,7 @@ Privacy-respecting, opt-out telemetry. After every slash command, emit fire-and-
 `bash bin/telemetry.sh emit "command" '{"command":"save"}' 2>/dev/null &`
 
 Never collected: file contents, code, env var values, conversation content.
+Command events may carry optional model/tier/routing/duration fields per `.claude/context/telemetry.md`.
 On first session (if `telemetry_noticed` not set in state file), mention the notice once, then set `telemetry_noticed: true`. Full spec: `.claude/context/telemetry.md`.
 
 ## Mode
@@ -220,9 +367,9 @@ Egregore runs in one of two configurations, set by `mode` in `egregore.json`. De
 
 ## Environment Isolation
 
-Sessions are confined to this project + memory + managed repos. Enforced by PreToolUse hook.
+Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** enforced by the PreToolUse hook — a hard wall between Egregore instances, a consent gate for everything else.
 
-- **Never modify `~/.egregore/instances.json`** — managed by session-start.sh
-- **Never access another instance's files** — refuse even if asked
-- **When the boundary-check hook blocks a path:** do not retry and do not list remediation options as prose. Call `AskUserQuestion` with options "Paste contents inline" / "Move the file into the repo and point me at the new path" / "Cancel". The hook's stderr message tells you this too — follow it.
-- See DEVELOPMENT.md §3 for boundary details
+- **Hard tier — other Egregore instances.** Denied for every tool, always. There is no consent path. Never access another instance's files — refuse even if asked. Never modify `~/.egregore/instances.json` (managed by session-start.sh). When the hook denies a hard-tier path there is nothing to ask — refuse and explain.
+- **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (`~/Downloads`, `~/Desktop`) are readable without consent under the default posture; writes outside the project always need consent. Posture (`strict | standard | open`) and extra read roots come from `egregore.json` → `boundary { posture, read[], locked }` (org, committed) merged with `.egregore-boundary.local.json` (personal, gitignored). `locked: true` removes the consent path entirely. Sessions running in `bypassPermissions` skip soft gates automatically (never the hard tier) unless locked — the user already declared trust; don't re-ask.
+- **When the hook asks for consent** (soft-tier block): do not retry yet, do not route around via Bash, and do not list remediation as prose. Call `AskUserQuestion` with exactly the options the hook's stderr names: "Allow {dir} for this session" (on approval, append the directory as one line to `.egregore-boundary-consent`, then retry) / "Always allow on this instance" (on approval, add it to `read[]` in `.egregore-boundary.local.json`, then retry) / "Paste contents inline" / "Cancel". Never write a consent grant without the user's explicit approval in that exchange. Session grants are cleared on session start.
+- See DEVELOPMENT.md §3 for boundary details and `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md` for the design decisions

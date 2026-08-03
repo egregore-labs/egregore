@@ -11,6 +11,36 @@ Not this: terminal formatting → just format in markdown · dashboard → `/das
 
 Arguments: $ARGUMENTS (Optional: artifact type and/or name, or a file path)
 
+## Loom routing
+
+**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
+
+**Composition is the default for flagship documents — and it is main-loop-only.** Compose (do **NOT** delegate; run the **Composition path** below inline, print `bash bin/loom.sh footer view --override`, set `"override":true,"class":"composition"` in telemetry, skip the rest of this routing section) whenever **either**:
+
+- **the doc is flagship** — a `document` render that reads as a strategy / prep / board / briefing / explainer / analysis / decision doc, i.e. something meant to be *read or presented*, with multiple `##` sections. This is now the DEFAULT for such docs (the floor disappointed too many times); OR
+- an explicit cue is present — `--compose`, "compose this", "make it presentable / client-facing / flagship", "with the design trace / use the design trace / designed artifact / band 5".
+
+**Opt DOWN to the fast template floor** (which may route to the cheap tier) ONLY when: the invocation carries `--floor` / `--fast`, or the ask is a quick/utility look ("just show me", "quick look", "rough render"), or the target is short/non-flagship (a stub, a single-section note), or it's a **typed** artifact (quest / handoff / activity / board / network — those keep their own templates and are not affected by this default). Composition is a frontier-authoring act; a cheap executor can only produce the floor.
+
+1. Resolve: `ROUTE=$(bash bin/loom.sh route view)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
+2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer view --override` after the output and set `"override":true` in telemetry.
+3. Otherwise delegate: spawn the Agent tool with `subagent_type:
+   "loom-executor"`, `model` = the route's `tier`, prompt =
+   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
+   `LOOM-EXECUTOR: Execute .claude/skills/view/SKILL.md`, plus the user's
+   arguments and any context the spec needs from the session. Print the
+   executor's final output **verbatim**, then print the output of
+   `bash bin/loom.sh footer view`.
+4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
+   triage the reason: needs-user-interaction or a main-loop-only tool → take
+   over and finish this skill inline (no escalation); genuine uncertainty or
+   failure → reassign `ROUTE=$(bash bin/loom.sh escalate view "<reason>")`,
+   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
+   carrying the returned decision ID
+   (sticky for this session).
+5. Telemetry (fire-and-forget):
+   `bash bin/telemetry.sh emit "command" '{"command":"view","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+
 ## Supported artifact types
 
 - `quest` — renders quest markdown from `memory/quests/`
@@ -67,19 +97,147 @@ find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort 
 
 ### 3. Generate and open
 
+**Resolve the renderer first — prefer the in-repo CLI.** Running repo code avoids
+fetching an external npm package (which permission classifiers flag) and exercises
+local edits to `packages/egregore-artifacts` without waiting for an npm release:
+
+```bash
+RENDER="npx egregore-artifacts@latest"
+if [ -f packages/egregore-artifacts/bin/cli.js ] && [ -d packages/egregore-artifacts/node_modules/react ]; then
+  RENDER="node packages/egregore-artifacts/bin/cli.js"
+fi
+```
+
+(If the local package exists but deps are missing, either run
+`npm install --prefix packages/egregore-artifacts` or fall back to npx.)
+
+**Design trace (documents).** A `document` render should follow the design
+trace, not ship bare: auto-walk the UGI synthesis graph from the document's
+substance (five stage ids — objective · audience · register · palette ·
+grammar; option ids and auto-walk rules in
+`packages/design-system/generative-ui/skill/SKILL.md`), resolve the brief, and
+pass it to the renderer:
+
+```bash
+node --input-type=module -e "
+import { resolveBrief } from './packages/design-system/generative-ui/resolve-brief.js';
+import fs from 'node:fs';
+fs.mkdirSync('/tmp/egregore-artifacts', { recursive: true });
+fs.writeFileSync('/tmp/egregore-artifacts/brief-{slug}.json',
+  JSON.stringify(resolveBrief(['{objective}','{audience}','{register}','{palette}','{grammar}'])));
+"
+$RENDER document <file> --brief /tmp/egregore-artifacts/brief-{slug}.json
+```
+
+Pick the five ids from the substance, one line of judgment each (e.g. a
+strategy prep doc → decide · operators · editorial · vellum · decisive; a
+public explainer → persuade · newcomer · marketing · loam · quiet). The brief
+drives palette + grammar treatment; the designed layout (nav · hero · anchored
+sections) renders regardless. If the generative-ui layer is unavailable
+(pure-npx environment, no repo checkout), render without `--brief` — never
+block on the trace.
+
+### Composition path (`--compose`) — band 5, main-loop only
+
+The template above is the **floor**. `--compose` is the **ceiling**: the design
+trace at full depth means COMPOSITION, not pass-through (D6 free-generative band
+— how the reference pages were made). The template renderer can never reach it;
+composition is the frontier model authoring the page from the substance. This
+path is what makes that reachable from the command instead of only by accident.
+
+**This is the DEFAULT for flagship documents** (strategy / prep / board /
+briefing / explainer / analysis / decision docs — see the Loom-routing rule
+above). It also fires on explicit cues: `--compose`, "compose / make it
+presentable / client-facing / flagship / with the design trace / use the design
+trace / designed artifact / band 5". **When the user names "the design trace,"
+they mean this composed ceiling — never the floor.** Opt DOWN to the fast
+template floor below only for quick/utility looks or `--floor`/`--fast` (again,
+see the routing rule). The floor is what disappoints when someone wanted the
+trace — so when unsure whether a document is flagship, compose.
+
+**Technical documents compose too — in a different register.** A spec, RFC,
+protocol, architecture doc, API reference, evaluation report, or postmortem is
+flagship and gets the full chrome, but it does **not** get editorial voice. See
+step 4 below: the register decision comes before any content is written, and
+picking wrong is the single most common way a composed render lands badly.
+
+**Procedure (run inline — never delegate; see the compose note in Loom routing):**
+
+1. Read the source document in full.
+2. Start from the scaffold: `.claude/skills/view/compose-scaffold.html` (copy it;
+   it carries the complete Meridian chrome — vellum/nocturne/loam tokens, fonts,
+   sticky nav, theme toggle, contours — and a documented component kit). You fill
+   content; you do **not** rebuild the chrome or re-pick colors.
+3. Walk the UGI graph for the register/palette/grammar (as above) and stamp the
+   manifest `register`/`grammar` + the footer trail. Pick the palette by
+   substance: vellum (strategy/decision), loam (warm/instructional), etc.
+4. **Decide the register FIRST — editorial or technical.** This governs every
+   sentence you then write, and it is not a style preference; it is what the
+   document *is*. Ask: does a reader come here to be *persuaded of a view*, or
+   to *look something up and implement it*?
+
+   | | **Editorial** | **Technical** |
+   |---|---|---|
+   | Documents | strategy · prep · briefing · explainer · analysis · narrative recap · pitch | spec · RFC · protocol · architecture · API reference · evaluation report · runbook · postmortem |
+   | Headings | **statement titles** — the section's *finding* as display copy ("Most of the zoom-out is already decided.") | **descriptive, numbered** — the section's *name* ("3.3 Toponym and cultivar collision") |
+   | Hero | two-tone `Lead. <em>accent phrase</em>` + italic standfirst | plain title + a `.meta` grid (version · date · author · depends-on) |
+   | Prose | argues, lands a point, carries voice | states, qualifies, cites; declarative and neutral |
+   | Opens with | the claim | Abstract, then Scope |
+   | Decisions | `.hl` / `.readout` — the thing to land | explicit `Decision:` blocks, individually citable |
+   | Tables | `.sumtable`, status matrices | numbered with `<caption>` ("Table 2 — …") so prose can reference them |
+   | Never | bury the finding in a neutral heading | editorialize a heading, or assert without the measurement behind it |
+
+   Signals for technical: numbered sections, a version field, "spec"/"protocol"/
+   "requirements" in the title, code blocks carrying invocations, tables of
+   measurements, a References section. **When the document is something someone
+   will implement from, choose technical.** Editorial voice on a spec reads as
+   unserious and buries the lookup value — that is the failure mode this table
+   exists to prevent.
+
+   Stamp the choice into the manifest `register` and the footer trail
+   (`editorial` / `technical`, with a matching grammar such as `decisive` or
+   `specification`).
+
+5. **Transform, don't mirror** — in the chosen register. Never reproduce the
+   markdown structure verbatim; pick a component per section from the kit by
+   what the content *is*:
+   - `.ledger` for Q→A pairs · `.tagcard` for named claims · `.claims` for
+     numbers/stats · `.panels`+`.verdict-band` for option sets · `.hl` for the
+     one thing to land · `.steps` for sequences · `.feat` for capability+status
+     rows · `.threads` for decision lists · `.gap` for negatives · `.sumtable`
+     with `.dot`s for a status matrix · `.readout` for the honest bottom line
+   - technical renders lean on captioned tables, `Decision:` blocks, numbered
+     rationale lists, and `.note`/`.note.caution` for limitations and hazards;
+     they use `.hl`/`.readout` sparingly and never as a substitute for a heading
+   - **transformation in technical register means structure, not voice** — split
+     prose into tables, number the rationale, surface the decisions; do not
+     rewrite the author's claims into slogans
+   - nav links: one per composed section, to its `id` anchor
+6. **Never inline a hex in content** — every theme-sensitive color is a
+   `var(--token)`, or the toggle breaks dark mode. The kit already obeys this.
+   Verify before opening: every `var(--x)` used must be defined in **both**
+   `[data-theme="vellum"]` and `[data-theme="nocturne"]`, or dark mode breaks
+   silently on that element.
+7. Write to `/tmp/egregore-artifacts/composed-{slug}.html` and open directly
+   (`open <path>`), then report the path + `Renderer: composed (band 5, inline)`.
+
+Composition is judgment, not a script — the scaffold is the vocabulary, the
+substance decides the sentence. When `--compose` is absent, use the fast
+template path below.
+
 For typed artifacts with a file:
 ```bash
-npx egregore-artifacts@latest <type> <resolved-file-path>
+$RENDER <type> <resolved-file-path>
 ```
 
 For auto-detected (just a file path):
 ```bash
-npx egregore-artifacts@latest <resolved-file-path>
+$RENDER <resolved-file-path>
 ```
 
 For activity (no file):
 ```bash
-npx egregore-artifacts@latest activity
+$RENDER activity
 ```
 
 **For board (connected mode only — publish to stable URL):**
@@ -118,7 +276,8 @@ Read `org_slug` from `egregore.json`.
 
 ## Fallback
 
-If `npx egregore-artifacts` fails (not installed), install it first:
+If the local CLI is unavailable and `npx egregore-artifacts` fails (not installed),
+install it first:
 ```bash
 npm install -g egregore-artifacts
 ```
@@ -141,7 +300,7 @@ When the input is a prompt or topic rather than a file name — or when file res
 
 1. **Read relevant files** — search memory/, codebase, and conversation context for material matching the prompt. Read as many files as needed.
 2. **Write a temporary markdown file** — synthesize the findings into a well-structured document at `/tmp/egregore-artifacts/synthesized-{slug}.md`. Use headings, lists, code blocks — the renderer handles all standard markdown.
-3. **Render it** — `npx egregore-artifacts@latest document /tmp/egregore-artifacts/synthesized-{slug}.md`
+3. **Render it** — `$RENDER document /tmp/egregore-artifacts/synthesized-{slug}.md` (renderer resolved as in §3)
 4. **Report** — same as normal: `✓ Artifact opened in browser`
 
 This is the default fallback — don't ask the user if they want synthesis. If `/view auth architecture` doesn't match a file, just do the research and render it.

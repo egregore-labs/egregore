@@ -25,35 +25,71 @@ _config_val() {
   fi
 }
 
-# Get base branch for a repo. Reads base_branch from egregore.json repos[] config.
-# Defaults to "develop" for backwards compatibility (existing egregores use develop).
-# Only returns something other than "develop" when base_branch is explicitly set
-# (e.g., for teams who added existing repos with a different default branch).
+# Get base branch for a repo. Reads base_branch from egregore.json — top-level
+# for the core egregore repo, per-entry under repos[] for managed repos.
+# Defaults to "develop" for backwards compatibility only when a valid config
+# omits the setting. Missing, unreadable, malformed, or invalid config fails:
+# callers must never turn a config read failure into a remote branch mutation.
+#
+# Setting a top-level "base_branch": "main" is single-branch mode: the whole
+# develop layer disappears and everything (session start, sync, the branch
+# guard, PR bases) targets main instead. Solo operators who never wanted the
+# develop/main split had no way to say so — the core repo used to be hardcoded
+# even though managed repos were already configurable.
+#
 # Usage: _get_base_branch "repo-name"   (omit for core repo)
 _get_base_branch() {
   local repo_name="${1:-}"
   local config="${CONFIG:-$SCRIPT_DIR/egregore.json}"
+  local base=""
 
-  # Core egregore repo — always develop
-  if [ -z "$repo_name" ]; then
-    echo "develop"
-    return
+  if [ ! -r "$config" ]; then
+    echo "config: cannot read $config" >&2
+    return 1
+  fi
+  if ! jq -e 'type == "object"' "$config" >/dev/null 2>&1; then
+    echo "config: invalid JSON object in $config" >&2
+    return 1
   fi
 
-  # Managed repo — check egregore.json for explicit base_branch
-  if [ -f "$config" ]; then
-    local base
-    base=$(jq -r --arg name "$repo_name" \
-      '(.repos[]? // empty) | select((if type == "object" then .name else . end) == $name) | if type == "object" then .base_branch // empty else empty end' \
-      "$config" 2>/dev/null || true)
-    if [ -n "$base" ]; then
-      echo "$base"
-      return
+  if [ -z "$repo_name" ]; then
+    # Core egregore repo — top-level base_branch. An absent value preserves
+    # the historical develop default; an explicitly invalid value is an error.
+    if jq -e 'has("base_branch")' "$config" >/dev/null 2>&1; then
+      if ! base=$(jq -er '.base_branch | select(type == "string")' "$config" 2>/dev/null); then
+        echo "config: base_branch must be a valid branch name" >&2
+        return 1
+      fi
+    else
+      base="develop"
+    fi
+  else
+    # Managed repo — its own entry under repos[]. Unknown/string-form entries
+    # retain the historical develop default.
+    local repo_json
+    repo_json=$(jq -c --arg name "$repo_name" \
+      'first(.repos[]? | select((if type == "object" then .name else . end) == $name)) // null' \
+      "$config" 2>/dev/null) || {
+        echo "config: cannot resolve managed repo $repo_name" >&2
+        return 1
+      }
+    if [ "$repo_json" != "null" ] \
+       && [ "$(printf '%s' "$repo_json" | jq -r 'type')" = "object" ] \
+       && printf '%s' "$repo_json" | jq -e 'has("base_branch")' >/dev/null 2>&1; then
+      if ! base=$(printf '%s' "$repo_json" | jq -er '.base_branch | select(type == "string")' 2>/dev/null); then
+        echo "config: base_branch for $repo_name must be a valid branch name" >&2
+        return 1
+      fi
+    else
+      base="develop"
     fi
   fi
 
-  # No explicit config — default to develop (backwards compatible)
-  echo "develop"
+  if [ -z "$base" ] || ! git check-ref-format --branch "$base" >/dev/null 2>&1; then
+    echo "config: base_branch must be a valid branch name" >&2
+    return 1
+  fi
+  echo "$base"
 }
 
 # Detect local vs connected mode

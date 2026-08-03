@@ -41,6 +41,20 @@ During VERIFY, check `api_url` from `egregore.json`. Store for entire flow.
 
 Read `.egregore-state.json`. If `onboarding.phase` exists and `onboarding_complete` is false, resume from that phase. Do NOT restart from VERIFY.
 
+**Installer short-circuit contract:** Before asking name or offering invites, read these state keys:
+- `.onboarding_complete`
+- `.onboarding.installer_captured`
+- `.onboarding.invite_handled_by`
+- `.profile_fields_collected`
+- `.display_name`
+- `.member_role`
+
+If `.onboarding_complete` is true and `.profile_fields_collected` contains both `name` and `role`, do not run onboarding and do not ask setup questions again. Say: "You're already set up. What are you working on?"
+
+If `.onboarding_complete` is true but `role` is missing from `.profile_fields_collected`, ask only the role question, write `.member_role`, append `role` to `.profile_fields_collected`, update `memory/people/{github_username}.md`, then continue to "What are you working on?" Do not ask name, invite, Telegram, runtime, or workspace setup again.
+
+If `.onboarding.installer_captured` is true, `.display_name` is non-empty, and `.profile_fields_collected` contains `name`, do not ask for the user's name again. If `.onboarding.invite_handled_by` is `installer`, do not offer the invite step again; continue with save/handoff teaching.
+
 **Migration from old state machines:** If phase is `welcome`, `harvest_identity`, `harvest_connection`, `consent`, or `first_todo`:
 ```bash
 PHASE=$(jq -r '.onboarding.phase // empty' .egregore-state.json 2>/dev/null)
@@ -159,7 +173,10 @@ jq -r '.display_name' .egregore-state.json 2>/dev/null
 ```
 Must return the chosen name. If not, retry.
 
-**API calls (connected mode only):** `POST /api/user/ensure` with github_username, display_name
+**Identity sync — MANDATORY:** run `bash bin/person.sh sync`. This writes the
+preferred name to the canonical person profile and, in connected mode, projects
+the same identity to Supabase and the graph. Do not call `/api/user/ensure` or
+write Person Cypher separately.
 
 **Exit:** → INVITE
 
@@ -247,12 +264,14 @@ jq --argjson skip "$INVITE_SKIPPED" \
   .egregore-state.json > .egregore-state.tmp && mv .egregore-state.tmp .egregore-state.json
 ```
 
-**Joiner fast-track:** If `usage_type == "joiner_group"`, run the Completion Actions (steps 1-8 below in FIRST_HANDOFF) **now**, with these adaptations:
+**Joiner fast-track:** If `usage_type == "joiner_group"`, run the Completion Actions below in FIRST_HANDOFF **now**, with these adaptations:
 
 - Skip the FIRST_HANDOFF interception message (no session-end narrative — the joiner hasn't done work yet; we're just establishing their profile).
-- **Step 1 (person file):** if `memory/people/{github_username}.md` exists as an invite stub (YAML frontmatter only — no `Onboarded:` witness), REPLACE it with the markdown witness format (`# {display_name}` + `GitHub:` + `Joined:` + `Onboarded:` timestamp). Otherwise create fresh using the same template.
-- **Step 6 (flip flag):** write `onboarding_complete = true`, `phase = "complete"`, `completed_at`.
-- Steps 2, 3, 4, 5, 7, 8: same as FIRST_HANDOFF.
+- **Step 1:** `bin/person.sh onboard` upgrades an invite stub into the canonical
+  identity profile while preserving its earlier joined date and any body.
+- **Step 4 (flip flag):** write `onboarding_complete = true`,
+  `phase = "complete"`, `completed_at`.
+- All other steps are unchanged.
 
 Rationale: joiners don't need to "prove the loop" — the Egregore is already established and the inviter already did. Making joiners run `/handoff` before they can Edit/Write traps every first-time invitee (hook blocks all Edit/Write/EnterWorktree while `onboarding_complete` is false). The joiner's `intent answer` above is their onboarding signal; that's enough.
 
@@ -309,21 +328,23 @@ your handoff in /activity, ready to pick up. Run /invite
 anytime to bring someone in.
 ```
 
-**Completion actions (steps 1-5 in parallel, gate on verification before 6-8):**
+**Completion actions (steps 1-3, gate on verification before 4-6):**
 
 **Completion witness:** The `Onboarded:` line in step 1 is what `bin/session-start.sh` auto-heal greps for if a state write is ever dropped. Write it exactly once, only here, as part of the person file template. Case-sensitive — do not rename, lowercase, or move into frontmatter.
 
 Auto-heal also accepts a back-compat witness: any person file whose first line starts with `# ` (markdown H1). This grandfathers pre-PR-544 users whose person files predate the explicit witness. Invite stubs (which use `---` YAML frontmatter) do not match either witness, so they cannot accidentally short-circuit onboarding.
 
-### 1. Create person file in memory
+### 1. Complete and reconcile the person identity
 ```bash
-cat > "memory/people/{github_username}.md" << EOF
-# {display_name}
-GitHub: {github_username}
-Joined: {YYYY-MM-DD}
-Onboarded: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF
+bash bin/person.sh onboard
 ```
+
+This is the only identity write. It creates or updates
+`memory/people/{github_username}.md`, records the immutable GitHub numeric id
+when available, preferred name, GitHub login/aliases, explicitly supplied
+emails, and the `Onboarded:` witness. In connected mode it reconciles the same
+person into Supabase and Neo4j and moves known relationships off duplicate
+Person nodes.
 
 ### 2. Update egregore.md Members section
 Append after `## Members`:
@@ -335,41 +356,6 @@ Joined {YYYY-MM-DD}.
 ### 3. Commit + push memory
 ```bash
 cd memory && git add -A && git commit -m "Add {github_username}" && git push origin main && cd -
-```
-
-### 4. MERGE Person node (connected mode only)
-
-Two-step to handle name uniqueness across orgs:
-```bash
-# Step 1: Check if name is taken by a different person
-bash bin/graph.sh query \
-  "OPTIONAL MATCH (existing:Person {name: \$name})
-   WHERE existing.github <> \$github
-   RETURN existing IS NOT NULL AS taken" \
-  '{"name":"...","github":"..."}'
-```
-If `taken` → append github username: `"{display_name} ({github_username})"`
-
-```bash
-# Step 2: MERGE the person node
-bash bin/graph.sh query \
-  "MERGE (p:Person {github: \$github})
-   ON CREATE SET p.name = \$name, p.fullName = \$fullName, p.joined = date()
-   ON MATCH SET p.name = \$name
-   WITH p MATCH (o:Org {id: \$_org}) MERGE (p)-[:MEMBER_OF]->(o)
-   RETURN p.name" \
-  '{"github":"...","name":"...","fullName":"..."}'
-```
-Note: `$_org` is auto-injected by the API from the API key — do NOT pass it as a parameter.
-
-### 5. Sync to Supabase (connected mode only)
-```bash
-API_URL="$(jq -r '.api_url // empty' egregore.json)"
-API_KEY="$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)"
-curl -sf "${API_URL}/api/user/ensure" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"github_username":"...","display_name":"..."}' 2>/dev/null
 ```
 
 **Verification gate (after steps 1-3):**
@@ -386,7 +372,7 @@ The gate checks the `Onboarded:` witness specifically — not `GitHub:` — beca
 - `people_file:ok` → proceed to steps 6-8
 - `people_file:missing` → set `phase = "invite"`. Tell user: "Almost done, but your profile didn't save. Try `/handoff` again next session."
 
-### 6. Update state
+### 4. Update state
 ```bash
 jq --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '.onboarding_complete = true
@@ -403,12 +389,12 @@ jq -r '.onboarding_complete' .egregore-state.json 2>/dev/null
 ```
 Must return `true`. If not, retry the write.
 
-### 7. Shell alias
+### 5. Shell alias
 ```bash
 ALIAS_NAME=$(bash bin/ensure-shell-function.sh)
 ```
 
-### 8. Telemetry
+### 6. Telemetry
 ```bash
 TYPE=$(jq -r '.usage_type // "joiner_group"' .egregore-state.json 2>/dev/null)
 bash bin/telemetry.sh emit "onboarding_complete" "{\"type\":\"$TYPE\"}" 2>/dev/null &
@@ -452,7 +438,7 @@ If field not in list → ask inline. After collecting → append to array, updat
 | Local mode | Skip all graph/API silently. Memory files are the canonical record. |
 | Terminal closes mid-onboarding | Resume from saved phase on next session. Collected data preserved. |
 | `egregore.md` missing | Use generic text: "Welcome to {org_name}." Skip narration. |
-| People file already exists (invite stub) | Overwrite with full profile. Preserve `Joined` date from stub if earlier. |
+| People file already exists (invite stub) | `bin/person.sh onboard` upgrades it and preserves the earlier `Joined` date/body. |
 | `/save` during INVITE phase | Run normal save, then check if session-end → trigger FIRST_HANDOFF. If continuing → stay in INVITE. |
 | Invite fails (permissions, network) | Show error, continue to save/handoff teaching. Don't block onboarding on invite failure. |
 | User invites multiple people | Allow — run `/invite` for each username. No limit during onboarding. |

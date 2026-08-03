@@ -1,4 +1,0 @@
-interface:
-  display_name: "Egregore Scroll"
-  short_description: "Compose and tend a living design paper"
-  default_prompt: "Use $scroll to turn this design into a living paper with an embedded decision harvest."

@@ -10,7 +10,8 @@ Arguments: $ARGUMENTS (none expected)
 - "notification setup", "set up notifications"
 
 **Disambiguation:**
-- "send a message on telegram" → NOT this — use `bin/notify.sh send`
+- "send a message on telegram" → NOT this — use the separate notification
+  consent protocol in `.claude/context/notification-consent.md`
 - "announce something" → NOT this — use `/announce`
 
 ## Step 1: Check current state
@@ -73,17 +74,21 @@ Read `.egregore-state.json`, add `telegram_chat_id` and `telegram_group_link` fi
 
 **Important:** Write to `.egregore-state.json`, NOT `egregore.json`. The state file is symlinked across worktrees so the config propagates everywhere. No branch, commit, or push is needed — it's an untracked local file.
 
-Test the connection:
+Offer an optional test through the separate exact notification consent flow in
+`.claude/context/notification-consent.md`. Saving the Telegram configuration is
+not consent to send. Prepare without sending:
 ```bash
-bash bin/notify.sh group "Telegram connected! 🎉" 2>/dev/null
+PLAN_JSON=$(bash bin/notify.sh plan group "Telegram connected! 🎉")
 ```
 
-If successful, show:
+Show the organization, group/channel, and exact message in a dedicated Send /
+Edit / Cancel checkpoint. If approved and dispatched, show:
 ```
 Telegram connected — test message sent to your group.
 ```
 
-If failed, show the error and suggest checking the chat ID.
+If cancelled, show `Telegram connected — no test message sent.` If planning or
+dispatch fails, show the error and suggest checking the chat ID.
 
 ## Step 4: Telemetry
 

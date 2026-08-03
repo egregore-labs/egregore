@@ -98,6 +98,13 @@ _resolve_org() {
   fi
 }
 
+_resolve_proj_hash() {
+  # Use git common dir so worktrees hash to the same path as the main checkout
+  local repo_root
+  repo_root=$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||') || repo_root="$SCRIPT_DIR"
+  echo -n "$repo_root" | md5 2>/dev/null || echo -n "$repo_root" | md5sum 2>/dev/null | cut -d' ' -f1
+}
+
 _resolve_session_id() {
   if [ -n "${EGREGORE_SESSION_ID:-}" ]; then
     echo "$EGREGORE_SESSION_ID"
@@ -106,16 +113,52 @@ _resolve_session_id() {
 
   # Fallback: read from file written by session-start.sh
   # (env vars from hooks don't propagate into the Claude Code agent)
-  # Use git common dir so worktrees hash to the same path as the main checkout
-  local repo_root
-  repo_root=$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||') || repo_root="$SCRIPT_DIR"
   local proj_hash
-  proj_hash=$(echo -n "$repo_root" | md5 2>/dev/null || echo -n "$repo_root" | md5sum 2>/dev/null | cut -d' ' -f1)
+  proj_hash=$(_resolve_proj_hash)
   local sid_file="$HOME/.egregore/session-${proj_hash}.id"
   if [ -f "$sid_file" ]; then
     cat "$sid_file" 2>/dev/null || echo "unknown"
   else
     echo "unknown"
+  fi
+}
+
+_resolve_model() {
+  local proj_hash
+  proj_hash=$(_resolve_proj_hash)
+  local model_file="$HOME/.egregore/session-model-${proj_hash}"
+  if [ ! -s "$model_file" ]; then
+    return 0
+  fi
+
+  local model=""
+  IFS= read -r model < "$model_file" || true
+  if [ -n "$model" ]; then
+    printf '%s\n' "$model"
+  fi
+}
+
+_stamp_model_if_absent() {
+  local compact_data="$1"
+  local has_model=""
+  has_model=$(printf '%s' "$compact_data" | jq -e 'has("model")' 2>/dev/null || true)
+  if [ "$has_model" != "false" ]; then
+    printf '%s' "$compact_data"
+    return 0
+  fi
+
+  local model=""
+  model=$(_resolve_model 2>/dev/null || true)
+  if [ -z "$model" ]; then
+    printf '%s' "$compact_data"
+    return 0
+  fi
+
+  local stamped_data=""
+  if stamped_data=$(printf '%s' "$compact_data" | jq -c --arg m "$model" 'if has("model") then . else . + {model:$m} end' 2>/dev/null); then
+    printf '%s' "$stamped_data"
+  else
+    printf '%s' "$compact_data"
   fi
 }
 
@@ -129,12 +172,15 @@ cmd_emit() {
     return 0
   fi
 
+  local ts
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # Compact data to single line — callers may pass pretty-printed JSON
+  local compact_data
+  compact_data=$(printf '%s' "$data" | tr -d '\n' | tr -s ' ')
+  compact_data=$(_stamp_model_if_absent "$compact_data")
+
   # Debug mode: print to stderr instead of writing
   if _is_debug; then
-    local ts
-    ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    local compact_data
-    compact_data=$(printf '%s' "$data" | tr -d '\n' | tr -s ' ')
     printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}\n' \
       "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$compact_data" >&2
     return 0
@@ -144,11 +190,6 @@ cmd_emit() {
   mkdir -p "$BUFFER_DIR"
 
   # Build event line (outside lock for minimal hold time)
-  local ts
-  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  # Compact data to single line — callers may pass pretty-printed JSON
-  local compact_data
-  compact_data=$(printf '%s' "$data" | tr -d '\n' | tr -s ' ')
   local line
   line=$(printf '{"ts":"%s","type":"%s","sid":"%s","org":"%s","user":"%s","data":%s}' \
     "$ts" "$event_type" "$(_resolve_session_id)" "$(_resolve_org)" "$(_resolve_user)" "$compact_data")

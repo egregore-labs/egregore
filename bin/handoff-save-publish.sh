@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# handoff-save-publish.sh — parallelise memory push + artifact publish; detach notify + PR backfill.
+# handoff-save-publish.sh — parallelise memory push + artifact publish; detach PR backfill.
 #
 # Used by the /handoff skill. Moves the parallel/background plumbing out of
 # SKILL.md so the skill stays declarative.
@@ -14,8 +14,10 @@
 #   Both run in parallel subshells; wall-clock = max(push, publish).
 #
 # Background (detached, survives session exit):
-#   - notify.sh send $RECIPIENT $MESSAGE (if recipient set)
 #   - PR-number backfill into the handoff file's ## Repo State table (cosmetic)
+#
+# Notifications are intentionally absent. A detached process cannot obtain
+# separate human consent for an exact external delivery.
 #
 # Exit code 0 on foreground success. Prints ARTIFACT_URL to stdout on success.
 
@@ -27,11 +29,10 @@ AUTHOR="${3:-}"
 DESCRIPTION="${4:-}"
 shift 4 2>/dev/null || true
 
-RECIPIENT=""
 REPO_STATE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --recipient) RECIPIENT="$2"; shift 2;;
+    --recipient) shift 2;; # retained for caller compatibility; never notified here
     --repo-state-section) REPO_STATE="$2"; shift 2;;
     *) shift;;
   esac
@@ -74,29 +75,8 @@ wait "$SAVE_PID" "$PUB_PID"
 ARTIFACT_URL=$(tail -1 "$PUB_OUT" 2>/dev/null | tr -d '[:space:]')
 echo "$ARTIFACT_URL"
 
-# --- Background, detached: notify + PR backfill ---
+# --- Background, detached: PR backfill only ---
 # `( cmd & ) >/dev/null 2>&1` reparents to init so these survive session exit.
-
-if [ -n "$RECIPIENT" ]; then
-  MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  if [ -n "$ARTIFACT_URL" ]; then
-    MSG="Handoff from $AUTHOR: $TOPIC
-
-$DESCRIPTION
-
-View: $ARTIFACT_URL"
-  else
-    MSG="Handoff from $AUTHOR: $TOPIC
-
-$DESCRIPTION"
-  fi
-
-  if [ "$MODE" = "local" ]; then
-    ( bash "$SCRIPT_DIR/bin/notify.sh" group "$MSG" >/dev/null 2>&1 & ) >/dev/null 2>&1
-  else
-    ( bash "$SCRIPT_DIR/bin/notify.sh" send "$RECIPIENT" "$MSG" >/dev/null 2>&1 & ) >/dev/null 2>&1
-  fi
-fi
 
 # PR-number backfill (connected mode only; requires gh auth).
 # Reads ## Repo State table from the handoff file, looks up each repo's

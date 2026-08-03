@@ -26,12 +26,27 @@ mcp.shared.*.json
 .transcript-retry-queue
 .egregore-session-id
 .egregore-branch-consent
+.egregore-boundary-consent
+
+# Personal boundary extension (per-person read grants — never commit)
+.egregore-boundary.local.json
 
 # Personal notes — never shared, never committed
 .egregore/notes/
 
 # Eval run outputs (local, per-machine)
 .egregore/eval-runs/
+eval-runs/
+.egregore/ingest/
+.egregore/ingest-staging/
+.egregore/ingest-ui-preferences.json
+
+# Threads projection caches (derived and regenerable; never stored state)
+threads/traces/
+threads/projections/
+
+# Deep-reflect research ledgers (local provenance, never pushed)
+.egregore/research-runs/
 
 # Database files (user-specific state)
 data/*.db
@@ -42,6 +57,7 @@ data/*.db
 # Build artifacts
 __pycache__/
 node_modules/
+packages/emissary-plugin/dist/
 
 # Playwright MCP
 .playwright-mcp/
@@ -55,8 +71,26 @@ node_modules/
 .vision-input/
 .venv*/
 
+# Supabase CLI link state (project-specific, never commit)
+supabase/.temp/
+
 # Encrypted local dashboard build (priority/session command center).
 # build.mjs holds the decryption password as a default and *-data.js hold
 # the plaintext source data — never commit these. Host the encrypted
 # dist.html via publish-artifact if needed, not via git.
 dashboards/
+
+# Scratch space — sessions stage working files here (eval renders, screenshots,
+# living-paper artifacts). Never commit: attendant ripcord auto-saves sweep
+# untracked files into PRs (see #1080's 2.7MB loom-phase2-evals sweep).
+# Three pre-existing tracked files under tmp/ are unaffected (gitignore
+# doesn't untrack) — evals/handoff-fidelity-v2/DESIGN.md references one.
+tmp/
+.egregore-worktree-tty
+.codex/worktrees/
+.pi/worktrees/
+test-results/
+
+# Local build artifacts (rendered surfaces, mocks) — never committed.
+# The ripcord auto-save otherwise sweeps them into unrelated PRs.
+.build/

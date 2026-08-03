@@ -307,16 +307,18 @@ header: "Hand off to"
 multiSelect: true
 options: (one per Person node, max 4)
   - label: "{name}"
-    description: "Notify them and link to the quest"
+    description: "Link them to the quest; notification is offered separately"
 ```
 
 Freeform is always available for names not in the graph.
 
 After selection:
-- **Person exists in graph** → notify via `bash bin/notify.sh send "{name}" "New quest from {author}: {title} — {question}"` and add INVOLVES relationship in Neo4j: `MATCH (q:Quest {id: $slug}), (p:Person {name: $name}) CREATE (q)-[:INVOLVES]->(p)`
+- **Person exists in graph** → add the INVOLVES relationship in Neo4j: `MATCH (q:Quest {id: $slug}), (p:Person {name: $name}) CREATE (q)-[:INVOLVES]->(p)`. After the quest is saved, follow `.claude/context/notification-consent.md` and offer a separate exact notification to that person.
 - **Person typed in freeform (not in graph)** → acknowledge: "{name} isn't on this egregore yet. The quest will be waiting for them when they join." Do NOT create a Person node.
 
-**If "The whole team"** → notify group: `bash bin/notify.sh group "New quest: {title} — {question}"`
+**If "The whole team"** → after the quest is saved, prepare
+`bash bin/notify.sh plan group "New quest: {title} — {question}"`, then show a
+separate exact Send / Edit / Cancel checkpoint.
 
 **If "Just me for now"** → no notification, proceed silently.
 
@@ -327,7 +329,9 @@ After selection:
 4. Create Quest node in Neo4j via `bash bin/graph.sh query "..."` following `/quest` spec
 5. Link the Step 2 artifact to this quest: `bash bin/graph.sh query "MATCH (a:Artifact {id: $artifactId}), (q:Quest {id: $questId}) CREATE (a)-[:PART_OF]->(q)"` with params
 6. Auto-save (commit + push memory)
-7. **Render TUI confirmation** — 72-char box, quest details, linked artifact, threads:
+7. Offer each selected notification separately. The "Who should know"
+   selection is not dispatch consent; never batch approvals.
+8. **Render TUI confirmation** — 72-char box, quest details, linked artifact, threads:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐

@@ -1,6 +1,6 @@
 ---
 name: tui-design
-description: 'Fallback Codex adapter for the Egregore tui-design workflow.'
+description: 'TUI Design System for Egregore slash commands. Use when designing or modifying any command''s terminal output to ensure visual consistency. Triggers on: TUI, terminal output, box drawing, command output formatting, sigils, section markers. Do NOT use for browser rendering (use dark-mode) or external prose (use egregore-voice).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
@@ -33,9 +33,13 @@ reading `.claude/skills/tui-design/SKILL.md`, reproduce the same visible UX in C
 
 1. Read `.claude/skills/tui-design/SKILL.md` for the workflow details.
 2. Run the referenced `bin/` scripts directly from Codex.
-3. Treat graph, publish, and notify steps as best-effort unless that workflow
-   explicitly says they are required.
-4. Keep local-mode behavior filesystem-first and avoid graph or notification
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
    calls when `egregore.json` declares `"mode": "local"`.
-5. Never call the deprecated `egregore-handoff` CLI for Egregore project
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
    handoffs.

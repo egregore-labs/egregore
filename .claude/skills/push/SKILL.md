@@ -1,9 +1,32 @@
 Push current branch to remote.
 
+## Loom routing
+
+**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
+
+1. Resolve: `ROUTE=$(bash bin/loom.sh route push)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
+2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer push --override` after the output and set `"override":true` in telemetry.
+3. Otherwise delegate: spawn the Agent tool with `subagent_type:
+   "loom-executor"`, `model` = the route's `tier`, prompt =
+   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
+   `LOOM-EXECUTOR: Execute .claude/skills/push/SKILL.md`, plus the user's
+   arguments and any context the spec needs from the session. Print the
+   executor's final output **verbatim**, then print the output of
+   `bash bin/loom.sh footer push`.
+4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
+   triage the reason: needs-user-interaction or a main-loop-only tool → take
+   over and finish this skill inline (no escalation); genuine uncertainty or
+   failure → reassign `ROUTE=$(bash bin/loom.sh escalate push "<reason>")`,
+   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
+   carrying the returned decision ID
+   (sticky for this session).
+5. Telemetry (fire-and-forget):
+   `bash bin/telemetry.sh emit "command" '{"command":"push","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+
 ## Before anything else
 
-Check `git branch --show-current`. If on a protected branch (`develop`, `main`, or `master`):
-  → Determine the base branch: for the egregore hub use `develop`, for managed repos read `base_branch` from `egregore.json` repos[] (default `"develop"`)
+Resolve `BASE_BRANCH` through `bin/lib/config.sh` → `_get_base_branch` (pass the managed repo name when applicable). Check `git branch --show-current`. If on a protected branch (`$BASE_BRANCH`, `develop`, `main`, or `master`):
+  → Use the resolved base branch (default `"develop"`)
   → Create a working branch: `git fetch origin $BASE_BRANCH --quiet && git checkout -b dev/{author}/{topic-slug} origin/$BASE_BRANCH`
   → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
   → Then proceed with the push.

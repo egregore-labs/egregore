@@ -9,9 +9,11 @@ trap "rm -rf $TMPDIR" EXIT
 
 # --- Read config ---
 API_URL=$(jq -r '.api_url // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-API_KEY=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)}"
 ORG=$(jq -r '.org_name // "Egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "Egregore")
 DATE=$(date '+%b %d')
+
+source "$SCRIPT_DIR/bin/lib/handoff-meta.sh" >/dev/null 2>/dev/null || true
 
 # --- Detect user ---
 GH_USER="${1:-}"
@@ -182,8 +184,28 @@ DISK_DECISIONS=$(cat "$TMPDIR/disk_decisions.txt" 2>/dev/null || echo "")
 LOCAL_SESSIONS=$(cat "$TMPDIR/local_sessions.json" 2>/dev/null || echo '{"my_sessions":[],"team_sessions":[]}')
 echo "$LOCAL_SESSIONS" | jq . >/dev/null 2>&1 || LOCAL_SESSIONS='{"my_sessions":[],"team_sessions":[]}'
 
+handoff_metadata_map() {
+  local json="$1"
+
+  if ! declare -F eg_handoff_metadata_json >/dev/null 2>&1; then
+    echo "{}"
+    return
+  fi
+
+  printf '%s\n' "$json" | jq -r '
+    [(.handoffs_to_me[]?.filePath // empty), (.all_handoffs[]?.filePath // empty)]
+    | map(select(. != ""))
+    | unique[]
+  ' 2>/dev/null | while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    file="$SCRIPT_DIR/memory/$rel"
+    [ -f "$file" ] || continue
+    eg_handoff_metadata_json "$file" | jq -c --arg rel "$rel" '{key:$rel, value:{author:.author, topic:.topic, date:.date}}'
+  done | jq -sc 'map({(.key): .value}) | add // {}' 2>/dev/null || echo "{}"
+}
+
 # --- Merge server response + local git/disk data ---
-jq -n \
+FINAL_JSON=$(jq -n \
   --arg org "$ORG" \
   --arg date "$DATE" \
   --slurpfile activity "$TMPDIR/activity.json" \
@@ -197,4 +219,24 @@ jq -n \
     prs: $prs,
     disk: {handoffs: $disk_handoffs, decisions: $disk_decisions},
     local_sessions: $local_sessions
-  }'
+  }')
+
+HANDOFF_META="$(handoff_metadata_map "$FINAL_JSON")"
+[ -z "$HANDOFF_META" ] && HANDOFF_META="{}"
+
+printf '%s\n' "$FINAL_JSON" | jq --argjson handoff_meta "$HANDOFF_META" '
+  def enrich_handoff_sender:
+    (.filePath // "") as $file
+    | if $file != "" and ($handoff_meta[$file] // null) != null then
+        ($handoff_meta[$file] // {}) as $meta
+        | .author = ($meta.author // .author)
+        | .from = ($meta.author // .from)
+        | .topic = (.topic // $meta.topic)
+        | .date = (.date // $meta.date)
+      else
+        .
+      end;
+
+  .handoffs_to_me = ((.handoffs_to_me // []) | map(enrich_handoff_sender))
+  | .all_handoffs = ((.all_handoffs // []) | map(enrich_handoff_sender))
+'

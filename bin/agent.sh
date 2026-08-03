@@ -19,6 +19,10 @@ if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
 fi
 CONFIG="$SCRIPT_DIR/egregore.json"
 MEMORY_DIR="${EGREGORE_MEMORY_DIR:-$SCRIPT_DIR/memory}"
+if [ -f "$SCRIPT_DIR/bin/lib/config.sh" ]; then
+  # shellcheck source=bin/lib/config.sh
+  source "$SCRIPT_DIR/bin/lib/config.sh"
+fi
 
 usage() {
   cat <<'EOF'
@@ -28,11 +32,18 @@ Runtime-neutral commands:
   protocol                         Print the portable agent protocol
   sync                             Pull latest shared memory
   activity [--for <person>]        Show recent handoffs and questions
+  search "query" [-n N] [--fast|--semantic]
+                                   Hybrid recall over shared memory (qmd)
   people                           List known people from memory/people
   branch --topic TEXT              Create or reuse a task branch/worktree
-  save [--message TEXT]            Commit and push current repo + memory changes
+  save [--message TEXT] [--pr-body TEXT|--pr-body-file PATH]
+                                   Commit and push current repo + memory changes;
+                                   PR body follows .claude/context/pr-format.md
+                                   (auto-generated skeleton if not provided)
+  autosave [status|on|off|scope|publish|merge]  Personal ambient-save settings + consent
   wrap --topic T --summary TEXT    Write a session wrap to memory/wraps
-  handoff --from A --to B --topic T [--body TEXT|--body-file PATH] [--no-push] [--no-publish] [--no-notify] [--json]
+  handoff --from A --to B --topic T [--intent action|feedback|fyi]
+      [--body TEXT|--body-file PATH] [--no-push] [--no-publish] [--no-notify] [--json]
   ask --from A --to B --topic T --question TEXT [--no-push]
       [--harvest-id ID --harvest-session-id ID --turn N
        --question-intent TEXT --context-mode blind|disclosed|comparative]
@@ -46,6 +57,15 @@ EOF
 die() {
   echo "agent.sh: $*" >&2
   exit 1
+}
+
+resolve_base_branch() {
+  local base
+  if ! base=$(_get_base_branch); then
+    echo "agent.sh: could not resolve the configured base branch" >&2
+    return 1
+  fi
+  echo "$base"
 }
 
 slugify() {
@@ -145,13 +165,16 @@ worktree_for_branch() {
 }
 
 base_ref() {
-  git -C "$MAIN_PROJECT_DIR" fetch origin develop --quiet 2>/dev/null || true
-  if git -C "$MAIN_PROJECT_DIR" show-ref --verify --quiet refs/remotes/origin/develop 2>/dev/null; then
-    echo "origin/develop"
-  elif git -C "$MAIN_PROJECT_DIR" show-ref --verify --quiet refs/heads/develop 2>/dev/null; then
-    echo "develop"
+  local base
+  base="$(resolve_base_branch)" || return 1
+  git -C "$MAIN_PROJECT_DIR" fetch origin "$base" --quiet 2>/dev/null || true
+  if git -C "$MAIN_PROJECT_DIR" show-ref --verify --quiet "refs/remotes/origin/$base" 2>/dev/null; then
+    echo "origin/$base"
+  elif git -C "$MAIN_PROJECT_DIR" show-ref --verify --quiet "refs/heads/$base" 2>/dev/null; then
+    echo "$base"
   else
-    echo "HEAD"
+    echo "agent.sh: configured base branch '$base' does not exist locally or on origin" >&2
+    return 1
   fi
 }
 
@@ -165,8 +188,9 @@ Egregore portable agent protocol
 4. Use `bin/agent.sh handoff` to leave structured context for another agent.
 5. Use `bin/agent.sh ask` and `bin/agent.sh answer` for asynchronous questions.
 6. Run `bin/agent.sh activity --for <person>` to see pending work.
-7. Run `bin/agent.sh branch --topic "<what you are working on>"` before code changes when you need a task branch/worktree.
-8. Run `bin/agent.sh save` and `bin/agent.sh wrap` for portable save/wrap flows.
+7. Run `bin/agent.sh search "<query>"` to recall shared memory (decisions, handoffs, knowledge) before answering questions about past work.
+8. Run `bin/agent.sh branch --topic "<what you are working on>"` before code changes when you need a task branch/worktree.
+9. Run `bin/agent.sh save` and `bin/agent.sh wrap` for portable save/wrap flows.
 
 This protocol is runtime-neutral. Claude Code may still use .claude hooks and
 skills, while Codex or another agent can call this script directly.
@@ -267,7 +291,7 @@ cmd_branch() {
     bugfix) branch="bugfix/${slug}" ;;
   esac
 
-  base="$(base_ref)"
+  base="$(base_ref)" || die "could not find a safe branch point"
 
   if [ -f "$SCRIPT_DIR/.git" ]; then
     if git -C "$SCRIPT_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
@@ -318,7 +342,7 @@ ensure_working_branch() {
   slug="$(slugify "$topic")"
   [ -n "$slug" ] || slug="$(date +%Y-%m-%d)"
   branch="dev/${author}/${slug}"
-  base="$(base_ref)"
+  base="$(base_ref)" || die "could not find a safe branch point"
 
   if git -C "$SCRIPT_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
     git -C "$SCRIPT_DIR" checkout "$branch" --quiet || die "failed to checkout $branch"
@@ -328,13 +352,27 @@ ensure_working_branch() {
   echo "$branch"
 }
 
+build_pr_body() {
+  # Compliant fallback PR body (spec: .claude/context/pr-format.md) built
+  # from the commit log + diff when the calling agent supplies none.
+  local topic="${1:-portable save}" base commits stat
+  base="$(resolve_base_branch)" || return 1
+  commits="$(git -C "$SCRIPT_DIR" log --pretty='- %s' "origin/$base..HEAD" 2>/dev/null | head -8)"
+  [ -n "$commits" ] || commits="- (commit list unavailable — see the Files tab)"
+  stat="$(git -C "$SCRIPT_DIR" diff --shortstat "origin/$base...HEAD" 2>/dev/null | sed 's/^ *//')"
+  printf '## What\n%s\n\n## Why\nShell-agent session save — topic: %s. Body auto-generated by bin/agent.sh; pass --pr-body for a hand-written description.\n\n## Verification\nNot verified — auto-generated skeleton; review the diff before merging.%s\n\n🤖 Saved via bin/agent.sh\n' \
+    "$commits" "$topic" "${stat:+ ($stat)}"
+}
+
 cmd_save() {
-  local message="" topic="" no_pr=0 branch pushed="false" committed="false" pr_url="" existing_pr=""
+  local message="" topic="" no_pr=0 branch base pushed="false" committed="false" pr_url="" existing_pr="" pr_number="" non_md="" merged="false" pr_body="" pr_body_file=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --message|-m) message="${2:-}"; shift 2 ;;
       --topic) topic="${2:-}"; shift 2 ;;
+      --pr-body) pr_body="${2:-}"; shift 2 ;;
+      --pr-body-file) pr_body_file="${2:-}"; shift 2 ;;
       --no-pr) no_pr=1; shift ;;
       *) die "unknown save option: $1" ;;
     esac
@@ -342,6 +380,7 @@ cmd_save() {
 
   [ -n "$topic" ] || topic="portable save"
   [ -n "$message" ] || message="Save: $topic"
+  base="$(resolve_base_branch)" || die "save stopped before Git changes"
 
   if [ -d "$MEMORY_DIR" ]; then
     save_memory "$message" "."
@@ -372,7 +411,31 @@ cmd_save() {
     if [ -n "$existing_pr" ]; then
       pr_url="$existing_pr"
     else
-      pr_url="$(gh pr create --base develop --head "$branch" --title "$message" --body "Saved via bin/agent.sh save." 2>/dev/null || true)"
+      if [ -z "$pr_body" ] && [ -n "$pr_body_file" ] && [ -f "$pr_body_file" ]; then
+        pr_body="$(cat "$pr_body_file")"
+      fi
+      [ -n "$pr_body" ] || pr_body="$(build_pr_body "$topic")"
+      pr_url="$(gh pr create --base "$base" --head "$branch" --title "$message" --body "$pr_body" 2>/dev/null || true)"
+    fi
+  fi
+
+  # Non-coding saves auto-merge to the configured base (same rule as /save and the
+  # handoff helper; policy in bin/lib/noncode.sh). `--auto` needs repo
+  # auto-merge + pending required checks; without branch protection it always
+  # errors, so fall back to a direct merge.
+  if [ -n "$pr_url" ]; then
+    # shellcheck source=bin/lib/noncode.sh
+    . "$SCRIPT_DIR/bin/lib/noncode.sh" 2>/dev/null || true
+    type noncode_blockers >/dev/null 2>&1 || noncode_blockers() {
+      git -C "${2:-.}" diff "${1:-origin/$base}...HEAD" --name-only 2>/dev/null | grep -v '\.md$' | head -1 || true
+    }
+    pr_number="${pr_url##*/}"
+    non_code="$(noncode_blockers "origin/$base" "$SCRIPT_DIR")"
+    if [ -z "$non_code" ] && [ -n "$pr_number" ]; then
+      if gh pr merge "$pr_number" --auto --merge >/dev/null 2>&1 \
+         || gh pr merge "$pr_number" --merge >/dev/null 2>&1; then
+        merged="true"
+      fi
     fi
   fi
 
@@ -380,6 +443,7 @@ cmd_save() {
   echo "commit: $committed"
   echo "push: $pushed"
   [ -n "$pr_url" ] && echo "pr: $pr_url"
+  [ "$merged" = "true" ] && echo "merge: non-coding, merged to $base"
   return 0
 }
 
@@ -410,32 +474,39 @@ cmd_wrap() {
   fi
   [ -n "$body" ] || body="$summary"
 
-  local month rel abs slug now
-  month="$(date +%Y-%m)"
-  slug="$(slugify "$topic")"
-  [ -n "$slug" ] || slug="session"
-  rel="wraps/$month/$(date +%d)-${from}-${slug}.md"
-  abs="$MEMORY_DIR/$rel"
-  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  mkdir -p "$(dirname "$abs")"
+  local tmpd result rel session_id branch
+  local capture_args=(--mode personal)
+  tmpd="$(mktemp -d -t egregore-agent-wrap-XXXXXX)"
+  trap 'rm -rf "$tmpd"' RETURN
+  session_id="$(cat "$SCRIPT_DIR/.egregore-session-id" 2>/dev/null || true)"
+  branch="$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || true)"
+  [ "$no_push" = "1" ] && capture_args+=(--no-push)
 
-  {
-    printf '# Wrap: %s\n\n' "$topic"
-    printf '**Date**: %s\n' "$(date +%Y-%m-%d)"
-    printf '**Author**: %s\n' "$from"
-    printf '**Wrapped At**: %s\n\n' "$now"
-    printf '## Summary\n\n%s\n\n' "$summary"
-    printf '## Notes\n\n%s\n' "$body"
-  } > "$abs"
+  printf '%s\n' "$body" |
+    TMPDIR="$tmpd" bash "$SCRIPT_DIR/bin/capture-run.sh" \
+      "${capture_args[@]}" \
+      --author "$from" \
+      --topic "$topic" \
+      --summary "$summary" \
+      --session-id "$session_id" \
+      --branch "$branch" >/dev/null
 
-  NO_PUSH="$no_push" save_memory "Wrap: $topic" "$rel"
+  result="$tmpd/capture-run-result.json"
+  rel="$(jq -r '.file // empty' "$result" 2>/dev/null || true)"
+  [ -n "$rel" ] || die "wrap was not created"
   echo "wrap: memory/$rel"
+
+  # Session close: non-coding core-repo changes save + merge themselves
+  # (gated inside session-autosave.sh — code is never auto-committed).
+  if [ "$no_push" = "0" ]; then
+    ( bash "$SCRIPT_DIR/bin/session-autosave.sh" --dir "$SCRIPT_DIR" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  fi
 }
 
 cmd_handoff() {
   ensure_memory
-  local from="" to="" topic="" body="" body_file="" project=""
-  local no_publish=0 no_notify=0 json=0
+  local from="" to="" topic="" body="" body_file="" project="" intent="action"
+  local no_publish=0 no_notify=0 json=0 body_supplied=0 content_mode="generated"
   NO_PUSH=0
 
   while [ $# -gt 0 ]; do
@@ -446,6 +517,7 @@ cmd_handoff() {
       --body) body="${2:-}"; shift 2 ;;
       --body-file) body_file="${2:-}"; shift 2 ;;
       --project) project="${2:-}"; shift 2 ;;
+      --intent) intent="${2:-}"; shift 2 ;;
       --no-push) NO_PUSH=1; shift ;;
       --no-publish) no_publish=1; shift ;;
       --no-notify) no_notify=1; shift ;;
@@ -457,15 +529,23 @@ cmd_handoff() {
   [ -z "$from" ] && from="$(person_from_state)"
   [ -n "$from" ] || die "handoff requires --from"
   [ -n "$topic" ] || die "handoff requires --topic"
+  case "$intent" in
+    action|feedback|fyi) ;;
+    *) die "invalid --intent: $intent (action|feedback|fyi)" ;;
+  esac
   if [ -n "$body_file" ]; then
     [ -f "$body_file" ] || die "body file not found: $body_file"
     body="$(cat "$body_file")"
+    body_supplied=1
   elif [ -z "$body" ] && [ ! -t 0 ]; then
     body="$(cat)"
+    [ -n "$body" ] && body_supplied=1
+  elif [ -n "$body" ]; then
+    body_supplied=1
   fi
-  [ -n "$body" ] || body="No briefing provided."
+  [ "$body_supplied" = "1" ] && content_mode="supplied"
 
-  local today tmpd result result_out rel project_line stdout_file
+  local today tmpd result result_out rel stdout_file
   local handoff_args=()
   today="$(date +%Y-%m-%d)"
   tmpd="$(mktemp -d -t egregore-agent-handoff-XXXXXX)"
@@ -473,23 +553,36 @@ cmd_handoff() {
   result_out="$(mktemp -t egregore-agent-handoff-result-XXXXXX.json)"
   stdout_file="$tmpd/stdout"
 
-  project_line=""
-  [ -n "$project" ] && project_line="**Project**: $project"
   [ -n "$to" ] && handoff_args+=(--recipient "$to")
   [ -n "$project" ] && handoff_args+=(--project "$project")
+  handoff_args+=(--intent "$intent" --content-mode "$content_mode")
+  [ "$content_mode" = "generated" ] && handoff_args+=(--include-session-artifacts)
   [ "$NO_PUSH" = "1" ] && handoff_args+=(--no-push)
   [ "$no_publish" = "1" ] && handoff_args+=(--no-publish)
   [ "$no_notify" = "1" ] && handoff_args+=(--no-notify)
 
   {
-    printf '# Handoff: %s\n\n' "$topic"
-    printf '**Date**: %s\n' "$today"
-    printf '**Author**: %s\n' "$from"
-    [ -n "$to" ] && printf '**To**: %s\n' "$to"
-    [ -n "$project_line" ] && printf '%s\n' "$project_line"
-    printf '\n## Briefing\n\n%s\n\n' "$body"
-    printf '## Next Steps\n\n- Continue from this handoff using the shared Egregore memory protocol.\n'
-  } | TMPDIR="$tmpd" bash "$SCRIPT_DIR/bin/handoff-run.sh" \
+    printf '%s\n' '---'
+    printf 'capture_schema: egregore-capture/v1\n'
+    printf 'capture_mode: addressed\n'
+    printf 'kind: addressed\n'
+    printf 'content_mode: %s\n' "$content_mode"
+    printf 'from: %s\n' "$(yaml_str "$from")"
+    [ -n "$to" ] && printf 'addressed_to: %s\n' "$(yaml_str "$to")"
+    printf 'date: %s\n' "$today"
+    printf 'topic: %s\n' "$(yaml_str "$topic")"
+    printf 'intent: %s\n' "$intent"
+    [ -n "$project" ] && printf 'project: %s\n' "$(yaml_str "$project")"
+    printf '%s\n\n' '---'
+    if [ "$content_mode" = "supplied" ]; then
+      printf '%s\n' "$body"
+    else
+      printf '# Handoff: %s\n\n' "$topic"
+      printf '## Briefing\n\nNo briefing was supplied.\n\n'
+      printf '## Next Steps\n\n1. Continue from this handoff using the shared Egregore memory protocol.\n'
+    fi
+  } | TMPDIR="$tmpd" bash "$SCRIPT_DIR/bin/capture-run.sh" \
+        --mode addressed \
         --author "$from" \
         --topic "$topic" \
         "${handoff_args[@]}" \
@@ -506,6 +599,13 @@ cmd_handoff() {
   [ -s "$stdout_file" ] && sed 's/^/status: /' "$stdout_file"
   echo "handoff: memory/$rel"
   echo "result: $result_out"
+
+  # Parity with the Claude /handoff skill: save core-repo session work in the
+  # background (non-coding diffs auto-merge to the configured base; code stays
+  # in a PR).
+  if [ "$NO_PUSH" = "0" ]; then
+    ( bash "$SCRIPT_DIR/bin/handoff-save-egregore.sh" "$from" "$topic" --repo-dir "$SCRIPT_DIR" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  fi
 }
 
 cmd_ask() {
@@ -653,14 +753,20 @@ cmd_answer() {
   echo "answered: memory/$rel"
 }
 
+cmd_search() {
+  bash "$SCRIPT_DIR/bin/search.sh" query "$@"
+}
+
 case "${1:-}" in
   --help|-h|help|"") usage ;;
   protocol) shift; cmd_protocol "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   activity) shift; cmd_activity "$@" ;;
+  search) shift; cmd_search "$@" ;;
   people) shift; cmd_people "$@" ;;
   branch) shift; cmd_branch "$@" ;;
   save) shift; cmd_save "$@" ;;
+  autosave) shift; bash "$SCRIPT_DIR/bin/autosave.sh" "$@" ;;
   wrap) shift; cmd_wrap "$@" ;;
   handoff) shift; cmd_handoff "$@" ;;
   ask) shift; cmd_ask "$@" ;;

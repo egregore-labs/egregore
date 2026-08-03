@@ -3,7 +3,7 @@
 > Format is a grammar, not a template.
 >
 > The model chooses **which layers exist, which sections within them
-> exist, and which evidence modalities to use** based on what the
+> exist, and which synthesis blocks to use** based on what the
 > harvest produced. Two harvests with different intents and different
 > respondents should not produce the same shape.
 
@@ -15,6 +15,10 @@ context.
 
 For the protocol's invariants, anti-conflation fixtures, and cognitive
 moves, see `PROCESS.md`. This document does not re-state them.
+
+For question intent, answer shape, probe moves, and hard bans, see
+[`QUESTION_PALETTE.md`](./QUESTION_PALETTE.md). This document formats
+what the harvest produced; it does not redefine how questions are asked.
 
 ---
 
@@ -35,8 +39,7 @@ that:
 
 Synthesis is **not** a report card, a recommendation memo, a meeting
 minutes file, or a verdict. The boundary stated in `PROCESS.md` §1
-applies here: a harvest produces a *decision surface, not necessarily
-a decision*.
+applies here: *a harvest maps the choices; it need not make them.*
 
 ---
 
@@ -48,8 +51,9 @@ complete at that depth.
 
 ### L0 — Portrait
 
-**Always present.** One sentence (sometimes two) that holds the most.
-The sharpest finding, preference, or position the harvest produced.
+**Always present.** The one-line finding: one sentence (sometimes two)
+carrying the sharpest finding, preference, or position the harvest
+produced.
 
 L0 carries no obligation to recommend or pick a winner. For different harvest shapes:
 
@@ -124,7 +128,7 @@ allowed only when the structure genuinely requires it (e.g.,
 dimension-unit for thematic findings + question-unit for concrete
 decisions). Default to one.
 
-Inside each L2 section, content is built from the **modality palette**
+Inside each L2 section, content is built from the **synthesis blocks**
 (§3). Section structure is generative, not templated.
 
 ### L3 — Transcript
@@ -147,17 +151,22 @@ also what makes the synthesis reproducible in fixtures (see §6).
 
 ---
 
-## 3. The modality palette
+## 3. Synthesis blocks
 
-Within L2 (and sometimes L1), content is built from these six
-modalities. They compose; sections pick whichever fit.
+Within L2 (and sometimes L1), content is built from these six blocks —
+the building material of the synthesis document. (Not to be confused
+with answer **modes**, which are the input formats of rendered surfaces
+— `single | multi | rank | weight | spectrum`;
+`QUESTION_PALETTE.md` owns intent-to-shape selection, while SKILL.md
+owns their rendered data fields.) They compose; sections pick whichever
+fit.
 
-| Modality | What it is | When it carries weight |
+| Block | What it is | When it carries weight |
 |---|---|---|
 | **quote** | Verbatim words from a respondent, attributed by handle | Distinctive framing, strong conviction, language worth carrying as-is |
 | **context** | What the synthesizer brings to make the quote legible — background, what was happening before, what assumption the respondent was responding to | When the quote is sharp but its meaning depends on context the reader may not have |
 | **reflection** | Interpretation: what this position *does* to the broader picture; what mental model it implies | When a position has implications beyond what the respondent said directly |
-| **decision surface** | A concrete choice or commitment a respondent named, or a choice a divergence implies. **Has a rendered form**: when decisions are forks with 2–4 distinct options, `/harvest` emits them as an interactive Meridian *decision surface* the respondent decides *on* and pastes back, rather than prose to read | When the harvest produced something actionable; *not* the same as a recommendation — it surfaces the choice without forcing its resolution |
+| **choice** | A concrete choice or commitment a respondent named, or a choice a divergence implies. **Has a rendered form**: when choices are forks with 2–4 distinct options, `/harvest` emits them as an interactive Meridian *decision surface* the respondent decides *on* and pastes back, rather than prose to read | When the harvest produced something actionable; *not* the same as a recommendation — it surfaces the choice without forcing its resolution |
 | **open question** | An unresolved tension, ambiguity, or follow-up worth a future harvest | When the harvest opened more than it closed; explicitly named so it doesn't get lost |
 | **pattern** | A knowledge / action / antipattern the harvest extracted, ready for `/reflect` to consume | When a finding generalizes — not just *"Oz said X"*, but *"the pattern is Y, evidenced by X"* |
 
@@ -165,10 +174,10 @@ modalities. They compose; sections pick whichever fit.
 is `quote → context → reflection → pattern` (the Olivier shape). The
 Oz shape (`decision → quote → reflection → action`) is also strong.
 The model chooses what the content needs. **Skip what doesn't apply.**
-A section with no `decision surface` and no `pattern` is fine — the
-modalities are a palette, not a checklist.
+A section with no `choice` and no `pattern` is fine — the blocks are
+a palette, not a checklist.
 
-**Modality usage rules**:
+**Block usage rules**:
 
 - `quote` — verbatim only. No paraphrasing dressed as quotation.
   Block-quote format, attributed by handle.
@@ -177,13 +186,13 @@ modalities are a palette, not a checklist.
 - `reflection` — owned by the synthesizer, not the respondent. Use
   *"this implies..."*, *"the move underneath this is..."* — never
   attribute interpretation back to the respondent.
-- `decision surface` — describe the choice, not which side to pick
+- `choice` — describe the choice, not which side to pick
   (unless a respondent named the side themselves). **Rendered form:**
   when ≥3 interrelated forks each have 2–4 distinct options, `/harvest`
   renders them as an interactive *decision surface* instead of prose.
   Each option carries a structural *visual*, honest `+/−` tradeoffs,
   and at most one recommendation; the respondent's pasted choices
-  (`#{slug}-decisions:v1`) are absorbed on `--resume`. Shape + render:
+  (`#{slug}-decisions:v1`) are absorbed on `--resume` through the author review gate: a non-author return is pending until accepted, declined with a required attributed reason, or synthesized and approved. Shape + render:
   harvest's rendered-surface section (SKILL.md) and
   `packages/egregore-artifacts` (`decision-surface` type).
 - `open question` — phrase as a question or as *"unresolved: …"*.
@@ -202,10 +211,10 @@ questions:
    findings?** If yes → emit L1. If no → skip L1.
 2. **What's the natural unit?** Respondent? Question? Theme? → that's
    how L2 slices.
-3. **For each L2 section, which modalities does the content need?**
+3. **For each L2 section, which blocks does the content need?**
    Pull only those.
 4. **Where would a reader want to go next?** That's where to put
-   `open question` modalities and `decision surface` modalities — at
+   `open question` blocks and `choice` blocks — at
    the points the document hands off to action.
 
 A cleanly emitted harvest:
@@ -230,7 +239,7 @@ These are orientations, not templates. The model adapts.
 
 Likely shape: **L0 (the strongest preference + reason) · no L1 · L2
 per-respondent or per-question with `quote → context → reflection`,
-no `decision surface`, no `pattern` for the harvest itself (patterns
+no `choice`, no `pattern` for the harvest itself (patterns
 emerge later when many preferences accumulate) · L3.**
 
 Example L0: *"Cem prefers card-first L0 expanding to a narrative+rail
@@ -255,7 +264,7 @@ optional (often emits as `open questions` if extraction surfaced
 gaps) · L2 per-dimension with `quote → context → pattern` heavy ·
 L3.**
 
-`pattern` modality earns its keep here. Knowledge extraction's whole
+The `pattern` block earns its keep here. Knowledge extraction's whole
 point is producing reusable knowledge nodes.
 
 ### Decision crystallization (the one shape that may end with an action surface or commitment)
@@ -309,7 +318,7 @@ What it demonstrates:
 - Patterns named explicitly with type prefix (*Knowledge pattern —
   Junction Primacy*, *Action — Reframe positioning language*).
 - L3 as `Full Exchange` with 7 turns, question + answer per turn.
-- No `decision surface` modality used — this was a tacit-position
+- No `choice` block used — this was a tacit-position
   harvest, no decisions were on the table.
 
 ### Oz canvas harvest — question-unit slicing
@@ -323,7 +332,7 @@ What it demonstrates:
   describe how to read the document) is a generative move worth
   copying when the harvest has many questions and a synthesis-ready
   summary section.
-- `decision surface` modality is heavy here — this was a
+- The `choice` block is heavy here — this was a
   decision-crystallization harvest with concrete asks.
 - Cross-question consolidation in a `Canvas Changes & Additions`
   section is a domain-specific L1 emission. Generalizable: when L2
@@ -364,12 +373,12 @@ Synthesis is not a leaf. Patterns, preferences, positions, and
 (where present) decisions emit in shapes the org's pattern/decision
 graph can ingest:
 
-| Modality | Becomes a |
+| Block | Becomes a |
 |---|---|
 | `pattern` (knowledge type) | Knowledge pattern node, linkable to topics + people |
 | `pattern` (action type) | Action node, linkable to quests / decisions |
 | `pattern` (antipattern type) | Antipattern node |
-| `decision surface` (where a respondent named a choice) | Decision node, attributed to the respondent |
+| `choice` (where a respondent named a side) | Decision node, attributed to the respondent |
 | Synthesized position from L2 (e.g., *"cem prefers X because Y"*) | Position / Preference node, attributed to the respondent, with quote-block(s) attached as `Evidence` nodes — never the quote alone as the position |
 | `quote` block (verbatim, attributed) | `Evidence` node — raw, uninterpreted, links into the Position / Preference / Pattern it supports |
 | `open question` | Open-question node, surfacable in `/activity` and seedable for follow-up harvests |
@@ -398,9 +407,9 @@ The shape varies; the legibility doesn't.
 | Anti-pattern | Why it's banned |
 |---|---|
 | L1 with empty `Action surface` because the template said so | Forces an action the harvest didn't produce; violates §1 |
-| L2 sections with all six modalities padded in regardless of content | Modality palette is a palette, not a checklist |
+| L2 sections with all six blocks padded in regardless of content | The blocks are a palette, not a checklist |
 | L0 that summarizes the dimensions covered (*"this harvest explored A, B, and C"*) | L0 is the sharpest finding, not a table of contents |
-| Paraphrased "quotes" | Quote modality is verbatim only |
+| Paraphrased "quotes" | The `quote` block is verbatim only |
 | Reflections attributed back to the respondent | Reflections are owned by the synthesizer; respondents own quotes |
 | Divergence framed as "the team disagrees" | Divergence is information, not failure; name what each side is optimizing for |
 | "Recommended direction: X" when no respondent named X | Synthesis surfaces what was elicited; it does not invent direction |
@@ -412,7 +421,9 @@ The shape varies; the legibility doesn't.
 ## 10. What this document does not cover
 
 - **Cognitive protocol** — how the model conducts the conversation,
-  evaluates answers, runs cascades: see `PROCESS.md`.
+  evaluates answers, runs multi-respondent disclosure: see `PROCESS.md`.
+- **Question palette** — intent-to-shape selection, probe moves, and
+  hard bans: see `QUESTION_PALETTE.md`.
 - **Persistence** — graph schema, ID conventions, async question
   metadata, local-mode markdown contract: see `AUDIT.md` §9–§11.
 - **Orchestration** — argument parsing, mode detection, ID minting,

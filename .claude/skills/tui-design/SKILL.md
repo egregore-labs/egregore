@@ -1,4 +1,17 @@
-TUI Design System for Egregore slash commands. Use this skill when designing or modifying any command's terminal output to ensure visual consistency.
+---
+name: tui-design
+description: "TUI Design System for Egregore slash commands. Use when designing or modifying any command's terminal output to ensure visual consistency. Triggers on: TUI, terminal output, box drawing, command output formatting, sigils, section markers. Do NOT use for browser rendering (use dark-mode) or external prose (use egregore-voice)."
+---
+
+# TUI Design System
+
+## Voice Complex
+
+This skill governs TERMINAL RENDERING — structural, not tonal.
+Shared aesthetic: voice-bedrock (`.claude/rules/voice-bedrock.md`).
+For product voice in command output prose: `product-voice` skill.
+For browser visual output: `dark-mode` skill.
+For ASCII diagrams in explanations: `visual-explain` skill.
 
 ## 1. Brand Elements
 
@@ -17,6 +30,7 @@ Read org name from `jq -r '.org_name' egregore.json`. The `✦` star is reserved
 | `/activity` | `{ORG_NAME} EGREGORE ✦ ACTIVITY DASHBOARD` | The star — awareness, the full field |
 | `/ask` | `? ASK` | The question — direct, clear inquiry |
 | `/reflect` | `◎ REFLECTION` | The eye — looking inward, seeing clearly |
+| `/deep-reflect` | `◈ DEEP REFLECT` | The faceted eye — looking inward with structure |
 | `/handoff` | `⇌ HANDOFF` | The bridge — passing context between minds |
 | `/quest` | `⚑ QUEST` | The flag — planting direction in unknown territory |
 | `/todo` | `□ TODO` | The checkbox — actionable items, personal intent |
