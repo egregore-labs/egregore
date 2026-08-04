@@ -636,27 +636,11 @@ if [ "$IS_WORKTREE" != "true" ]; then
     || rm -f "$_CARD_FILE.tmp.$$" 2>/dev/null || true
 fi
 
-if [ "${EGREGORE_CARD_SHOWN:-}" = "1" ]; then
-  # Launcher already rendered the card in the terminal. Emit only the fresh
-  # signal lines (pending questions, handoffs, health warnings, autosaves,
-  # scroll turns, framework updates) for the model to relay, plus the hidden
-  # context sections. CLAUDE.md's greeting rule branches on this marker.
-  echo "<!-- card_shown_by_launcher -->"
-  echo "<!-- greeting-reply"
-  awk '/^<!-- session-context/{exit}
-       /^  ◐/ || /^  ◇/ || /^  ⚠/ || /^  ⟲/ || /^  ⧖/ || /^  loom: / {print; fu=0; next}
-       /^  ✓ Auto-saved/ {print; fu=0; next}
-       /^  ◆ framework updated/ {print; fu=1; next}
-       fu && /^    / {print; fu=0; next}
-       {fu=0}' "$_GREETING_BUF" 2>/dev/null || true
-  # Visible guidance printed after the hidden context sections (tutorial tip,
-  # first-session welcome) — copy it into greeting-reply so the fast path
-  # surfaces it instead of silently dropping it.
-  awk '/^<!-- session-context/{insec=1; next}
-       insec && (/^  Tip: / || /^  Welcome!/) {print}' "$_GREETING_BUF" 2>/dev/null || true
-  echo "-->"
-  sed -n '/^<!-- session-context/,$p' "$_GREETING_BUF"
-else
-  cat "$_GREETING_BUF"
-fi
+# The greeting always renders in-chat — identical across OSS and Connect and
+# across launch paths. The launcher-rendered card fast path (EGREGORE_CARD_SHOWN)
+# was reverted: Claude Code ≥2.1.89 boots into the alternate screen buffer,
+# which hides anything a launcher prints pre-launch (see PR #1493 for the
+# parked re-enable). The card cache write above stays — it is harmless and the
+# re-enable path depends on it.
+cat "$_GREETING_BUF"
 rm -f "$_GREETING_BUF" 2>/dev/null || true
