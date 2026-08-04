@@ -495,11 +495,7 @@ if [ "$FIRST_SESSION" = "true" ]; then
   echo ""
   echo "  Welcome! This is your first session."
   echo ""
-  if [ "${EGREGORE_CARD_SHOWN:-}" = "1" ]; then
-    echo "IMPORTANT: The greeting card is already on screen (rendered by the launcher) — do NOT re-render it. Reply with the greeting-reply block contents, then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
-  else
-    echo "IMPORTANT: Display the above greeting exactly as-is (ASCII art + ornamented status). Then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
-  fi
+  echo "IMPORTANT: Display the above greeting exactly as-is (ASCII art + ornamented status). Then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
   # Clear the flag so it only shows once
   jq '.first_session = false' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 else
@@ -514,11 +510,7 @@ else
   fi
 
   echo ""
-  if [ "${EGREGORE_CARD_SHOWN:-}" = "1" ]; then
-    echo "IMPORTANT: The greeting card is already on screen (rendered by the launcher) — do NOT re-render it. Reply with the greeting-reply block contents exactly as-is (it may be empty), then ask: What are you working on?"
-  else
-    echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
-  fi
+  echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
   echo ""
   echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
 fi

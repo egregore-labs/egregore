@@ -37,9 +37,7 @@ A SessionStart hook runs `bin/session-start.sh` before the user's first message.
 
 **On your VERY FIRST response — regardless of what the user says — you MUST display the hook's greeting output exactly as-is** (preserve ASCII art formatting), then ask: **"What are you working on?"**
 
-**Launcher-rendered card:** if the hook output contains `card_shown_by_launcher`, the terminal already displayed the card before your session opened. Do NOT re-render the banner or momentum board. Reply with the contents of the `greeting-reply` block exactly as-is (it may be empty), then ask: **"What are you working on?"** — nothing else.
-
-Either way, the greeting turn needs no deliberation and no tool calls — respond immediately.
+The greeting turn needs no deliberation and no tool calls — respond immediately.
 
 Do NOT list commands. Do NOT show a menu. Just the greeting + that question.
 
