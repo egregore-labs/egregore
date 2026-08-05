@@ -544,6 +544,13 @@ jq -n \
 ( bash "$SCRIPT_DIR/bin/attendant.sh" ensure >/dev/null 2>&1 & ) 2>/dev/null
 
 # ============================================================
+# 7c2. Connect overlay refresh (fire-and-forget)
+# ============================================================
+# Connected instances pick up newly released Connect skills without
+# re-running the launcher. Local mode exits instantly inside the script.
+( bash "$SCRIPT_DIR/bin/connect-refresh.sh" >/dev/null 2>&1 & ) 2>/dev/null
+
+# ============================================================
 # 7d. Autosave sweep — rescue non-coding leftovers (fire-and-forget)
 # ============================================================
 # Terminal-close cover: sessions that died before SessionEnd leave dirty

@@ -285,6 +285,13 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Writes**: Nothing
 - **External deps**: npx, tsx
 
+#### `connect-refresh.sh`
+- **Purpose**: Fire-and-forget Connect overlay refresh at session start — connected instances pick up newly released Connect skills without re-running the launcher (`npx create-egregore --refresh-connect`)
+- **Called by**: session-start.sh, codex-session-start.sh (Pi delegates)
+- **Reads**: `egregore.json` (mode/api_url)
+- **Writes**: `.egregore/connect-refresh.log`, Connect overlay skill files
+- **External deps**: npx
+
 #### `connector-notion.sh`
 - **Purpose**: Wrapper delegating to the Notion connector TypeScript CLI (`bin/connector-notion/`) — client-owned integration token, direct REST, native markdown export; feeds `/ingest notion` (spec: `docs/specs/notion-connector.md`)
 - **Called by**: `/connect notion`, `/ingest notion`, ad-hoc lookups
