@@ -13,6 +13,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_SCHEMA = "egregore-ingest-corpus/v1"
+CONNECTOR_SCHEMA = "egregore-connector-lifecycle/v1"
 KNOWLEDGE_SCHEMA = "egregore-knowledge-projection/v1"
 PLAN_SCHEMA = "egregore-ingest-graph-plan/v2"
 SOURCE_KINDS = {"meeting", "interview", "google", "notion", "corpus", "document"}
@@ -730,7 +731,84 @@ RETURN a.id""",
     }
 
 
+def connector_manifest(value: dict[str, Any]) -> bool:
+    return value.get("schema") == CONNECTOR_SCHEMA
+
+
+def connector_plan(value: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Project connector lifecycle: which providers this org has connected,
+    which accounts are authorized on each, and which ingest sources arrived
+    through which account. Connected mode only — the plan is executed by the
+    same runner as corpus plans and is idempotent (MERGE throughout)."""
+    provider = required_string(value.get("provider"), "provider")
+    if provider not in ("google", "notion"):
+        raise ContractError(f"unsupported connector provider: {provider}")
+    accounts = value.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        raise ContractError("accounts must be a non-empty list")
+    recorded = required_string(value.get("recorded_at"), "recorded_at")
+    source_id = str(value.get("source_id") or "")
+    queries: list[dict[str, Any]] = []
+    queries.append(
+        query(
+            """MERGE (c:Connector {id: $provider})
+SET c.provider = $provider,
+    c.updatedAt = datetime($recorded)
+RETURN c.id""",
+            {"provider": provider, "recorded": recorded},
+        )
+    )
+    for entry in accounts:
+        if not isinstance(entry, dict):
+            raise ContractError("each account must be an object")
+        email = required_string(entry.get("email"), "accounts[].email")
+        status = str(entry.get("status") or "authorized")
+        if status not in ("authorized", "revoked"):
+            raise ContractError(f"unsupported account status: {status}")
+        account_id = f"{provider}:{email.lower()}"
+        queries.append(
+            query(
+                """MERGE (a:SourceAccount {id: $id})
+SET a.email = $email,
+    a.provider = $provider,
+    a.status = $status,
+    a.updatedAt = datetime($recorded)
+FOREACH (_ IN CASE WHEN $status = 'authorized' AND a.authorizedAt IS NULL THEN [1] ELSE [] END |
+  SET a.authorizedAt = datetime($recorded)
+)
+WITH a
+MATCH (c:Connector {id: $provider})
+MERGE (a)-[:ON]->(c)
+WITH a
+OPTIONAL MATCH (s:IngestSource {id: $sourceId})
+FOREACH (_ IN CASE WHEN s IS NULL OR $sourceId = '' THEN [] ELSE [1] END |
+  MERGE (s)-[v:VIA_ACCOUNT]->(a)
+  SET v.recordedAt = datetime($recorded)
+)
+RETURN a.id""",
+                {
+                    "id": account_id,
+                    "email": email,
+                    "provider": provider,
+                    "status": status,
+                    "recorded": recorded,
+                    "sourceId": source_id,
+                },
+            )
+        )
+    return {
+        "schema": PLAN_SCHEMA,
+        "schema_family": "connector-lifecycle",
+        "manifest_id": f"connector:{provider}",
+        "source": {"kind": "connector", "id": provider},
+        "query_count": len(queries),
+        "queries": queries,
+    }
+
+
 def build_plan(value: dict[str, Any], path: Path) -> dict[str, Any]:
+    if connector_manifest(value):
+        return connector_plan(value, path)
     if corpus_manifest(value):
         return corpus_plan(value, path)
     return knowledge_plan(value, path)

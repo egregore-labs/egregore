@@ -19,7 +19,7 @@ If no arguments, ask: "What should I announce?"
 - Lead with what changed (feature, fix, decision, merge)
 - Include the PR number or branch if relevant
 - End with an action if needed ("Run /update to get it", "Review PR #N", etc.)
-- Keep it under 500 chars (Telegram readability)
+- Keep it under 500 chars (chat readability)
 - No emojis unless the user's draft uses them
 
 ### Step 2: Publish artifact (if relevant)
@@ -149,6 +149,6 @@ bash bin/telemetry.sh emit "command" '{"command":"announce"}' 2>/dev/null &
 - Always show the organization, every channel, and exact final message in a
   separate notification checkpoint.
 - The user's request to announce is not consent to dispatch.
-- Keep messages concise — Telegram group, not an essay
+- Keep messages concise — group chat, not an essay
 - If the user provides the exact message text in quotes, use it verbatim
 - Never fabricate artifact URLs — only use URLs returned by `publish-artifact.sh`

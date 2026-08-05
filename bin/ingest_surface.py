@@ -232,6 +232,39 @@ class SelectionState:
             self.done.set()
             return self.result
 
+    def choose_connector(self, payload: dict) -> dict:
+        # A connector choice ends the local-selection flow. When the CLI
+        # pre-started an OAuth listener, the browser response carries its
+        # consent URL so THIS tab continues straight into Google's sign-in;
+        # otherwise the agent guides authorization from the terminal. No bytes
+        # are staged and no source contract is collected here.
+        with self.lock:
+            if self.done.is_set():
+                raise ValueError("selection already finished")
+            provider = str(payload.get("provider", "")).strip().lower()
+            if provider not in available_connectors():
+                raise ValueError(f"unknown connector: {provider or '(empty)'}")
+            redirect = connector_auth_urls().get(provider, "")
+            account = connector_accounts().get(provider, "")
+            self.result = {
+                "connector": provider,
+                "receipt_url": self.receipt_url,
+            }
+            if redirect:
+                self.result["auth"] = "in-browser"
+            elif account:
+                self.result["account"] = account
+            self.receipt = {
+                **self.result,
+                "status": "processing",
+                "message": "The agent is walking you through connecting this source in the terminal.",
+            }
+            self.done.set()
+            response = dict(self.result)
+            if redirect:
+                response["redirect"] = redirect
+            return response
+
     def finish_receipt(self, payload: dict) -> dict:
         with self.lock:
             if not self.done.is_set() or self.cancelled:
@@ -252,10 +285,53 @@ class SelectionState:
         shutil.rmtree(self.session_root, ignore_errors=True)
 
 
+def available_connectors() -> list[str]:
+    # A connector is offered when its runtime shim ships with this instance.
+    # Authorization state is NOT checked here — the button's job is to route
+    # the user into the guided setup, which handles both fresh and connected.
+    here = Path(__file__).parent
+    providers = []
+    if (here / "connector-google.sh").exists():
+        providers.append("google")
+    if (here / "connector-notion.sh").exists():
+        providers.append("notion")
+    return providers
+
+
+def _env_json_map(name: str) -> dict[str, str]:
+    try:
+        value = json.loads(os.environ.get(name, "") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items() if isinstance(v, (str, int))}
+
+
+def connector_auth_urls() -> dict[str, str]:
+    # Consent URLs pre-fetched by the CLI (listener already running) so a
+    # connector click can redirect this same tab straight into sign-in.
+    # Only loopback/HTTPS URLs are accepted.
+    urls = {}
+    for provider, url in _env_json_map("EGREGORE_CONNECTOR_AUTH_URLS").items():
+        if url.startswith("https://") or url.startswith("http://127.0.0.1") or url.startswith("http://localhost"):
+            urls[provider] = url
+    return urls
+
+
+def connector_accounts() -> dict[str, str]:
+    # Already-connected account per provider, for honest completion copy.
+    return _env_json_map("EGREGORE_CONNECTOR_ACCOUNTS")
+
+
 def handler_class(state: SelectionState, token: str, expected_origin: str, preference_file: Path | None = None):
     html_template = HTML_PATH.read_text(encoding="utf-8")
     design_css = DESIGN_CSS_PATH.read_text(encoding="utf-8")
-    capabilities = {"pdftotext": bool(shutil.which("pdftotext"))}
+    capabilities = {
+        "pdftotext": bool(shutil.which("pdftotext")),
+        "connectors": available_connectors(),
+        "connector_accounts": connector_accounts(),
+    }
     preferences = load_preferences(preference_file or preferences_path())
     page = (
         html_template.replace("__EGREGORE_DESIGN_CSS__", design_css)
@@ -347,6 +423,10 @@ def handler_class(state: SelectionState, token: str, expected_origin: str, prefe
                     return
                 if path == "/api/confirm":
                     result = state.confirm(self.read_json())
+                    self.send_json(200, result)
+                    return
+                if path == "/api/connector":
+                    result = state.choose_connector(self.read_json())
                     self.send_json(200, result)
                     return
                 if path == "/api/cancel":

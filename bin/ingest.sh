@@ -204,8 +204,56 @@ cmd_search() {
     (.[] | "\n### " + (.title // .file) + "\n" + .file + "\n\n" + (.snippet // ""))'
 }
 
+cmd_select() {
+  # Stitch the Google sign-in into the picker itself: when the shim ships and
+  # no account is connected yet, pre-start the OAuth listener and hand its
+  # consent URL to the surface — clicking Google then continues the SAME tab
+  # into sign-in instead of bouncing through the terminal. Already connected:
+  # pass the account so the page says so honestly. Everything degrades to the
+  # terminal-guided flow when the URL isn't ready in time.
+  local auth_urls="{}" accounts="{}" auth_pid="" auth_log="" result status=0
+  if [ -x "$ROOT/bin/connector-google.sh" ]; then
+    local active_account
+    active_account="$(jq -r '.google_account // empty' "$ROOT/.egregore-state.json" 2>/dev/null)"
+    if [ -n "$active_account" ]; then
+      accounts="$(jq -cn --arg a "$active_account" '{google: $a}')"
+    else
+      auth_log="$(mktemp)"
+      bash "$ROOT/bin/connector-google.sh" auth --print-url > "$auth_log" 2>/dev/null &
+      auth_pid=$!
+      local waited=0 url=""
+      while [ "$waited" -lt 15 ]; do
+        url="$(head -1 "$auth_log" 2>/dev/null | jq -r '.auth_url // empty' 2>/dev/null)"
+        [ -n "$url" ] && break
+        sleep 1; waited=$((waited + 1))
+      done
+      if [ -n "$url" ]; then
+        auth_urls="$(jq -cn --arg u "$url" '{google: $u}')"
+      fi
+    fi
+  fi
+  result="$(EGREGORE_CONNECTOR_AUTH_URLS="$auth_urls" EGREGORE_CONNECTOR_ACCOUNTS="$accounts" python3 "$SURFACE" "$@")" || status=$?
+  if [ -n "$auth_pid" ]; then
+    if [ "$(printf '%s' "$result" | jq -r '.auth // empty' 2>/dev/null)" = "in-browser" ]; then
+      # The user is on Google's consent page in their tab; the listener
+      # finishes the token exchange. Wait for it and fold in the outcome.
+      if wait "$auth_pid" 2>/dev/null; then
+        result="$(printf '%s' "$result" | jq -c '. + {auth: "connected"}')"
+      else
+        result="$(printf '%s' "$result" | jq -c '. + {auth: "failed"}')"
+      fi
+    else
+      kill "$auth_pid" 2>/dev/null || true
+      wait "$auth_pid" 2>/dev/null || true
+    fi
+  fi
+  [ -n "$auth_log" ] && rm -f "$auth_log"
+  printf '%s\n' "$result"
+  return "$status"
+}
+
 case "${1:-}" in
-  select) shift; python3 "$SURFACE" "$@" ;;
+  select) shift; cmd_select "$@" ;;
   add) shift; cmd_add "$@" ;;
   add-selection) shift; cmd_add_selection "$@" ;;
   register-extraction) shift; python3 "$PY" register-extraction "$@" ;;

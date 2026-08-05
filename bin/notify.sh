@@ -35,6 +35,7 @@ chmod 700 "$STATE_DIR" 2>/dev/null || true
 if [ -f "$SCRIPT_DIR/.env" ]; then
   EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
   EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+  SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-$(grep '^SLACK_BOT_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}"
 API_KEY="${EGREGORE_API_KEY:-}"
@@ -178,6 +179,8 @@ write_plan() {
   }' "$path"
 }
 
+# Channel-generic despite the name: reads any field from .egregore-state.json
+# with egregore.json as the legacy fallback (telegram_*, slack_*, …).
 read_local_telegram_config() {
   local field="$1"
   local state_file="$SCRIPT_DIR/.egregore-state.json"
@@ -220,24 +223,38 @@ plan_local() {
     die "direct messages are unavailable in local mode; no group fallback was sent"
   fi
 
-  local chat_id group_link destination
+  local chat_id group_link slack_channel deliveries
   chat_id="$(read_local_telegram_config telegram_chat_id)"
   group_link="$(read_local_telegram_config telegram_group_link)"
-  [ -n "$chat_id" ] || [ -n "$group_link" ] ||
-    die "no Telegram group is configured"
-  destination="${group_link:-$chat_id}"
+  slack_channel="$(read_local_telegram_config slack_channel_id)"
+
+  deliveries="[]"
+  if [ -n "$chat_id" ] || [ -n "$group_link" ]; then
+    deliveries="$(printf '%s' "$deliveries" | jq -c \
+      --arg destination "${group_link:-$chat_id}" \
+      '. + [{channel:"telegram", destination:$destination, kind:"group"}]')"
+  fi
+  # Slack is local-direct (the org owns the app and token): plan it only when
+  # both halves of the config exist, so a half-configured Slack fails soft.
+  if [ -n "$slack_channel" ] && [ -n "${SLACK_BOT_TOKEN:-}" ]; then
+    deliveries="$(printf '%s' "$deliveries" | jq -c \
+      --arg destination "$slack_channel" \
+      '. + [{channel:"slack", destination:$destination, kind:"group"}]')"
+  fi
+  [ "$deliveries" != "[]" ] ||
+    die "no group notification channel is configured"
 
   local response
   response="$(jq -nc \
     --arg slug "$ORG_SLUG" \
     --arg org "$ORG_NAME" \
-    --arg destination "$destination" \
+    --argjson deliveries "$deliveries" \
     '{
       status:"planned",
       org_slug:$slug,
       org_name:$org,
-      channels:["telegram"],
-      deliveries:[{channel:"telegram", destination:$destination, kind:"group"}],
+      channels:($deliveries | map(.channel)),
+      deliveries:$deliveries,
       no_fallback:true
     }')"
   write_plan "$response" "$kind" "$recipient" "$message"
@@ -342,11 +359,12 @@ dispatch_connected() {
   printf '%s\n' "$response"
 }
 
-dispatch_local() {
-  local path="$1"
-  local message destination chat_id group_link plan_slug plan_org response
-  message="$(jq -r '.message' "$path")"
-  destination="$(jq -r '.deliveries[0].destination' "$path")"
+dispatch_local_telegram() {
+  local destination="$1"
+  local message="$2"
+  local plan_slug="$3"
+  local plan_org="$4"
+  local chat_id group_link
   case "$destination" in
     https://t.me/*)
       chat_id=""
@@ -357,9 +375,7 @@ dispatch_local() {
       group_link=""
       ;;
   esac
-  plan_slug="$(jq -r '.org_slug' "$path")"
-  plan_org="$(jq -r '.org_name' "$path")"
-  response="$(curl -sS -X POST "${RELAY_URL}/api/notify/relay" \
+  curl -sS -X POST "${RELAY_URL}/api/notify/relay" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \
       --arg chat_id "$chat_id" \
@@ -368,12 +384,84 @@ dispatch_local() {
       --arg slug "$plan_slug" \
       --arg org_name "$plan_org" \
       '{chat_id:$chat_id,group_link:$group_link,message:$message,slug:$slug,org_name:$org_name}')" \
-    --max-time 10)" || return 1
-  printf '%s' "$response" | jq -e '.status == "sent"' >/dev/null 2>&1 || {
-    printf '%s\n' "$response"
-    return 1
+    --max-time 10
+}
+
+# Local-direct: the org owns the Slack app and token, so the message goes
+# straight from this machine to Slack — never through the Egregore relay.
+dispatch_local_slack() {
+  local destination="$1"
+  local message="$2"
+  if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+    jq -nc '{status:"error",detail:"SLACK_BOT_TOKEN is missing from .env"}'
+    return 0
+  fi
+  local response
+  response="$(curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+    -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+    -H "Content-Type: application/json; charset=utf-8" \
+    -d "$(jq -nc \
+      --arg channel "$destination" \
+      --arg text "$message" \
+      '{channel:$channel,text:$text,unfurl_links:false}')" \
+    --max-time 10)" || {
+    jq -nc '{status:"error",detail:"Slack request failed"}'
+    return 0
   }
-  printf '%s\n' "$response"
+  if printf '%s' "$response" | jq -e '.ok == true' >/dev/null 2>&1; then
+    jq -nc '{status:"sent"}'
+  else
+    jq -nc \
+      --arg detail "$(printf '%s' "$response" | jq -r '.error // "unknown"' 2>/dev/null || echo unknown)" \
+      '{status:"error",detail:$detail}'
+  fi
+}
+
+dispatch_local() {
+  local path="$1"
+  local message plan_slug plan_org count i channel destination result
+  message="$(jq -r '.message' "$path")"
+  plan_slug="$(jq -r '.org_slug' "$path")"
+  plan_org="$(jq -r '.org_name' "$path")"
+  count="$(jq -r '.deliveries | length' "$path")"
+
+  # One platform failing must not mask another succeeding (mirror of the
+  # server-side send_group semantics).
+  local results="{}"
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    channel="$(jq -r ".deliveries[$i].channel" "$path")"
+    destination="$(jq -r ".deliveries[$i].destination" "$path")"
+    case "$channel" in
+      telegram)
+        result="$(dispatch_local_telegram "$destination" "$message" "$plan_slug" "$plan_org")" ||
+          result='{"status":"error","detail":"relay request failed"}'
+        printf '%s' "$result" | jq -e . >/dev/null 2>&1 ||
+          result='{"status":"error","detail":"relay returned an unreadable response"}'
+        ;;
+      slack)
+        result="$(dispatch_local_slack "$destination" "$message")"
+        ;;
+      *)
+        result='{"status":"error","detail":"Unsupported channel"}'
+        ;;
+    esac
+    results="$(printf '%s' "$results" | jq -c --arg ch "$channel" --argjson r "$result" '. + {($ch): $r}')"
+    i=$((i + 1))
+  done
+
+  local sent
+  sent="$(printf '%s' "$results" | jq -c '[to_entries[] | select(.value.status == "sent") | .key]')"
+  if [ "$sent" = "[]" ]; then
+    printf '%s\n' "$results"
+    return 1
+  fi
+  printf '%s' "$results" | jq -c --argjson sent "$sent" \
+    '{status:"sent", platforms:$sent}
+     + ([to_entries[] | select(.value.status != "sent")] as $f
+        | if ($f | length) > 0
+          then {failed: ($f | map({(.key): (.value.detail // "unknown")}) | add)}
+          else {} end)'
 }
 
 dispatch_plan() {
@@ -469,12 +557,14 @@ test_connection() {
       -H "Authorization: Bearer $API_KEY" \
       --max-time 10
   elif [ "$MODE" = "local" ]; then
-    local group_link
+    local group_link slack_channel
     group_link="$(read_local_telegram_config telegram_group_link)"
-    if [ -n "$group_link" ]; then
+    slack_channel="$(read_local_telegram_config slack_channel_id)"
+    if [ -n "$group_link" ] ||
+       { [ -n "$slack_channel" ] && [ -n "${SLACK_BOT_TOKEN:-}" ]; }; then
       echo '{"status":"configured","mode":"local"}'
     else
-      echo '{"status":"offline","reason":"no_telegram_group"}'
+      echo '{"status":"offline","reason":"no_notification_channel"}'
     fi
   else
     echo '{"status":"offline","reason":"no_api_key"}'
