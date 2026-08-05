@@ -49,7 +49,54 @@ bash bin/ingest.sh select
 
 The command waits while a one-time page on `127.0.0.1` lets the user choose files or a folder, review the stable source id/name, add hard boundaries, and optionally mark an authoritative snapshot. Browser-selected bytes are staged only under gitignored `.egregore/ingest-staging/`, outside the searchable qmd collection; they are not uploaded to an Egregore service. The compact JSON returned to the agent contains `selection_path`, `source_id`, file count, and byte count. It never supplies an org. A detached loopback receipt remains alive so the browser can show the actual `add-selection` result.
 
-If the result contains `"cancelled": true`, stop without claiming an intake occurred. Otherwise ingest the confirmed manifest:
+If the result contains `"cancelled": true`, stop without claiming an intake occurred.
+
+**If the result contains `"connector"`** (the user clicked a connected-source
+button — Google or Notion — instead of choosing files), the picker's job is
+done and the guided setup continues here in the terminal:
+
+- `"connector": "google"` → the picker may have finished sign-in already:
+  `"auth": "connected"` means the user authorized in their browser tab (the
+  select command stitched the consent page in) — verify with `bash
+  bin/connector-google.sh auth status` and continue straight to intake.
+  `"auth": "failed"` or no `auth` key → run `bash bin/connector-google.sh
+  auth` (opens Google's consent page; tokens stay on this machine). An
+  `"account"` key means that account is already connected — offer adding
+  another (`bash bin/connector-google.sh auth --account <email>`; list with
+  `auth accounts`). When authorized, continue with the `ingest-google` skill
+  for the actual intake. In connected mode, project the lifecycle after each
+  step (see Connector lifecycle below).
+- `"connector": "notion"` → route to the `notion-connect` skill, then
+  `ingest-notion` for intake.
+
+Walk one step at a time and confirm each authorization succeeded before moving
+on — this flow is the product's guided setup, not a script dump.
+
+**Connector lifecycle (connected mode only).** After authorization succeeds,
+after an account is added or revoked, and after an intake completes, project
+the lifecycle into the graph so the ontology reflects it — which providers
+this org connected, which accounts are authorized, and which ingest source
+came through which account:
+
+```bash
+mkdir -p memory/ingest/connectors
+cat > memory/ingest/connectors/<provider>-$(date +%Y%m%d%H%M%S).json <<EOF
+{
+  "schema": "egregore-connector-lifecycle/v1",
+  "provider": "google",
+  "recorded_at": "<ISO-8601 now>",
+  "accounts": [{"email": "<account email>", "status": "authorized"}],
+  "source_id": "<IngestSource id, when the intake exists>"
+}
+EOF
+bash bin/ingest-graph.sh apply memory/ingest/connectors/<that file>
+```
+
+Schema: `(:SourceAccount {id: provider:email})-[:ON]->(:Connector {id:
+provider})` and `(:IngestSource)-[:VIA_ACCOUNT]->(:SourceAccount)`. Local
+mode skips this silently — there is no graph.
+
+Otherwise ingest the confirmed manifest:
 
 ```bash
 bash bin/ingest.sh add-selection "<selection_path>"
@@ -95,6 +142,14 @@ bash bin/ingest.sh add <path> \
 Repeat `--boundary` for multiple fields. Add `--prune` only when the directory is an authoritative full snapshot; missing documents are then removed from the index and retained as graph/manifest tombstones. Without it, sync is additive. The command is idempotent: document ids are stable from org + source + relative path; revisions are content hashes; chunk ids are deterministic. Boundary changes rewrite manifest and searchable frontmatter even when bytes are unchanged. It writes shared metadata under `memory/ingest/`, normalized searchable bodies under `.egregore/ingest/`, refreshes the isolated qmd index, and projects typed source/document/chunk provenance through `bin/ingest-graph.sh`. Graph status is reported as `synced`, `stored-local`, or `partial`. Recovery state for incomplete qmd/graph phases appears in `bash bin/ingest.sh status`; `bash bin/ingest.sh reindex` retries every durable manifest. Another org member can pull the manifests but must rehydrate the local cache from an authorized source/connector before searching corpus bodies.
 
 Supported directly: text, Markdown, CSV/TSV, JSON/JSONL, YAML, XML, HTML, DOCX, and PDF when `pdftotext` is installed. Report skipped/failed extraction explicitly; never imply full coverage when the manifest has errors.
+
+**Boundaries an operator leaves blank can be filled in.** People bringing in a folder of documents rarely type boundary values, and an absent boundary filters nothing. If the instance supplies a profile at `memory/ingest/publisher-profile.json` (or `EGREGORE_PUBLISHER_PROFILE`), each document's origin — source URL, institution, or filename — is matched against it and the boundary the profile declares in `boundary_key` is filled where the operator set none. A value the operator did set is never overwritten. Derived values are marked `derived: true` in the document's `provenance` alongside the evidence and a confidence grade, so a reader can tell a worked-out value from a stated one and weigh it accordingly. **Instances without a profile derive nothing** — this is the default.
+
+Report derived boundaries in the completion summary, with their confidence. Where a boundary is a required retrieval filter, say how many documents received a derived value rather than a stated one; a hard filter resting on an inference is worth a human glance.
+
+**PDFs are routed per page, not per document.** A scanned page can sit anywhere in an otherwise readable file, and whole-document extraction hides it: the document appears to extract cleanly while that page's content is simply absent. Each page below `EGREGORE_PDF_MIN_CHARS_PER_PAGE` (default 100 non-whitespace characters) is rasterised and read with `tesseract -l tur+eng` when `tesseract` and `pdftoppm` are present. The manifest's `extraction.pages` records which pages came from the text layer, which were recovered by OCR, which remain sparse or blank, and which were never attempted because the per-document OCR budget ran out — so a thin document is legible as thin rather than mistaken for a clean one. Concatenated per-page output is byte-identical to whole-document output, so files needing no OCR keep their existing content hashes.
+
+Deterministic extraction is preferred over a model deliberately: OCR fails visibly (character-level garbling, which validation can catch) whereas a model asked to read an illegible figure emits a plausible replacement. Where a corpus carries doses, intervals or other consequential numbers, an undetectable substitution is the worse failure. Tune with `EGREGORE_OCR_LANGS`, `EGREGORE_OCR_DPI`, `EGREGORE_OCR_MAX_PAGES`, or disable with `EGREGORE_OCR=0`.
 
 ### 3. Verify the intake
 

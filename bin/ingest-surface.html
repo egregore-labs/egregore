@@ -143,6 +143,14 @@ __EGREGORE_DESIGN_CSS__
     .button { border-radius: 99px; padding: 11px 18px; border: 1px solid var(--border); background: var(--card-bg); color: var(--dark); }
     .button.primary { border-color: var(--terracotta); background: var(--terracotta); color: var(--paper); }
     .button:disabled { cursor: not-allowed; color: var(--warm-gray); border-color: var(--border); background: var(--card-bg); }
+    .connectors { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .connectors-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .connectors-head h3 { font-size: 13px; font-weight: 600; color: var(--dark); }
+    .connector-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+    .connector { display: flex; flex-direction: column; gap: 3px; text-align: left; border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; background: var(--card-bg); color: var(--dark); min-width: 180px; }
+    .connector:hover { border-color: var(--terracotta); }
+    .connector span { color: var(--muted); font-size: 12px; }
+    .connector-note { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .status { border-left: 2px solid var(--terracotta); padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .status.error { border-color: var(--danger); color: var(--danger); }
     .status.done { border-color: var(--success); color: var(--success); }
@@ -198,6 +206,11 @@ __EGREGORE_DESIGN_CSS__
         </div>
         <input id="file-input" type="file" multiple>
         <input id="folder-input" type="file" webkitdirectory multiple>
+        <div class="connectors hidden" id="connectors">
+          <div class="connectors-head"><h3>Or bring a connected source</h3><span class="step">guided setup</span></div>
+          <div class="connector-row" id="connector-row"></div>
+          <p class="connector-note">Setup continues in the terminal — the agent walks you through authorization, and your tokens stay on this machine.</p>
+        </div>
       </section>
 
       <section class="panel hidden" id="review-panel">
@@ -273,6 +286,59 @@ __EGREGORE_DESIGN_CSS__
       document.getElementById('completion').classList.remove('hidden');
       document.title = 'Return to the terminal — Egregore';
     }
+    var connectorMeta = {
+      google: { label: 'Google Workspace', detail: 'Gmail, Drive, Calendar — multiple accounts' },
+      notion: { label: 'Notion', detail: 'Pages and databases' }
+    };
+    function showConnectorCompletion(provider) {
+      var meta = connectorMeta[provider] || { label: provider };
+      var account = (capabilities.connector_accounts || {})[provider] || '';
+      document.getElementById('completion-kicker').textContent = account
+        ? 'Already connected'
+        : 'Guided setup continues in the terminal';
+      document.getElementById('completion-copy').textContent = account
+        ? meta.label + ' is already connected as ' + account + '. Back in the terminal, your agent can add another account or start bringing material in.'
+        : 'Your agent is waiting there to connect ' + meta.label + ' — it walks you through authorization step by step. Tokens stay on this machine.';
+      document.getElementById('completion-source').textContent = account || meta.label;
+      document.getElementById('completion-files').textContent = account ? 'connected' : 'connected source';
+      document.getElementById('completion-outcome').textContent = account ? meta.label : 'guided setup';
+      document.querySelector('.shell').classList.add('hidden');
+      document.getElementById('completion').classList.remove('hidden');
+      document.title = 'Return to the terminal — Egregore';
+    }
+    function chooseConnector(provider) {
+      if (busy) return;
+      busy = true;
+      post('/api/connector', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ provider: provider })
+      }).then(function (result) {
+        if (result.redirect) {
+          // The CLI pre-started the OAuth listener — continue this same tab
+          // straight into the sign-in page.
+          window.location.href = result.redirect;
+          return;
+        }
+        showConnectorCompletion(provider);
+      }).catch(function (err) {
+        busy = false;
+        setStatus(err.message, 'error');
+        statusBox.classList.remove('hidden');
+      });
+    }
+    (function renderConnectors() {
+      var list = (capabilities.connectors || []).filter(function (p) { return connectorMeta[p]; });
+      if (!list.length) return;
+      var row = document.getElementById('connector-row');
+      row.innerHTML = list.map(function (p) {
+        return '<button class="connector" type="button" data-provider="' + p + '"><strong>' + connectorMeta[p].label + '</strong><span>' + connectorMeta[p].detail + '</span></button>';
+      }).join('');
+      row.querySelectorAll('.connector').forEach(function (btn) {
+        btn.addEventListener('click', function () { chooseConnector(btn.dataset.provider); });
+      });
+      document.getElementById('connectors').classList.remove('hidden');
+    })();
     function choose(files) {
       var seen = new Set();
       selected = Array.from(files).filter(function (file) {

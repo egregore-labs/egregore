@@ -26,11 +26,19 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
   ```
 - **Current schema**: Person, Session, Artifact (with typed secondary labels
   such as Decision, Finding, Pattern, Claim, and Research), Quest, Project,
-  Spirit, Meeting, Interview, PR, IngestSource, IngestDocument, and
-  IngestChunk. Relationships include BY, CONDUCTED_BY, CONTRIBUTED_BY,
+  Spirit, Meeting, Interview, PR, IngestSource, IngestDocument,
+  IngestChunk, Connector, and SourceAccount. Connector lifecycle
+  (connected mode): `(:SourceAccount {id: provider:email, status,
+  authorizedAt})-[:ON]->(:Connector {id: provider})`, and
+  `(:IngestSource)-[:VIA_ACCOUNT]->(:SourceAccount)` records which
+  authorized account material arrived through — projected via
+  `egregore-connector-lifecycle/v1` manifests through
+  `bin/ingest-graph.sh apply`. Relationships include BY, CONDUCTED_BY,
+  CONTRIBUTED_BY,
   FROM_MEETING, FROM_INTERVIEW, FROM_SOURCE, FROM_DOCUMENT,
   DERIVED_FROM_CHUNK, GENERATED_BY, HANDED_TO, IMPLEMENTS, INGESTED,
-  INVOKED_BY, INVOLVES, MENTIONS, PART_OF, PRODUCED, RELATES_TO, and
+  INVOKED_BY, INVOLVES, MENTIONS, ON, PART_OF, PRODUCED, RELATES_TO,
+  VIA_ACCOUNT, and
   STARTED_BY. Durable ingestion manifests are projected through
   `bash bin/ingest-graph.sh apply <manifest>`; route-specific writers must not
   bypass that contract.

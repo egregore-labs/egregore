@@ -1,0 +1,22 @@
+# Egregore Slack app manifest — paste at https://api.slack.com/apps →
+# Create New App → From a manifest.
+#
+# One scope, deliberately: chat:write lets the bot post in channels it has
+# been invited to. It cannot read messages, files, or member lists. The org
+# owns this app and its token, and can revoke both at any time.
+display_information:
+  name: Egregore Notifications
+  description: One-way notifications from your Egregore.
+  background_color: "#1a1a2e"
+features:
+  bot_user:
+    display_name: Egregore
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

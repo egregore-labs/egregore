@@ -23,6 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import doc_segment  # noqa: E402  (same-directory module, path set above)
+import pdf_extract  # noqa: E402
+import source_profile  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "egregore.json"
@@ -99,31 +104,32 @@ def parse_boundaries(items: list[str]) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
-def read_text(path: Path) -> tuple[str | None, str | None, str | None]:
+def read_text(path: Path) -> tuple[str | None, str | None, str | None, dict | None]:
+    """Extract text. Returns (text, error, extractor, detail).
+
+    `detail` carries per-page extraction facts for formats that have pages, so the
+    manifest records which pages needed OCR and which remain sparse or blank.
+    """
     ext = path.suffix.lower()
     try:
         if ext in TEXT_EXTS:
-            return path.read_text(encoding="utf-8", errors="replace"), None, "builtin-text"
+            return path.read_text(encoding="utf-8", errors="replace"), None, "builtin-text", None
         if ext in HTML_EXTS:
             raw = path.read_text(encoding="utf-8", errors="replace")
             raw = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", raw)
-            return html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw)), None, "builtin-html"
+            return html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw)), None, "builtin-html", None
         if ext == ".docx":
             with zipfile.ZipFile(path) as archive:
                 raw = archive.read("word/document.xml")
             root = ElementTree.fromstring(raw)
-            return "\n".join(t.text or "" for t in root.iter() if t.tag.endswith("}t")), None, "builtin-docx"
+            text = "\n".join(t.text or "" for t in root.iter() if t.tag.endswith("}t"))
+            return text, None, "builtin-docx", None
         if ext == ".pdf":
-            tool = shutil.which("pdftotext")
-            if not tool:
-                return None, "pdf requires a text-layer or runtime-native extraction", None
-            proc = subprocess.run([tool, str(path), "-"], check=False, capture_output=True, text=True)
-            if proc.returncode:
-                return None, f"pdftotext failed ({proc.returncode})", None
-            return proc.stdout, None, "pdftotext"
+            result = pdf_extract.extract(path)
+            return result.text, result.error, result.extractor, (result.report or None)
     except (OSError, ValueError, zipfile.BadZipFile, ElementTree.ParseError) as exc:
-        return None, str(exc), None
-    return None, f"unsupported extension {ext or '(none)'}", None
+        return None, str(exc), None, None
+    return None, f"unsupported extension {ext or '(none)'}", None, None
 
 
 def chunks(text: str, limit: int = 7000) -> list[str]:
@@ -144,6 +150,23 @@ def chunks(text: str, limit: int = 7000) -> list[str]:
     if current:
         result.append(current)
     return result
+
+
+def publisher_profile() -> dict | None:
+    """Load the instance's publisher profile, if one is configured.
+
+    Resolution is recorded as evidence only. It never overrides a boundary the
+    operator set: deriving a region is an inference, and an inference must not
+    silently replace a stated fact.
+    """
+    override = os.environ.get("EGREGORE_PUBLISHER_PROFILE")
+    path = Path(override) if override else (metadata_root() / "publisher-profile.json")
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def source_dir(source_id: str) -> Path:
@@ -200,6 +223,7 @@ def add_path(args: argparse.Namespace) -> dict:
     existing_manifest = load_manifest(directory)
     previous = {d["id"]: d for d in existing_manifest.get("documents", [])}
     now = datetime.now(timezone.utc).isoformat()
+    profile = publisher_profile()
     ingested = unchanged = metadata_updated = skipped = pruned = 0
     errors: list[dict] = []
     seen_paths: set[str] = set()
@@ -224,8 +248,10 @@ def add_path(args: argparse.Namespace) -> dict:
             text, error = registered["text"], None
             extraction = {"kind": "runtime", "extractor": registered["extractor"]}
         else:
-            text, error, extractor = read_text(path)
+            text, error, extractor, detail = read_text(path)
             extraction = {"kind": "local", "extractor": extractor} if extractor else None
+            if extraction and detail:
+                extraction["pages"] = detail
         if error or text is None or not text.strip():
             skipped += 1
             errors.append({"path": relative, "error": error or "empty extracted text"})
@@ -255,13 +281,49 @@ def add_path(args: argparse.Namespace) -> dict:
         ):
             unchanged += 1
             continue
-        document_chunks = chunks(text)
+        # Segment before chunking so no passage straddles two works. A document
+        # holding a single work yields one segment, and chunking is unchanged.
+        segments = doc_segment.segment(text)
+        document_chunks: list[tuple[str, doc_segment.Segment]] = []
+        for seg in segments:
+            for piece in chunks(seg.text(text)):
+                document_chunks.append((piece, seg))
+
         chunk_rows = []
         body = []
-        for index, content in enumerate(document_chunks, 1):
+        for index, (content, seg) in enumerate(document_chunks, 1):
             chunk_id = f"{doc_id}-c{index:04d}-{digest(content, 8)}"
-            chunk_rows.append({"id": chunk_id, "index": index, "sha256": hashlib.sha256(content.encode()).hexdigest()})
+            row = {"id": chunk_id, "index": index, "sha256": hashlib.sha256(content.encode()).hexdigest()}
+            if seg.kind != "article" or seg.label:
+                row["segment"] = {"kind": seg.kind, **({"label": seg.label} if seg.label else {})}
+            chunk_rows.append(row)
             body.append(f"## Chunk {index:04d}\n\n<!-- ingest-chunk: {chunk_id} -->\n\n{content}")
+
+        structure = {
+            "segments": len([s for s in segments if s.kind == "article"]),
+            "summary": doc_segment.summarise(segments),
+        }
+        derived_year = doc_segment.publication_year(segments)
+        if derived_year:
+            structure["publication_year"] = derived_year
+            structure["year_source"] = "running_head"
+
+        # Fill in boundaries the operator left blank, when the instance supplies a
+        # profile that can work them out from where the document came from. People
+        # dumping a folder of documents will not type these in, and a boundary that
+        # is absent filters nothing. A derived value is marked as derived: anything
+        # downstream can tell it apart from one a person stated, and weigh it by the
+        # confidence recorded alongside. An operator's value is never overwritten.
+        provenance = None
+        doc_boundaries = dict(boundaries)
+        if profile:
+            resolved = source_profile.resolve(profile, filename=relative)
+            if resolved.publisher_class or resolved.notes:
+                provenance = resolved.as_dict()
+            key = source_profile.boundary_key(profile)
+            if key and resolved.zone and key not in doc_boundaries:
+                doc_boundaries[key] = resolved.zone
+                provenance = {**(provenance or {}), "applied_boundary": key, "derived": True}
         out_path = docs_dir / f"{doc_id}.md"
         frontmatter = {
             "id": doc_id,
@@ -274,8 +336,10 @@ def add_path(args: argparse.Namespace) -> dict:
             "normalized_content_hash": normalized_hash,
             "revision": content_hash[:16],
             "status": "unverified",
-            "boundaries": boundaries,
+            "boundaries": doc_boundaries,
             "extraction": extraction,
+            "structure": structure,
+            "provenance": provenance,
             "ingested_at": now,
         }
         yaml_lines = ["---"] + [f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in frontmatter.items()] + ["---", ""]
@@ -292,7 +356,9 @@ def add_path(args: argparse.Namespace) -> dict:
             "bytes": size_bytes,
             "chunks": chunk_rows,
             "extraction": extraction,
-            "boundaries": boundaries,
+            "structure": structure,
+            "provenance": provenance,
+            "boundaries": doc_boundaries,
             "status": "unverified",
             "ingested_at": now,
         }
