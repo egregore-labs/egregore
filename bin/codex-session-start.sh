@@ -89,6 +89,11 @@ trap 'rm -rf "${CTX_DIR:-}"' EXIT
 # (terminal closed). Gated + idle-guarded inside the script; fire-and-forget.
 ( bash "$SCRIPT_DIR/bin/session-autosave.sh" --sweep >/dev/null 2>&1 & ) 2>/dev/null
 
+# Connected instances pick up newly released Connect skills without
+# re-running the launcher. Local mode exits instantly inside the script.
+# Pi shares this path (pi-session-start.sh delegates here).
+( bash "$SCRIPT_DIR/bin/connect-refresh.sh" >/dev/null 2>&1 & ) 2>/dev/null
+
 read_json() {
   local file="$1"
   local expr="$2"
