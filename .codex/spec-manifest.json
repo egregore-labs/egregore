@@ -29,7 +29,7 @@
     {
       "section": "On Launch — MANDATORY FIRST ACTION",
       "action": "replace",
-      "sourceHash": "3def4421213a",
+      "sourceHash": "233d160f9ca8",
       "note": "Claude SessionStart hook does not run on Codex; the egregore launcher renders the card via bin/codex-session-start.sh before the session. Greeting-replay instruction dropped (card is already on screen)."
     },
     {
@@ -41,7 +41,7 @@
     {
       "section": "Config Files",
       "action": "keep",
-      "sourceHash": "8d7f1bd0f2d9",
+      "sourceHash": "4ca75fe428ca",
       "note": "Kept verbatim — shell facts, runtime-neutral."
     },
     {
@@ -101,7 +101,7 @@
     {
       "section": "Command Awareness",
       "action": "keep",
-      "sourceHash": "d6fe47a75c00",
+      "sourceHash": "905ad739e18c",
       "note": "Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
     },
     {

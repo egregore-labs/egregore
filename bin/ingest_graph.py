@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CORPUS_SCHEMA = "egregore-ingest-corpus/v1"
 KNOWLEDGE_SCHEMA = "egregore-knowledge-projection/v1"
 PLAN_SCHEMA = "egregore-ingest-graph-plan/v2"
-SOURCE_KINDS = {"meeting", "interview", "google", "corpus", "document"}
+SOURCE_KINDS = {"meeting", "interview", "google", "notion", "corpus", "document"}
 SOURCE_RELATIONS = {"INVOLVES", "CONDUCTED_BY"}
 ARTIFACT_RELATIONS = {"RELATES_TO", "SUPERSEDES"}
 ARTIFACT_LABELS = {
@@ -437,6 +437,8 @@ def source_shape(kind: str) -> tuple[str, str]:
     if kind == "interview":
         return "Interview:KnowledgeSource", "FROM_INTERVIEW"
     if kind == "google":
+        return "Artifact:KnowledgeSource", "DERIVED_FROM"
+    if kind == "notion":
         return "Artifact:KnowledgeSource", "DERIVED_FROM"
     if kind == "corpus":
         return "IngestSource:KnowledgeSource", "DERIVED_FROM"

@@ -34,6 +34,7 @@ The filesystem remains authoritative. qmd indexes the uncurated intake edge. The
 - `meeting ...` → follow `.claude/skills/meeting/SKILL.md`
 - `user-interview ...` → follow `.claude/skills/ingest-user-interview/SKILL.md`
 - `google ...` → follow `.claude/skills/ingest-google/SKILL.md`
+- `notion ...` → follow `.claude/skills/ingest-notion/SKILL.md`
 - no path, "choose files", "upload files", or "open ingest" → use the local picker below
 - file path, folder, corpus, "everything from the org", or bulk import → use the corpus pipeline below
 - ambiguous single item → ask whether it is a meeting, interview, Google item, or file/folder

@@ -277,6 +277,13 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Writes**: Nothing
 - **External deps**: npx, tsx
 
+#### `connector-notion.sh`
+- **Purpose**: Wrapper delegating to the Notion connector TypeScript CLI (`bin/connector-notion/`) — client-owned integration token, direct REST, native markdown export; feeds `/ingest notion` (spec: `docs/specs/notion-connector.md`)
+- **Called by**: `/connect notion`, `/ingest notion`, ad-hoc lookups
+- **Reads**: `.env` (`NOTION_API_TOKEN`), `egregore.json` (`connectors.notion`), `.egregore-state.json`
+- **Writes**: `.env` (auth set), `.egregore-state.json` (notion_* keys), `~/.egregore/context/notion/` cache, export dirs
+- **External deps**: npx, tsx
+
 ### Worktree & Git
 
 #### `worktree.sh`
@@ -438,6 +445,7 @@ bash bin/test-isolation.sh
 |-----|---------|-----------|------------|
 | `GITHUB_TOKEN` | GitHub API auth | session-start, github-auth, deploy-site, test-isolation | github-auth.sh, onboarding |
 | `EGREGORE_API_KEY` | API gateway auth | graph.sh, notify.sh, telemetry.sh, session-start, all infra | onboarding, session-start (auto-fix) |
+| `NOTION_API_TOKEN` | Notion internal-integration token (client-owned; same var the official `ntn` CLI reads) | connector-notion | connector-notion (`auth set` hidden prompt) |
 
 **Template**: `.env.example` / `.env 2.example`
 
@@ -452,7 +460,7 @@ bash bin/test-isolation.sh
 | `slug` | Org identifier | session-start, provision-hosted, ensure-shell-function |
 | `repo_name` | Hub repo name | provision-hosted |
 | `repos[]` | Managed repos list | session-start, boundary.sh |
-| `connectors` | External service config | connector-google |
+| `connectors` | External service config | connector-google, connector-notion |
 
 **Written by**: Founders during setup (manual or onboarding flow).
 
@@ -468,6 +476,7 @@ bash bin/test-isolation.sh
 | `transcript_sharing` | Consent flag | transcript-archive | onboarding (consent phase) |
 | `telemetry` | Consent flag | telemetry.sh | onboarding (consent phase) |
 | `connected_services` | Connector status (granola, google) | connect.md | User config |
+| `notion_connector`, `notion_auth_complete`, `notion_workspace`, `notion_last_sync` | Notion connector state | connect skill, ingest-notion skill, connector-notion | connector-notion |
 
 ### `.egregore-session-id` (gitignored — current session)
 

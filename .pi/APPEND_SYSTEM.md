@@ -142,7 +142,7 @@ If the startup card output contains `onboarding_needed`, invoke the `/onboarding
 
 ## Config Files
 
-- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. Optional `boundary { posture, read[], locked }` sets the org's isolation posture (see Environment Isolation). **Never put secrets here.**
+- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. Optional `boundary { posture, read[], locked }` sets the org's isolation posture (see Environment Isolation). Optional `owned_skills[]` names org-authored skills in `.claude/skills/` that `/update` must never overwrite (created via `/create-skill`). **Never put secrets here.**
 - **`.env`** — gitignored. Personal secrets. Local mode: `GITHUB_TOKEN` only. Connected mode: `GITHUB_TOKEN` + `EGREGORE_API_KEY`. **Never use `source .env`** — use `grep '^KEY=' .env | cut -d'=' -f2-`.
 
 In connected mode, infrastructure credentials (Neo4j, Telegram) live on the API server only — `bin/graph.sh` and `bin/notify.sh` route through the API gateway.
