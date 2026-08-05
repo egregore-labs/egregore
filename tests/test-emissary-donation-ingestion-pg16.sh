@@ -39,14 +39,25 @@ docker run --rm -d \
   -e POSTGRES_DB=proof \
   postgres:16-alpine >/dev/null
 
+# Probe with a real query against the target database, demanding a success
+# streak: pg_isready answers during initdb's temporary server, before
+# POSTGRES_DB exists (same race test-emissary-data-plane-hardening-pg16.sh
+# already guards against).
 ready=false
-for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+ready_streak=0
+for _attempt in $(seq 1 80); do
   if docker exec "$container_name" \
-    pg_isready -U postgres -d proof >/dev/null 2>&1; then
-    ready=true
-    break
+    psql -X -U postgres -d proof -Atqc 'SELECT 1' \
+    >/dev/null 2>&1; then
+    ready_streak=$((ready_streak + 1))
+    if [ "$ready_streak" -ge 3 ]; then
+      ready=true
+      break
+    fi
+  else
+    ready_streak=0
   fi
-  sleep 1
+  sleep 0.25
 done
 if [[ "$ready" != true ]]; then
   echo "PostgreSQL 16 did not become ready" >&2

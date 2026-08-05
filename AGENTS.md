@@ -216,7 +216,7 @@ If the startup card output contains `onboarding_needed`, invoke the `$onboarding
 
 ## Config Files
 
-- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. Optional `boundary { posture, read[], locked }` sets the org's isolation posture (see Environment Isolation). **Never put secrets here.**
+- **`egregore.json`** — committed. Non-secret org config: `org_name`, `github_org`, `memory_repo`, `slug`, `mode`. `api_url` is connected-mode only. Optional `boundary { posture, read[], locked }` sets the org's isolation posture (see Environment Isolation). Optional `owned_skills[]` names org-authored skills in `.claude/skills/` that `$update` must never overwrite (created via `$create-skill`). **Never put secrets here.**
 - **`.env`** — gitignored. Personal secrets. Local mode: `GITHUB_TOKEN` only. Connected mode: `GITHUB_TOKEN` + `EGREGORE_API_KEY`. **Never use `source .env`** — use `grep '^KEY=' .env | cut -d'=' -f2-`.
 
 In connected mode, infrastructure credentials (Neo4j, Telegram) live on the API server only — `bin/graph.sh` and `bin/notify.sh` route through the API gateway.
@@ -395,9 +395,10 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Knowledge** — `$search` `$deep-reflect` `$archive` `$note` `$add` `$meeting` `$ingest` `$scroll` `$mock` `$audit`
 **Identity** — `$me` (view profile or set display name)
 **Coordination** — `$ask` `$quest` `$issue` `$invite` `$delete-user` `$announce`
-**Connectors** — `$telegram-connect` (Telegram group setup) `$teams-connect` (Microsoft Teams channel setup)
+**Connectors** — `$notion-connect` (Notion workspace) `$telegram-connect` (Telegram group setup) `$teams-connect` (Microsoft Teams channel setup)
 **Git** — `$branch` `$commit` `$push` `$pr` `$save` `$review-pr` `$contribute`
 **Spirits** — `$summon` (persistent agent processes)
+**Skills** — `$create-skill` (org-owned skill: scaffold, protect from updates, share)
 **Infra** — `$setup` `$update` `$pull` `$env` `$infra` `$sync-repos` `$release` `$checkup`
 
 **Disambiguation:**
@@ -410,11 +411,12 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Tasks: `$todo` (personal) · `$quest` (team exploration) · `$issue` (something broken)
 - Questions: `$ask [person]` (async) · just ask (agent answers from context)
 - Ingestion: `$ingest <file-or-folder>` (org-scoped corpus intake) · `$ingest meeting` · `$ingest user-interview` · `$ingest google` · ambiguous → ask which type
-- Connectors: `$telegram-connect` (Telegram group) · `$teams-connect` (MS Teams channel) · `$ingest` (bring content in)
+- Connectors: `$notion-connect` (Notion workspace) · `$telegram-connect` (Telegram group) · `$teams-connect` (MS Teams channel) · `$ingest` (bring content in) · `$ingest notion` (promote Notion docs)
 - Identity: `$me` — "who am I", "call me oz"
 - People: `$invite` (add) · `$delete-user` (remove)
 - PRs: `$pr` (create) · `$review-pr` (review)
 - Contributing: `$contribute` (upstream framework) · `$save` (org repo) · `$issue` (report bug)
+- Skills: `$create-skill` (new org-owned skill) · `$contribute` (change a framework skill for everyone)
 - Agents: `$summon` (design through questions) · `/loop` (quick recurring schedule)
 - Announcements: `$announce` (broadcast to group) · `$handoff` (structured to a person) · `bin/notify.sh send` (DM one person)
 

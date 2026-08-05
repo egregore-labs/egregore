@@ -87,6 +87,10 @@ if [ "$IN_WORKTREE" = "true" ]; then
     git -C "$MAIN_DIR" checkout upstream/main -- AGENTS.md .codex/spec-manifest.json 2>/dev/null || true
   fi
 
+  # Restore org-owned skills (egregore.json → owned_skills[]) before committing.
+  # On a name collision the org's committed version wins; the script reports it.
+  (cd "$MAIN_DIR" && bash bin/restore-owned-skills.sh) || true
+
   # Show what changed
   git -C "$MAIN_DIR" diff --stat HEAD
 
@@ -136,6 +140,10 @@ if [ "$IN_WORKTREE" = "false" ]; then
     git checkout upstream/main -- AGENTS.md .codex/spec-manifest.json 2>/dev/null || true
   fi
 
+  # Restore org-owned skills (egregore.json → owned_skills[]) before committing.
+  # On a name collision the org's committed version wins; the script reports it.
+  bash bin/restore-owned-skills.sh || true
+
   # Show what changed
   git diff --stat HEAD
 fi
@@ -144,6 +152,7 @@ fi
 **Framework paths synced:** `bin/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `loom/`, `CLAUDE.md`, `skills/`
 **Regenerated:** `AGENTS.md` + `.codex/spec-manifest.json` via `bin/codex-render-spec.mjs`, then `.pi/APPEND_SYSTEM.md` + `.pi/spec-manifest.json` via `bin/pi-render-spec.mjs`, so both derived harnesses stay aligned with `CLAUDE.md`.
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
+**Org-owned skills:** names in `egregore.json` → `owned_skills[]` are restored from the org's committed state after the overlay (`bin/restore-owned-skills.sh`) — upstream never overwrites them; collisions are reported instead.
 
 ## Step 3: Post-update migrations
 

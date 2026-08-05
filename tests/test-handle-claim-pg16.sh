@@ -27,7 +27,9 @@ docker run --detach --name "$pg_container" \
 # not race that expected restart (especially on a freshly pulled image).
 ready_streak=0
 for _attempt in $(seq 1 80); do
-  if docker exec "$pg_container" pg_isready -U postgres >/dev/null 2>&1; then
+  if docker exec "$pg_container" \
+    psql -X -U postgres -d postgres -Atqc 'SELECT 1' \
+    >/dev/null 2>&1; then
     ready_streak=$((ready_streak + 1))
     if [ "$ready_streak" -ge 3 ]; then
       break
