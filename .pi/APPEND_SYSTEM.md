@@ -355,8 +355,9 @@ Egregore runs in one of two configurations, set by `mode` in `egregore.json`. De
 
 **Hard rules in local mode:**
 - Never tell the user to "ask their admin" for credentials. The user IS the admin.
-- Never surface `api_url`, `EGREGORE_API_KEY`, or "connected mode" as an upgrade path. Hosted Egregore is a separate service, not something a user can turn on by adding fields to `egregore.json`.
-- If a feature genuinely requires the hosted service, say so plainly ("this isn't available in this configuration") and stop. Do not improvise a path to enabling it.
+- Never surface `api_url`, `EGREGORE_API_KEY`, or config edits as an upgrade path. Hosted Egregore is not something a user can turn on by adding fields to `egregore.json`.
+- **The one sanctioned upgrade path is `egregore connect`** (the launcher flow: registers the org, provisions the key, replays the graph). Connect-tier connector skills carry an explicit upsell gate for local instances — deliver their message verbatim, offer the upgrade via `egregore connect` or a clean "not now", and stop on decline. Beyond that gate, do not improvise: no hand-set `api_url`, no partial flows.
+- If a feature requires the hosted service and has no upsell gate, say so plainly ("this isn't available in this configuration") and stop.
 - Calling `bin/graph.sh` or `bin/notify.sh` in local mode is harmless — they fail soft and return empty results — but there is no need to call them; prefer reading `memory/` directly.
 
 **Connected mode** (`"mode": "connected"`, `api_url` set) — the hosted configuration, used by organizations on the hosted service. Full feature set: Neo4j knowledge graph via `bin/graph.sh`, Telegram notifications via `bin/notify.sh`, dashboard publication, API-backed context gathering on session start. Use `/env` to check API key, `/checkup` for diagnostics. If the graph is offline, show troubleshooting.

@@ -14,6 +14,12 @@
 > `.pi/APPEND_SYSTEM.md`, and your workflows are exposed through the
 > project-local `.pi/` runtime. Do not follow the Codex-specific block below.
 >
+> **If you are Prime Agent** (the `prime-agent` harness): **stop here.** Your
+> authoritative Egregore instructions are loaded from
+> `.prime/agent/APPEND_SYSTEM.md`, and your workflows are exposed through the
+> project-local `.prime/agent/` runtime. Do not follow the Codex-specific
+> block below.
+>
 > **If you are Codex or another shell-only agent:** this file is yours — continue.
 
 Egregore is no longer only a Claude Code workspace. Claude Code remains the
@@ -395,7 +401,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 **Knowledge** — `$search` `$deep-reflect` `$archive` `$note` `$add` `$meeting` `$ingest` `$scroll` `$mock` `$audit`
 **Identity** — `$me` (view profile or set display name)
 **Coordination** — `$ask` `$quest` `$issue` `$invite` `$delete-user` `$announce`
-**Connectors** — `$notion-connect` (Notion workspace) `$telegram-connect` (Telegram group setup) `$teams-connect` (Microsoft Teams channel setup)
+**Connectors** — `$notion-connect` (Notion workspace) `$telegram-connect` (Telegram group setup) `$teams-connect` (Microsoft Teams channel setup) `$slack-connect` (Slack channel setup)
 **Git** — `$branch` `$commit` `$push` `$pr` `$save` `$review-pr` `$contribute`
 **Spirits** — `$summon` (persistent agent processes)
 **Skills** — `$create-skill` (org-owned skill: scaffold, protect from updates, share)
@@ -411,7 +417,7 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Tasks: `$todo` (personal) · `$quest` (team exploration) · `$issue` (something broken)
 - Questions: `$ask [person]` (async) · just ask (agent answers from context)
 - Ingestion: `$ingest <file-or-folder>` (org-scoped corpus intake) · `$ingest meeting` · `$ingest user-interview` · `$ingest google` · ambiguous → ask which type
-- Connectors: `$notion-connect` (Notion workspace) · `$telegram-connect` (Telegram group) · `$teams-connect` (MS Teams channel) · `$ingest` (bring content in) · `$ingest notion` (promote Notion docs)
+- Connectors: `$notion-connect` (Notion workspace) · `$telegram-connect` (Telegram group) · `$teams-connect` (MS Teams channel) · `$slack-connect` (Slack channel) · `$ingest` (bring content in) · `$ingest notion` (promote Notion docs)
 - Identity: `$me` — "who am I", "call me oz"
 - People: `$invite` (add) · `$delete-user` (remove)
 - PRs: `$pr` (create) · `$review-pr` (review)
@@ -451,8 +457,9 @@ Egregore runs in one of two configurations, set by `mode` in `egregore.json`. De
 
 **Hard rules in local mode:**
 - Never tell the user to "ask their admin" for credentials. The user IS the admin.
-- Never surface `api_url`, `EGREGORE_API_KEY`, or "connected mode" as an upgrade path. Hosted Egregore is a separate service, not something a user can turn on by adding fields to `egregore.json`.
-- If a feature genuinely requires the hosted service, say so plainly ("this isn't available in this configuration") and stop. Do not improvise a path to enabling it.
+- Never surface `api_url`, `EGREGORE_API_KEY`, or config edits as an upgrade path. Hosted Egregore is not something a user can turn on by adding fields to `egregore.json`.
+- **The one sanctioned upgrade path is `egregore connect`** (the launcher flow: registers the org, provisions the key, replays the graph). Connect-tier connector skills carry an explicit upsell gate for local instances — deliver their message verbatim, offer the upgrade via `egregore connect` or a clean "not now", and stop on decline. Beyond that gate, do not improvise: no hand-set `api_url`, no partial flows.
+- If a feature requires the hosted service and has no upsell gate, say so plainly ("this isn't available in this configuration") and stop.
 - Calling `bin/graph.sh` or `bin/notify.sh` in local mode is harmless — they fail soft and return empty results — but there is no need to call them; prefer reading `memory/` directly.
 
 **Connected mode** (`"mode": "connected"`, `api_url` set) — the hosted configuration, used by organizations on the hosted service. Full feature set: Neo4j knowledge graph via `bin/graph.sh`, Telegram notifications via `bin/notify.sh`, dashboard publication, API-backed context gathering on session start. Use `$env` to check API key, `$checkup` for diagnostics. If the graph is offline, show troubleshooting.

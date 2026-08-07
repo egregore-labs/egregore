@@ -23,10 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
+import catalogue as catalogue_module  # noqa: E402
 import doc_segment  # noqa: E402  (same-directory module, path set above)
 import pdf_extract  # noqa: E402
 import source_profile  # noqa: E402
+import text_repair  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -152,6 +154,35 @@ def chunks(text: str, limit: int = 7000) -> list[str]:
     return result
 
 
+def find_publisher_profile() -> Path | None:
+    """Where this instance's publisher profile is, if it has one.
+
+    The profile is what assigns a zone and a trust tier to each document, and
+    zone is a hard retrieval boundary. Ingesting without it produces a corpus
+    where every document is unplaced, so every later question is refused — a
+    failure that looks like an empty archive rather than a missing setting.
+
+    So this looks in the places a profile actually lives rather than in one
+    fixed path. An instance keeps its ontology under memory/knowledge/tools/,
+    not beside its intake metadata, and requiring an environment variable to
+    bridge that gap means the common case is the broken one.
+    """
+    override = os.environ.get("EGREGORE_PUBLISHER_PROFILE")
+    if override:
+        path = Path(override)
+        return path if path.is_file() else None
+
+    candidates = [metadata_root() / "publisher-profile.json"]
+    memory = Path("memory")
+    if memory.is_dir():
+        candidates.extend(sorted(memory.glob("knowledge/tools/*/publisher-profile.json")))
+        candidates.append(memory / "publisher-profile.json")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def publisher_profile() -> dict | None:
     """Load the instance's publisher profile, if one is configured.
 
@@ -159,9 +190,8 @@ def publisher_profile() -> dict | None:
     operator set: deriving a region is an inference, and an inference must not
     silently replace a stated fact.
     """
-    override = os.environ.get("EGREGORE_PUBLISHER_PROFILE")
-    path = Path(override) if override else (metadata_root() / "publisher-profile.json")
-    if not path.is_file():
+    path = find_publisher_profile()
+    if path is None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -223,7 +253,19 @@ def add_path(args: argparse.Namespace) -> dict:
     existing_manifest = load_manifest(directory)
     previous = {d["id"]: d for d in existing_manifest.get("documents", [])}
     now = datetime.now(timezone.utc).isoformat()
+    profile_path = find_publisher_profile()
     profile = publisher_profile()
+    if profile is None:
+        # Said once, plainly, because the alternative is a corpus that ingests
+        # cleanly and then refuses every question with no indication why.
+        print("ingest: no publisher-profile.json found — documents will carry no zone "
+              "or trust tier, and a zoneless document can never be served. Put one "
+              "under memory/knowledge/tools/<ontology>/ or set "
+              "EGREGORE_PUBLISHER_PROFILE.", file=sys.stderr)
+    catalogue = catalogue_module.load(
+        profile or {}, base=profile_path.parent if profile_path else None
+    )
+    repair_map = text_repair.load_mapping(profile or {})
     ingested = unchanged = metadata_updated = skipped = pruned = 0
     errors: list[dict] = []
     seen_paths: set[str] = set()
@@ -252,6 +294,15 @@ def add_path(args: argparse.Namespace) -> dict:
             extraction = {"kind": "local", "extractor": extractor} if extractor else None
             if extraction and detail:
                 extraction["pages"] = detail
+        # Fix characters the document's own font encoding got wrong, before
+        # anything downstream indexes or quotes them.
+        repaired = None
+        if text and repair_map:
+            outcome = text_repair.repair(text, repair_map)
+            if outcome.replaced:
+                text = outcome.text
+                repaired = outcome.as_report()
+
         if error or text is None or not text.strip():
             skipped += 1
             errors.append({"path": relative, "error": error or "empty extracted text"})
@@ -283,6 +334,9 @@ def add_path(args: argparse.Namespace) -> dict:
             continue
         # Segment before chunking so no passage straddles two works. A document
         # holding a single work yields one segment, and chunking is unchanged.
+        if repaired and extraction:
+            extraction["repair"] = repaired
+
         segments = doc_segment.segment(text)
         document_chunks: list[tuple[str, doc_segment.Segment]] = []
         for seg in segments:
@@ -314,12 +368,34 @@ def add_path(args: argparse.Namespace) -> dict:
         # is absent filters nothing. A derived value is marked as derived: anything
         # downstream can tell it apart from one a person stated, and weigh it by the
         # confidence recorded alongside. An operator's value is never overwritten.
+        # Evidence strongest first: what the operator stated, then what the
+        # organisation's own catalogue records, then what can be inferred from
+        # the document's origin. A weaker source never overwrites a stronger one.
         provenance = None
         doc_boundaries = dict(boundaries)
+        catalogued = catalogue_module.lookup(catalogue, relative)
+
+        if catalogued:
+            provenance = {"from_catalogue": {k: v for k, v in catalogued.items()}}
+            for field_name, value in catalogued.items():
+                if field_name in ("zone", "crop", "topic", "customer", "jurisdiction", "project"):
+                    if field_name not in doc_boundaries:
+                        doc_boundaries[field_name] = value
+                        provenance["applied_boundary"] = field_name
+            if catalogued.get("year"):
+                structure.setdefault("publication_year", catalogued["year"])
+                structure["year_source"] = structure.get("year_source") or "catalogue"
+            if catalogued.get("tier"):
+                provenance["tier"] = catalogued["tier"]
+            provenance["confidence"] = "high"
+
         if profile:
             resolved = source_profile.resolve(profile, filename=relative)
             if resolved.publisher_class or resolved.notes:
-                provenance = resolved.as_dict()
+                inferred = resolved.as_dict()
+                # Keep the inference visible even when the catalogue answered,
+                # so a disagreement between the two is inspectable.
+                provenance = {**inferred, **(provenance or {})} if provenance else inferred
             key = source_profile.boundary_key(profile)
             if key and resolved.zone and key not in doc_boundaries:
                 doc_boundaries[key] = resolved.zone

@@ -708,7 +708,8 @@ case "$OP" in
     fi
     bash "$GS" query "
       MATCH (s:Session)-[:HANDED_TO]->(p:Person)
-      WHERE (
+      WHERE NOT coalesce(p.kind, '') IN ['identity_alias']
+        AND (
         toLower(coalesce(p.name, '')) = toLower(\$user)
         OR toLower(coalesce(p.github, '')) = toLower(\$user)
         OR toLower(coalesce(p.githubUsername, '')) = toLower(\$user)
@@ -718,13 +719,13 @@ case "$OP" in
         AND coalesce(s.handoffStatus, 'pending')
             IN ['pending','unread','read','claimed']
       WITH DISTINCT s
-      OPTIONAL MATCH (s)-[:BY]->(author:Person)
-      WITH s, author,
+      WITH s, head([(s)-[:BY]->(author:Person)
+                    WHERE NOT coalesce(author.kind, '') IN ['identity_alias'] | author.name]) AS authorName,
            CASE WHEN s.date IS NULL THEN null
                 ELSE duration.inDays(date(s.date), date()).days END AS ageDays
       RETURN s.id AS id,
              coalesce(s.topic, s.summary, s.branch) AS topic,
-             coalesce(author.name, s.author, 'unknown') AS author,
+             coalesce(authorName, s.author, 'unknown') AS author,
              toString(s.date) AS date,
              coalesce(s.handoffStatus, 'pending') AS status,
              coalesce(s.handoffIntent, 'unclassified') AS intent,

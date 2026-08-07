@@ -21,10 +21,18 @@ if [ "$_MODE" = "local" ]; then
   exit 0
 fi
 
-# Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
-if [ -f "$SCRIPT_DIR/.env" ]; then
-  EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
-  EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+# Load specific variables from .env if it exists (safe extraction, no arbitrary code execution).
+# A worktree missing its .env symlink resolves through worktree-links.sh, which
+# self-heals the link and falls back to the main checkout's .env.
+_ENV_FILE="$SCRIPT_DIR/.env"
+if [ ! -f "$_ENV_FILE" ] && [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
+  # shellcheck source=bin/lib/worktree-links.sh
+  source "$SCRIPT_DIR/bin/lib/worktree-links.sh" 2>/dev/null || true
+  _ENV_FILE="$(egregore_env_file "$SCRIPT_DIR" 2>/dev/null || true)"
+fi
+if [ -n "$_ENV_FILE" ] && [ -f "$_ENV_FILE" ]; then
+  EGREGORE_API_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$_ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)}"
+  EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$_ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
 # api_url comes from egregore.json (committed, non-secret)
@@ -168,8 +176,26 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     fi
   }
 
+elif [ -n "$API_URL" ]; then
+  # === CONNECTED CONFIG, MISSING KEY ===
+  # api_url is configured, so the org expects a live graph, but no API key was
+  # found. Faking '{"results":[]}' here made a missing credential (e.g. a
+  # worktree without its .env symlink) indistinguishable from an empty graph —
+  # fail loudly instead. `test` keeps its offline JSON contract: dashboards,
+  # render-card, and startup-check consume it.
+  _missing_credentials() {
+    {
+      echo "Error: api_url is configured but EGREGORE_API_KEY is empty (looked in: ${_ENV_FILE:-$SCRIPT_DIR/.env})."
+      echo "  If this is a worktree, its .env symlink may be missing. Run /env to configure."
+    } >&2
+    exit 1
+  }
+  run_query() { _missing_credentials; }
+  get_schema() { _missing_credentials; }
+  test_connection() { echo '{"status":"offline","reason":"no_api_key"}'; }
+
 else
-  # === OFFLINE MODE: No API key — return empty results (OSS/local) ===
+  # === OFFLINE MODE: no api_url configured (OSS/unconfigured) ===
   run_query() { echo '{"results":[]}'; }
   get_schema() { echo '{}'; }
   test_connection() { echo '{"status":"offline","reason":"no_api_key"}'; }

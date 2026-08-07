@@ -91,6 +91,39 @@ def page_count(path: Path) -> int | None:
     return count if count > 0 else None
 
 
+def all_pages(path: Path, layout: bool = False) -> list[str] | None:
+    """Every page's text from a single extraction pass.
+
+    `pdftotext` separates pages with a form feed, so one call yields the whole
+    document page by page. Shelling out per page instead costs one subprocess
+    each — on a corpus of a hundred thousand pages that is the difference
+    between minutes and hours — and returns identical text.
+
+    Returns None when the split does not agree with the page count, so the
+    caller can fall back to per-page extraction rather than trust a bad split.
+    """
+    tool = shutil.which("pdftotext")
+    if not tool:
+        return None
+    cmd = [tool, "-q"] + (["-layout"] if layout else []) + [str(path), "-"]
+    proc = _run(cmd, timeout=PAGE_TIMEOUT * 4)
+    if not proc or proc.returncode:
+        return None
+    # Keep the form feed on each page. Splitting on it and rejoining without it
+    # would drop one byte per page from the document text — enough to change
+    # every content hash and orphan the chunk ids derived from them.
+    raw = proc.stdout
+    parts = raw.split("\f")
+    if len(parts) == 1:
+        return parts if parts[0] else None
+    if parts[-1] == "":
+        parts.pop()
+        pages = [part + "\f" for part in parts]
+    else:
+        pages = [part + "\f" for part in parts[:-1]] + [parts[-1]]
+    return pages or None
+
+
 def page_text(path: Path, page: int, layout: bool = False) -> str:
     tool = shutil.which("pdftotext")
     if not tool:
@@ -154,8 +187,14 @@ def extract(path: Path, layout: bool = False) -> Result:
     pages: list[PageResult] = []
     ocr_budget = OCR_MAX_PAGES
 
+    # One pass for the whole document; per-page calls only if the split is
+    # inconsistent with the page count.
+    bulk = all_pages(path, layout=layout)
+    if bulk is not None and len(bulk) != total:
+        bulk = None
+
     for number in range(1, total + 1):
-        raw = page_text(path, number, layout=layout)
+        raw = bulk[number - 1] if bulk is not None else page_text(path, number, layout=layout)
         if _dense(raw) >= MIN_CHARS:
             pages.append(PageResult(number, raw, "pdftotext", _dense(raw)))
             continue

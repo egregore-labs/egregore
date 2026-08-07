@@ -52,3 +52,28 @@ egregore_link_shared_state() {
     fi
   done
 }
+
+# Resolve the .env that governs a checkout. A worktree can be missing its .env
+# symlink (created before .env existed, or by a runtime that skipped worktree
+# setup) — self-heal the links, then fall back to the main checkout's .env so
+# credential loading never silently comes up empty. Prints the usable path, or
+# nothing when neither checkout has one. Always returns 0.
+egregore_env_file() {
+  local project_dir="${1:?project dir required}"
+  if [ ! -f "$project_dir/.env" ] && [ -f "$project_dir/.git" ]; then
+    egregore_link_shared_state "$project_dir" 2>/dev/null || true
+  fi
+  if [ -f "$project_dir/.env" ]; then
+    echo "$project_dir/.env"
+    return 0
+  fi
+  if [ -f "$project_dir/.git" ]; then
+    local main_dir
+    main_dir="$(egregore_main_project_dir "$project_dir" 2>/dev/null || true)"
+    if [ -n "$main_dir" ] && [ -f "$main_dir/.env" ]; then
+      echo "$main_dir/.env"
+      return 0
+    fi
+  fi
+  return 0
+}

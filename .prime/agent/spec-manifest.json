@@ -1,0 +1,12 @@
+{
+  "generatedBy": "bin/prime-render-spec.mjs",
+  "source": "AGENTS.md generated Codex spec",
+  "sourceHash": "72d7c3986402",
+  "outputHash": "6d17e4953725",
+  "adaptations": [
+    "Prime Agent APPEND_SYSTEM delivery from .prime/agent/",
+    "Prime Agent tool_call branch gate incl. ipython classification",
+    "Prime Agent slash-command extension over shared portable skills",
+    "rlm() subagents are not Loom lanes; Loom preambles run inline"
+  ]
+}

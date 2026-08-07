@@ -99,6 +99,16 @@ _trigger_auto_thread() {
   ) >> "$LOGFILE" 2>&1 &
 }
 
+# Personal off switch for ambient capture. ripcord_enabled=false disables BOTH
+# ripcord notes and auto-push of dirty worktrees — a user who opts out of
+# ambient capture must not find silent commits either. The attendant's other
+# duties (graph cache, context seed, handoff lifecycle) are unaffected.
+# NOTE: jq's `//` treats false as empty (the auto_update:false gotcha), so the
+# test compares the raw value, never `.key // true`.
+_capture_enabled() {
+  [ "$(jq -r '.ripcord_enabled' "$MAIN_DIR/.egregore-state.json" 2>/dev/null)" != "false" ]
+}
+
 _author() {
   local a
   a=$(jq -r '.github_username // empty' "$MAIN_DIR/.egregore-state.json" 2>/dev/null)
@@ -249,6 +259,8 @@ _ripcord() {
   local transcript="$1" base author date_ym date_d slug topic file prompts gitsum
   base=$(basename "$transcript" .jsonl)
 
+  _capture_enabled || return 0
+
   grep -q "$base" "$JOURNAL" 2>/dev/null && return 0
   # Session already ended with ceremony? Then the attendant has no business
   # here. Scan only the tail — a session that merely *read* the /handoff or
@@ -336,6 +348,7 @@ _ripcord() {
 # --- Auto-push -------------------------------------------------------------
 
 _auto_push() {
+  _capture_enabled || return 0
   local wt branch dirty ahead upstream
   git -C "$MAIN_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | while read -r wt; do
     branch=$(git -C "$wt" branch --show-current 2>/dev/null)

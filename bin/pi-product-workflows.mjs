@@ -2,6 +2,7 @@
 
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -141,10 +142,35 @@ export async function renderView(pi, root, request, signal) {
   return { text, file, type: request.type };
 }
 
-export async function renderGreeting(pi, root, signal) {
-  const script = join(root, "bin", "pi-session-start.sh");
-  if (!existsSync(script)) throw new Error("Pi startup renderer is missing");
+export async function renderGreeting(pi, root, signal, startScript = "pi-session-start.sh") {
+  const script = join(root, "bin", startScript);
+  if (!existsSync(script)) throw new Error("Egregore startup renderer is missing");
   return checkedExec(pi, "bash", [script, "--card"], { signal, timeout: 45000 }, "Egregore startup");
+}
+
+// Raw JSON from the most recent activity-data.sh run, so follow-up focus
+// turns can receive the data inline instead of re-running the script inside
+// a harness surface that may cap command time (Prime's kernel kills execs at
+// ~5s, truncating the 10-20s data script to a partial fragment).
+let lastActivityData = "";
+export function lastActivityJson() {
+  return lastActivityData;
+}
+
+// Stable on-disk copy of the same data. Focus turns point the model at this
+// path instead of an inline excerpt: a file read is one fast kernel call,
+// never truncated, and removes any reason to re-run the data script.
+export function activityDataPath(root) {
+  return join(root, ".egregore", "activity-data.json");
+}
+
+function persistActivityData(root, json) {
+  try {
+    mkdirSync(join(root, ".egregore"), { recursive: true });
+    writeFileSync(activityDataPath(root), json);
+  } catch {
+    // Cache only — rendering proceeds from memory when the disk write fails.
+  }
 }
 
 export async function renderActivity(pi, root, signal, options = {}) {
@@ -177,6 +203,8 @@ export async function renderActivity(pi, root, signal, options = {}) {
     { signal, timeout: 120000 },
     "Activity refresh",
   );
+  lastActivityData = String(json || "");
+  persistActivityData(root, lastActivityData);
   const temp = mkdtempSync(join(tmpdir(), "egregore-pi-activity-"));
   const input = join(temp, "activity.json");
   try {
@@ -276,7 +304,7 @@ export async function createHandoff(pi, root, params, signal) {
   }
 }
 
-export async function captureSessionEnd(pi, root, sessionFile, signal) {
+export async function captureSessionEnd(pi, root, sessionFile, signal, runtime = "pi") {
   const sessionIdFile = join(root, ".egregore-session-id");
   if (!existsSync(sessionIdFile)) return false;
   const sessionId = cleanArgs(readFileSync(sessionIdFile, "utf8"));
@@ -287,7 +315,7 @@ export async function captureSessionEnd(pi, root, sessionFile, signal) {
   writeFileSync(input, JSON.stringify({
     session_id: sessionId,
     transcript_path: cleanArgs(sessionFile),
-    runtime: "pi",
+    runtime,
   }));
 
   try {
@@ -353,11 +381,11 @@ export async function publishScroll(pi, root, params, signal) {
   };
 }
 
-export function workflowPrompt(name, args, extra = "") {
+export function workflowPrompt(name, args, extra = "", spec = { runtimeName: "Pi", specPath: ".pi/APPEND_SYSTEM.md" }) {
   const userArgs = cleanArgs(args);
   return [
     `Run the Egregore /${name} workflow now.`,
-    `Read .codex/skills/${name}/SKILL.md completely and adapt Codex-specific wording to Pi using .pi/APPEND_SYSTEM.md.`,
+    `Read .codex/skills/${name}/SKILL.md completely and adapt Codex-specific wording to ${spec.runtimeName} using ${spec.specPath}.`,
     "Work quietly: do not narrate progress, expose raw command output, or repeat tool results.",
     "Use the fewest targeted reads and commands that preserve the workflow contract.",
     userArgs ? `User arguments: ${userArgs}` : "",
