@@ -1,0 +1,13 @@
+[project]
+name = "egregore"
+version = "0.1.0"
+description = "Egregore mechanics as Prime Agent kernel functions (thin wrappers over bin/ scripts)"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

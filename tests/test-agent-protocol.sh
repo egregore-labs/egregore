@@ -96,6 +96,12 @@ name: codex-b
 github: codex-b
 ---
 EOF
+cat > "$TMP/seed/people/prime-c.md" <<'EOF'
+---
+name: prime-c
+github: prime-c
+---
+EOF
 printf '# Handoffs\n\n' > "$TMP/seed/handoffs/index.md"
 git -C "$TMP/seed" add -A
 git -C "$TMP/seed" commit -m "Seed memory" --quiet
@@ -105,9 +111,11 @@ git -C "$TMP/seed" push --quiet -u origin main
 
 setup_instance "agent-a" "codex-a"
 setup_instance "agent-b" "codex-b"
+setup_instance "agent-c" "prime-c"
 
 A="$TMP/agent-a/egregore"
 B="$TMP/agent-b/egregore"
+C="$TMP/agent-c/egregore"
 
 git -C "$A" branch raw-codex-worktree HEAD
 RAW_WT="$TMP/raw-codex-worktree"
@@ -187,5 +195,29 @@ bash "$B/bin/agent.sh" sync
 ANSWERED_FILE="$(find "$B/memory/knowledge/questions" -type f -name '*relay-smoke*.md' | head -1)"
 grep -q "status: answered" "$ANSWERED_FILE"
 grep -q "Verify the exchange from a fresh memory clone." "$ANSWERED_FILE"
+
+# Third simulated runtime (Prime Agent's shell surface drives the identical
+# protocol): the exchange must be runtime-count-independent.
+bash "$C/bin/agent.sh" sync
+ACTIVITY_C="$(bash "$C/bin/agent.sh" activity --for prime-c)"
+echo "$ACTIVITY_C" | grep -qv "error"
+
+HANDOFF_C_OUT="$(bash "$C/bin/agent.sh" handoff \
+  --from prime-c \
+  --to codex-a \
+  --topic "prime relay smoke" \
+  --body "prime-c leaves a runtime-neutral handoff for codex-a." \
+  --no-publish \
+  --no-notify)"
+echo "$HANDOFF_C_OUT" | grep -q "status: ⇌ saved"
+HANDOFF_C_FILE="$(find "$C/memory/handoffs" -type f -name '*prime-relay-smoke.md' | head -1)"
+[ -n "$HANDOFF_C_FILE" ]
+grep -q '^capture_schema: egregore-capture/v1$' "$HANDOFF_C_FILE"
+grep -q '^addressed_to: "codex-a"$' "$HANDOFF_C_FILE"
+
+bash "$A/bin/agent.sh" sync
+ACTIVITY_A2="$(bash "$A/bin/agent.sh" activity --for codex-a)"
+echo "$ACTIVITY_A2" | grep -q "prime relay smoke"
+echo "$ACTIVITY_A2" | grep -q "prime-c"
 
 echo "agent protocol smoke: ok"

@@ -38,6 +38,7 @@ mcp.shared.*.json
 .egregore/eval-runs/
 eval-runs/
 .egregore/ingest/
+.egregore/notion-export/
 .egregore/ingest-staging/
 .egregore/ingest-ui-preferences.json
 
@@ -94,3 +95,6 @@ test-results/
 # Local build artifacts (rendered surfaces, mocks) — never committed.
 # The ripcord auto-save otherwise sweeps them into unrelated PRs.
 .build/
+.egregore/activity-data.json
+.egregore/*.log
+*.egg-info/

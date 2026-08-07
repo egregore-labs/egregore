@@ -10,7 +10,7 @@ bad() { echo "  ✗ $1" >&2; FAIL=$((FAIL + 1)); }
 
 echo "test-notification-parity"
 
-for spec in CLAUDE.md AGENTS.md .pi/APPEND_SYSTEM.md; do
+for spec in CLAUDE.md AGENTS.md .pi/APPEND_SYSTEM.md .prime/agent/APPEND_SYSTEM.md; do
   if grep -q 'Every external notification requires a separate' "$ROOT/$spec" &&
      grep -q 'Background jobs and automation may only' "$ROOT/$spec"; then
     ok "$spec carries the explicit-consent invariant"
@@ -19,7 +19,7 @@ for spec in CLAUDE.md AGENTS.md .pi/APPEND_SYSTEM.md; do
   fi
 done
 
-for runtime in codex pi; do
+for runtime in codex pi prime; do
   bundle="$ROOT/packages/create-egregore/runtime/$runtime"
   if cmp -s "$ROOT/bin/notify.sh" "$bundle/bin/notify.sh" &&
      test -f "$bundle/.claude/context/notification-consent.md" &&
@@ -46,7 +46,7 @@ fi
 
 LEGACY_CALLS="$(
   rg -n 'bin/notify\.sh (send|group)|\$NOTIFY"? (send|group)|notify\.sh"? (send|group)' \
-    "$ROOT/bin" "$ROOT/.claude" "$ROOT/.codex" "$ROOT/.pi" \
+    "$ROOT/bin" "$ROOT/.claude" "$ROOT/.codex" "$ROOT/.pi" "$ROOT/.prime" \
     --glob '!notify.sh' \
     --glob '!tests/**' \
     --glob '!dataroom-*/**' \

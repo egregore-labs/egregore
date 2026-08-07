@@ -117,6 +117,18 @@ else
   pass "Neutral: connector-notion has no MCP dependency"
 fi
 
+# --- 4b. OSS upsell gate --------------------------------------------------------
+# Oz's exact upsell copy must survive in both skills; the gate is the OSS story.
+
+for f in ".claude/skills/notion-connect/SKILL.md" ".claude/skills/ingest-notion/SKILL.md"; do
+  if grep -q "Upgrade to Connected Tier to accelerate" "$ROOT/$f" \
+     && grep -q "egregore connect" "$ROOT/$f"; then
+    pass "Upsell: $f carries the verbatim tier message + sanctioned upgrade path"
+  else
+    fail "Upsell: $f lost the tier upsell gate or the egregore connect path"
+  fi
+done
+
 # --- 5. Graph contract --------------------------------------------------------
 
 if python3 -c "

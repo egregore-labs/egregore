@@ -210,7 +210,9 @@ render_card() {
 
   # Staged auto-saves awaiting the user's merge (the autosave consent gate).
   # Live gh query so the line persists until the PRs actually merge.
-  if command -v gh >/dev/null 2>&1; then
+  # Shown only while the autosave experiment is enabled.
+  autosave_on=$(jq -r '.autosave_enabled // false' "$STATE_FILE" 2>/dev/null)
+  if [ "$autosave_on" = "true" ] && command -v gh >/dev/null 2>&1; then
     gh_self=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
     if [ -n "$gh_self" ]; then
       waiting_as=$(gh pr list --state open --author "$gh_self" --limit 20 \

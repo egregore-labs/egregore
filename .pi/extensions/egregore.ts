@@ -2,10 +2,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { isMutatingBash, isRuntimeStatePath, mutatesOnlyRuntimeState } from "../../bin/pi-branch-policy.mjs";
+import { isConsentCommand, isMutatingBash, isRuntimeStatePath, mutatesOnlyRuntimeState } from "../../bin/pi-branch-policy.mjs";
 import {
+  activityDataPath,
   captureSessionEnd,
   createHandoff,
+  lastActivityJson,
   parseViewRequest,
   publishScroll,
   renderActivity,
@@ -220,9 +222,21 @@ export default function egregore(pi) {
       const focus = await ctx.ui.select("Focus", ["Handoffs", "Questions", "Recent work", "Dashboard", "Done"]);
       if (!focus || focus === "Done") return;
       const command = focus === "Dashboard" ? "dashboard" : "activity";
+      // Hand the model the complete data the extension already fetched, as a
+      // file: one fast read, never truncated, no reason to re-run the data
+      // script or spelunk renderer sources.
+      const cached = lastActivityJson();
       const prompt = focus === "Dashboard"
         ? workflowPrompt("dashboard", "")
-        : `Continue the Egregore /activity workflow with focus: ${focus.toLowerCase()}. Work quietly and show only the designed result.`;
+        : [
+          `Continue the Egregore /activity workflow with focus: ${focus.toLowerCase()}.`,
+          "Output nothing except the final rendered result — no prose, planning, or narration between commands.",
+          cached
+            ? `The complete activity data is already fresh at ${relative(root, activityDataPath(root))} — read that file in one call; do NOT re-run bin/activity-data.sh, read renderer sources, or run other data commands.`
+            : "",
+          "If required data is missing or a command fails, render the single line '◦ activity data unavailable' and stop — never debug data plumbing inside this workflow.",
+          "Rows without a topic: show the branch name instead; with neither, omit the row — never print (untitled).",
+        ].filter(Boolean).join("\n");
       sendQuietWorkflow(command, "", ctx, { prompt, working: `Opening ${focus.toLowerCase()}…` });
     },
   });
@@ -398,10 +412,7 @@ export default function egregore(pi) {
     // (echo 'develop' into .egregore-branch-consent) contains a redirect and
     // would otherwise be blocked by this very gate.
     if (event.toolName === "bash") {
-      const consentCmd = new RegExp(
-        "^\\s*echo\\s+['\"]?" + branch + "['\"]?\\s*>\\s*\\.egregore-branch-consent\\s*$"
-      );
-      if (consentCmd.test(String(event.input?.command || "").trim())) return;
+      if (isConsentCommand(String(event.input?.command || "").trim(), branch)) return;
     }
 
     const consentFile = join(gitDir, ".egregore-branch-consent");

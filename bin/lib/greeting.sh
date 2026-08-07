@@ -188,7 +188,10 @@ fi
 # Staged auto-saves awaiting the user's merge (the /autosave consent gate).
 # Live gh query so the line persists until the PRs actually merge — the
 # ledger cursor above only reports once. Fail-soft when gh/network is out.
-if command -v gh >/dev/null 2>&1; then
+# Shown only while the autosave experiment is enabled: stale PRs from a
+# disabled experiment should not nag every greeting.
+AUTOSAVE_ON=$(jq -r '.autosave_enabled // false' "$STATE_FILE" 2>/dev/null)
+if [ "$AUTOSAVE_ON" = "true" ] && command -v gh >/dev/null 2>&1; then
   GH_SELF=$(jq -r '.github_username // empty' "$STATE_FILE" 2>/dev/null)
   if [ -n "$GH_SELF" ]; then
     WAITING_AS=$(gh pr list --state open --author "$GH_SELF" --limit 20 \

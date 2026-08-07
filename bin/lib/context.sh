@@ -370,6 +370,29 @@ fi
   JSON="[]"
   RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
+    # One definition everywhere: in connected mode the list comes from the
+    # graph's open-handoffs named read (open = pending/unread/read/claimed,
+    # matched by name/github/aliases) — the same definition the dashboard
+    # uses. The file grep below stays as the local-mode/offline fallback.
+    ADDRESSED=""
+    if [ "${LOCAL_MODE:-false}" != "true" ]; then
+      _GRAPH_LIST=$(bash "$SCRIPT_DIR/bin/graph-op.sh" open-handoffs "$AUTHOR" 5 2>/dev/null || true)
+      if echo "$_GRAPH_LIST" | jq -e '.values | length > 0' >/dev/null 2>&1; then
+        ADDRESSED=$(echo "$_GRAPH_LIST" | jq -r '.values[][0]' 2>/dev/null | awk '!seen[$0]++' | while IFS= read -r _SID; do
+          # Two on-disk layouts: dated subdirs (YYYY-MM/DD-slug.md, the id's
+          # own shape) and flat files at the handoffs root. Probe both, else
+          # a graph-listed handoff silently vanishes from the greeting.
+          _MONTH="${_SID:0:7}"
+          _REST="${_SID:8}"
+          _F="$SCRIPT_DIR/memory/handoffs/$_MONTH/$_REST.md"
+          if [ -f "$_F" ]; then
+            echo "$_F"
+          elif [ -f "$SCRIPT_DIR/memory/handoffs/$_SID.md" ]; then
+            echo "$SCRIPT_DIR/memory/handoffs/$_SID.md"
+          fi
+        done | head -5)
+      fi
+    fi
     # Match github username, display name, github_name first word, and people-file name
     # Handoff files may use "to: name", "**To**: name", or "To: name"
     _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
@@ -387,7 +410,9 @@ fi
       echo "$_GREP_PAT" | grep -qF "$_VARIANT" && continue
       _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_VARIANT\|[Tt]o[*]*:$_VARIANT"
     done
-    ADDRESSED=$(grep -rli "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
+    if [ -z "$ADDRESSED" ]; then
+      ADDRESSED=$(grep -rli "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
+    fi
     JSON="["
     RICH="["
     FIRST=true

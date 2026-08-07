@@ -58,6 +58,12 @@ const AGENTS_PREAMBLE = `# Egregore Agent Protocol
 > \`.pi/APPEND_SYSTEM.md\`, and your workflows are exposed through the
 > project-local \`.pi/\` runtime. Do not follow the Codex-specific block below.
 >
+> **If you are Prime Agent** (the \`prime-agent\` harness): **stop here.** Your
+> authoritative Egregore instructions are loaded from
+> \`.prime/agent/APPEND_SYSTEM.md\`, and your workflows are exposed through the
+> project-local \`.prime/agent/\` runtime. Do not follow the Codex-specific
+> block below.
+>
 > **If you are Codex or another shell-only agent:** this file is yours — continue.
 
 Egregore is no longer only a Claude Code workspace. Claude Code remains the

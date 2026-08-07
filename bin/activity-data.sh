@@ -76,15 +76,11 @@ API_PID=$!
 
 # Git/disk: runs in parallel (stays client-side)
 (
-  # Sync
+  # Refresh remote refs only. A data read must never mutate the working
+  # branch: the rebase this block used to run rewrote users' task branches as
+  # a side effect of /activity (observed rewinding a pushed branch mid-session).
+  # Workspace sync belongs to agent.sh sync / the session-start path.
   git -C "$SCRIPT_DIR" fetch origin --quiet 2>/dev/null || true
-  CURRENT=$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || echo "unknown")
-  if [ "$CURRENT" != "develop" ]; then
-    git -C "$SCRIPT_DIR" fetch origin develop:develop --quiet 2>/dev/null || true
-  fi
-  if [[ "$CURRENT" == dev/* ]]; then
-    git -C "$SCRIPT_DIR" rebase develop --quiet >/dev/null 2>&1 || git -C "$SCRIPT_DIR" rebase --abort >/dev/null 2>&1 || true
-  fi
 
   # Memory sync
   if [ -d "$SCRIPT_DIR/memory/.git" ] || [ -L "$SCRIPT_DIR/memory" ]; then

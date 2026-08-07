@@ -87,7 +87,7 @@ fi
 # --- Runtime parity ---------------------------------------------------------
 # Codex and Pi installations ship generated copies of these shared scripts.
 # A root-only fix leaves new installs exposed to the original bug.
-for runtime in codex pi; do
+for runtime in codex pi prime; do
   for rel in bin/attendant.sh bin/lib/git-sync.sh bin/lib/greeting.sh; do
     bundled="$ROOT/packages/create-egregore/runtime/$runtime/$rel"
     if cmp -s "$ROOT/$rel" "$bundled"; then
