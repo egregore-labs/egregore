@@ -83,6 +83,18 @@ Before execution begins, make Egregore's useful structure legible without turnin
 
 The intended sequence is: **intent → safe workspace → relevant context → consequential assumptions → execution**. Keep technical identifiers available but subordinate them to user value.
 
+### Returning-work UX contract
+
+When the user continues work carried by the current branch or asks to resume:
+
+- **Recognize continuation** — do not create a new workspace for the same topic.
+- **Restore the workspace** — after confirming relevance, say: `I found your previous work on **{topic}** and restored its workspace and context.` Show `Workspace: {branch} (worktree).` secondarily.
+- **Restore context** — retrieve relevant decisions, handoffs, or prior work; keep the Retrieval Beat and `↳ Context restored:` receipt. Never claim context was restored from a branch name alone.
+- **Open threads** — name only unresolved items that could change the next move.
+- **Resume** — state the next outcome briefly and continue without replaying setup.
+
+Sequence: **continuation intent → prior workspace → restored context → open threads → resumed execution**.
+
 ### Handoff claiming
 
 If `addressed_to_user` handoffs exist and the user is picking one up, create the IMPLEMENTS link after branch creation:
