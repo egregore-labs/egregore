@@ -18,7 +18,9 @@
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HOOK="$SCRIPT_DIR/.claude/hooks/boundary-check.sh"
+# BOUNDARY_HOOK lets you point the same matrix at an older copy of the hook to
+# confirm a regression case actually fails without the fix.
+HOOK="${BOUNDARY_HOOK:-$SCRIPT_DIR/.claude/hooks/boundary-check.sh}"
 FIXTURES="$SCRIPT_DIR/tests/fixtures/boundary-check-cases.jsonl"
 FAKE_HOME="/Users/egregore-btest-home"
 

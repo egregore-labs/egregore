@@ -1,19 +1,40 @@
 #!/usr/bin/env bash
-# boundary.sh — Path validation utility for environment isolation
-# Two modes:
-#   boundary.sh check <path>         — exits 0 if path is within boundary, 1 if not
-#   boundary.sh validate-repos       — validates egregore.json repos[] has no traversal
+# boundary.sh — Path validation and consent utility for environment isolation
+#
+#   boundary.sh check <path>              — exits 0 if path is within boundary
+#   boundary.sh validate-repos            — validates egregore.json repos[]
+#   boundary.sh grant [opts] <dir>        — record a consent grant for <dir>
+#   boundary.sh revoke [opts] <dir>       — remove a grant for <dir>
+#   boundary.sh grants                    — show the grants currently in effect
+#   boundary.sh refresh                   — recompute the cached boundary policy
+#
+# `grant` is the single supported way to widen the soft tier. It exists because
+# the PreToolUse hook's remedy necessarily names the blocked path, so any
+# ad-hoc shell command that wrote the grant tripped the very check it was
+# meant to clear. The hook exempts exactly this command, and this command
+# refuses to grant a hard-tier (other-instance) path or to write anything at
+# all while the org boundary is locked — so the exemption cannot become a hole.
 set -euo pipefail
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: boundary.sh <command> [args...]"
   echo ""
-  echo "Path validation utility for environment isolation."
+  echo "Path validation and consent utility for environment isolation."
   echo "Ensures sessions stay within their allowed boundaries."
   echo ""
   echo "Commands:"
-  echo "  check <path>      Exit 0 if path is within boundary, 1 if not"
-  echo "  validate-repos    Check egregore.json repos[] for path traversal"
+  echo "  check <path>            Exit 0 if path is within boundary, 1 if not"
+  echo "  validate-repos          Check egregore.json repos[] for path traversal"
+  echo "  grant [opts] <dir>      Allow <dir> outside the boundary"
+  echo "  revoke [opts] <dir>     Remove a grant for <dir>"
+  echo "  grants                  Show grants currently in effect"
+  echo "  refresh                 Recompute the cached boundary policy now"
+  echo ""
+  echo "grant/revoke options:"
+  echo "  --always   Persist in .egregore-boundary.local.json (default: this session only)"
+  echo "  --write    Grant write access too (default: read only)"
+  echo ""
+  echo "Grants require the user's explicit approval — never run this to silence a block."
   exit 0
 fi
 
@@ -170,6 +191,171 @@ validate_repos() {
   return $exit_code
 }
 
+# --- Consent surface -------------------------------------------------------
+CONSENT_FILE="$SCRIPT_DIR/.egregore-boundary-consent"
+PERSONAL_FILE="$SCRIPT_DIR/.egregore-boundary.local.json"
+
+_boundary_locked() {
+  local locked
+  locked=$(jq -r '.boundary.locked // false' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo false)
+  [ "$locked" = "true" ]
+}
+
+# Rewrite the cached boundary policy from the current config layers, so a grant
+# is visible to the very next tool call instead of the next session.
+refresh_boundary() {
+  local hash boundary_file policy merged
+  hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  boundary_file="/tmp/egregore-boundary-${hash}.json"
+  [ -f "$boundary_file" ] || return 0
+  [ -f "$SCRIPT_DIR/bin/lib/boundary-policy.sh" ] || return 0
+  # shellcheck source=bin/lib/boundary-policy.sh
+  . "$SCRIPT_DIR/bin/lib/boundary-policy.sh"
+  policy=$(boundary_policy_json "$SCRIPT_DIR" 2>/dev/null) || return 0
+  [ -n "$policy" ] || return 0
+  merged=$(jq -c --argjson p "$policy" '. + $p' "$boundary_file" 2>/dev/null) || return 0
+  [ -n "$merged" ] || return 0
+  printf '%s\n' "$merged" > "$boundary_file.$$.tmp" && mv -f "$boundary_file.$$.tmp" "$boundary_file"
+}
+
+# Parse `[--always] [--write] <dir>` into GRANT_DIR / GRANT_ALWAYS / GRANT_WRITE.
+parse_grant_args() {
+  GRANT_ALWAYS=false
+  GRANT_WRITE=false
+  GRANT_DIR=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --always|--persist) GRANT_ALWAYS=true ;;
+      --write|--rw) GRANT_WRITE=true ;;
+      --session) GRANT_ALWAYS=false ;;
+      --)
+        shift
+        if [ -z "$GRANT_DIR" ] && [ $# -gt 0 ]; then GRANT_DIR="$1"; fi
+        break
+        ;;
+      -*)
+        echo "Unknown option: $1" >&2
+        return 1
+        ;;
+      *)
+        if [ -z "$GRANT_DIR" ]; then GRANT_DIR="$1"; fi
+        ;;
+    esac
+    if [ $# -gt 0 ]; then shift; fi
+  done
+  if [ -z "$GRANT_DIR" ]; then
+    echo "Usage: boundary.sh grant [--always] [--write] <dir>" >&2
+    return 1
+  fi
+  GRANT_DIR=$(resolve_path "$GRANT_DIR")
+  GRANT_DIR="${GRANT_DIR%/}"
+  if [ -z "$GRANT_DIR" ]; then GRANT_DIR="/"; fi
+  return 0
+}
+
+# Refuse the grants that must never be writable, whatever the caller intends.
+assert_grantable() {
+  local target="$1"
+  load_boundary
+  for denied in $DENIED_PATHS; do
+    if path_starts_with "$target" "$denied"; then
+      echo "REFUSED: $target belongs to another Egregore instance ($denied). This tier has no consent path." >&2
+      return 2
+    fi
+  done
+  if _boundary_locked; then
+    echo "REFUSED: the org boundary is locked (egregore.json boundary.locked) — no consent path exists." >&2
+    return 3
+  fi
+  case "$target" in
+    /|"$HOME") echo "REFUSED: $target is too broad to grant." >&2; return 4 ;;
+  esac
+  return 0
+}
+
+grant_path() {
+  parse_grant_args "$@" || return 1
+  assert_grantable "$GRANT_DIR" || return $?
+
+  if check_path "$GRANT_DIR" >/dev/null 2>&1; then
+    echo "Already inside the boundary — no grant needed: $GRANT_DIR"
+    return 0
+  fi
+
+  if [ "$GRANT_ALWAYS" = true ]; then
+    local key="read" tmp
+    [ "$GRANT_WRITE" = true ] && key="write"
+    [ -f "$PERSONAL_FILE" ] || echo '{}' > "$PERSONAL_FILE"
+    tmp="$PERSONAL_FILE.$$.tmp"
+    jq --arg k "$key" --arg d "$GRANT_DIR" \
+      '.[$k] = (((.[$k] // []) + [$d]) | unique)' "$PERSONAL_FILE" > "$tmp" \
+      && mv -f "$tmp" "$PERSONAL_FILE"
+    echo "Granted (persistent, $key): $GRANT_DIR"
+    echo "  → $PERSONAL_FILE (gitignored, personal to you)"
+  else
+    touch "$CONSENT_FILE"
+    if ! grep -qxF "$GRANT_DIR" "$CONSENT_FILE" 2>/dev/null; then
+      printf '%s\n' "$GRANT_DIR" >> "$CONSENT_FILE"
+    fi
+    echo "Granted (this session): $GRANT_DIR"
+    echo "  → $CONSENT_FILE (cleared at next session start)"
+  fi
+
+  refresh_boundary
+  return 0
+}
+
+revoke_path() {
+  parse_grant_args "$@" || return 1
+
+  if [ "$GRANT_ALWAYS" = true ]; then
+    local key="read" tmp
+    [ "$GRANT_WRITE" = true ] && key="write"
+    if [ -f "$PERSONAL_FILE" ]; then
+      tmp="$PERSONAL_FILE.$$.tmp"
+      jq --arg k "$key" --arg d "$GRANT_DIR" \
+        '.[$k] = ((.[$k] // []) - [$d])' "$PERSONAL_FILE" > "$tmp" \
+        && mv -f "$tmp" "$PERSONAL_FILE"
+    fi
+    echo "Revoked (persistent, $key): $GRANT_DIR"
+  else
+    if [ -f "$CONSENT_FILE" ]; then
+      grep -vxF "$GRANT_DIR" "$CONSENT_FILE" > "$CONSENT_FILE.$$.tmp" 2>/dev/null || true
+      mv -f "$CONSENT_FILE.$$.tmp" "$CONSENT_FILE"
+    fi
+    echo "Revoked (this session): $GRANT_DIR"
+  fi
+
+  refresh_boundary
+  return 0
+}
+
+show_grants() {
+  local hash boundary_file
+  hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  boundary_file="/tmp/egregore-boundary-${hash}.json"
+
+  if _boundary_locked; then
+    echo "posture: locked (egregore.json boundary.locked) — grants are void"
+  elif [ -f "$boundary_file" ]; then
+    echo "posture: $(jq -r '.posture // "standard"' "$boundary_file" 2>/dev/null)"
+  else
+    echo "posture: unknown (no cached boundary — session-start has not run)"
+  fi
+
+  echo ""
+  echo "read roots:"
+  jq -r '.read_roots[]? | "  " + .' "$boundary_file" 2>/dev/null || echo "  (none)"
+  echo "write roots:"
+  jq -r '.write_roots[]? | "  " + .' "$boundary_file" 2>/dev/null || echo "  (none)"
+  echo "session grants:"
+  if [ -s "$CONSENT_FILE" ]; then
+    sed 's/^/  /' "$CONSENT_FILE"
+  else
+    echo "  (none)"
+  fi
+}
+
 # --- Main ---
 case "${1:-}" in
   check)
@@ -182,8 +368,23 @@ case "${1:-}" in
   validate-repos)
     validate_repos
     ;;
+  grant)
+    shift
+    grant_path "$@"
+    ;;
+  revoke)
+    shift
+    revoke_path "$@"
+    ;;
+  grants)
+    show_grants
+    ;;
+  refresh)
+    refresh_boundary
+    echo "Boundary policy refreshed."
+    ;;
   *)
-    echo "Usage: boundary.sh {check <path>|validate-repos}"
+    echo "Usage: boundary.sh {check <path>|validate-repos|grant|revoke|grants|refresh}"
     exit 1
     ;;
 esac

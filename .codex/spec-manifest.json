@@ -41,7 +41,7 @@
     {
       "section": "Config Files",
       "action": "keep",
-      "sourceHash": "4ca75fe428ca",
+      "sourceHash": "8528defc6db4",
       "note": "Kept verbatim — shell facts, runtime-neutral."
     },
     {
@@ -125,8 +125,8 @@
     {
       "section": "Environment Isolation",
       "action": "replace",
-      "sourceHash": "086e2c1d9019",
-      "note": "boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options, now including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[])."
+      "sourceHash": "e667dfd56278",
+      "note": "boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options routed through the runtime-neutral bin/boundary.sh grant, which every harness can run."
     }
   ]
 }
