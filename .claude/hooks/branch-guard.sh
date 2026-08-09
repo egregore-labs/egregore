@@ -75,13 +75,24 @@ is_exempt() {
     "$PROJECT_DIR/.claude"/*|"$PROJECT_DIR/.claude") return 0 ;;
   esac
 
-  # Exempt: .egregore-state.json
-  if [[ "$resolved" == "$PROJECT_DIR/.egregore-state.json" ]]; then
-    return 0
-  fi
+  # Exempt: runtime state and personal config. CLAUDE.md promises these bypass
+  # the guard, but only two of them ever did — so the documented remedy for a
+  # boundary block (write .egregore-boundary-consent /
+  # .egregore-boundary.local.json) was itself blocked whenever the session was
+  # on develop. None of these can dirty a protected branch: every one is
+  # gitignored, which is the general rule applied below.
+  case "$resolved" in
+    "$PROJECT_DIR/.egregore-state.json"|"$PROJECT_DIR/.env") return 0 ;;
+    "$PROJECT_DIR/.egregore-boundary-consent") return 0 ;;
+    "$PROJECT_DIR/.egregore-boundary.local.json") return 0 ;;
+    "$PROJECT_DIR/.egregore-branch-consent") return 0 ;;
+    "$PROJECT_DIR/.egregore-session-id") return 0 ;;
+  esac
 
-  # Exempt: .env
-  if [[ "$resolved" == "$PROJECT_DIR/.env" ]]; then
+  # General rule: git-ignored files are never committed, so writing one cannot
+  # put work on a protected branch. This is what makes the exemption structural
+  # instead of a list that drifts every time a runtime file is added.
+  if git -C "$PROJECT_DIR" check-ignore -q "$resolved" 2>/dev/null; then
     return 0
   fi
 

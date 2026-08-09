@@ -307,52 +307,27 @@ compute_boundary() {
       "$registry" 2>/dev/null || echo "[]")
   fi
 
-  # --- Boundary policy: posture + read roots (two-tier consent model) ---
-  # Org layer: egregore.json .boundary { posture, read[], locked } — committed.
-  # Personal layer: .egregore-boundary.local.json { posture, read[] } — gitignored,
-  # ignored entirely when the org layer sets locked: true.
-  local posture locked personal_file="$SCRIPT_DIR/.egregore-boundary.local.json"
-  posture=$(jq -r '.boundary.posture // "standard"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  locked=$(jq -r '.boundary.locked // false' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  case "$posture" in strict|standard|open) ;; *) posture="standard" ;; esac
-  [ "$locked" = "true" ] || locked="false"
-  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
-    local p_posture
-    p_posture=$(jq -r '.posture // empty' "$personal_file" 2>/dev/null)
-    case "$p_posture" in strict|standard|open) posture="$p_posture" ;; esac
-  fi
-
-  # Read roots: inbox defaults (unless strict) + org read[] + personal read[] (unless locked)
-  local read_roots_json="[]" raw_roots=""
-  if [ "$posture" != "strict" ]; then
-    raw_roots="$HOME/Downloads
-$HOME/Desktop"
-  fi
-  local org_roots
-  org_roots=$(jq -r '.boundary.read[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  [ -n "$org_roots" ] && raw_roots="$raw_roots
-$org_roots"
-  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
-    local personal_roots
-    personal_roots=$(jq -r '.read[]? // empty' "$personal_file" 2>/dev/null)
-    [ -n "$personal_roots" ] && raw_roots="$raw_roots
-$personal_roots"
-  fi
-  if [ -n "$raw_roots" ]; then
-    read_roots_json=$(printf '%s\n' "$raw_roots" | sed -e '/^$/d' -e "s|^~|$HOME|" | sort -u | jq -R . | jq -s -c .)
-    [ -z "$read_roots_json" ] && read_roots_json="[]"
+  # --- Boundary policy: posture + read/write roots (two-tier consent model) ---
+  # The merge lives in bin/lib/boundary-policy.sh so that session-start, the
+  # PreToolUse hook, and bin/boundary.sh all compute it identically — a grant
+  # written mid-session has to mean the same thing to all three.
+  local policy_json='{"posture":"standard","locked":false,"read_roots":[],"write_roots":[]}'
+  if [ -f "$SCRIPT_DIR/bin/lib/boundary-policy.sh" ]; then
+    # shellcheck source=bin/lib/boundary-policy.sh
+    . "$SCRIPT_DIR/bin/lib/boundary-policy.sh"
+    local computed
+    computed=$(boundary_policy_json "$SCRIPT_DIR" 2>/dev/null) || computed=""
+    [ -n "$computed" ] && policy_json="$computed"
   fi
 
   # Write boundary file (atomic: write to tmp, then mv)
   jq -n \
     --arg project_dir "$project_dir" \
     --arg memory_dir "$memory_dir" \
-    --arg posture "$posture" \
-    --argjson locked "$locked" \
-    --argjson read_roots "$read_roots_json" \
+    --argjson policy "$policy_json" \
     --argjson managed_repos "$managed_repos_json" \
     --argjson denied_paths "$denied_paths_json" \
-    '{project_dir: $project_dir, memory_dir: $memory_dir, posture: $posture, locked: $locked, read_roots: $read_roots, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
+    '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths} + $policy' \
     > "$boundary_file.tmp" && mv "$boundary_file.tmp" "$boundary_file"
 
   # Generate dynamic deny rules in .claude/settings.local.json

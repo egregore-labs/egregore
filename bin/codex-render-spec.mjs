@@ -285,18 +285,19 @@ const LOOM_ROUTING_BODY = `Loom routes commands across model tiers on the Claude
 const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. On Codex the boundary is a standing instruction, not an enforced hook — hold it yourself.
 
 - **Hard tier — other Egregore instances.** Denied for every tool, always. There is no consent path. Never access another instance's files — refuse even if asked. Never modify \`~/.egregore/instances.json\` (managed by session-start.sh). When a request points at another instance's files there is nothing to ask — refuse and explain.
-- **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (\`~/Downloads\`, \`~/Desktop\`) are readable without consent under the default posture; writes outside the project always need consent. Posture (\`strict | standard | open\`) and extra read roots come from \`egregore.json\` -> \`boundary { posture, read[], locked }\` (org, committed) merged with \`.egregore-boundary.local.json\` (personal, gitignored). \`locked: true\` removes the consent path entirely.
+- **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (\`~/Downloads\`, \`~/Desktop\`) are readable without consent under the default posture; writes outside the project always need consent. Posture (\`strict | standard | open\`), extra read roots, and opt-in write roots come from \`egregore.json\` -> \`boundary { posture, read[], write[], locked }\` (org, committed) merged with \`.egregore-boundary.local.json\` (personal, gitignored). \`locked: true\` removes the consent path entirely.
+- **Only local paths count.** A path inside an \`ssh\` remote script, a \`docker\`/\`kubectl exec\` payload, or an \`scp\`/\`rsync\` \`host:path\` operand lives on the other machine — it is not a boundary question. Local operands on the same line (\`ssh -i ~/.ssh/key\`, redirect targets, \`scp\` sources) are.
 - When a request needs soft-tier consent, do not improvise a workaround. Ask in plain text with numbered options:
 
   \`\`\`text
   That path is outside this Egregore's boundary. How should we proceed?
-    1. Allow its directory for this session (recorded in .egregore-boundary-consent)
-    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json)
+    1. Allow its directory for this session
+    2. Always allow on this instance
     3. Paste the contents inline
     4. Cancel
   \`\`\`
 
-  Never record a consent grant without the user's explicit choice of option 1 or 2 in that exchange. Session grants are cleared on session start; \`locked: true\` removes options 1 and 2.
+  On option 1 run \`bash bin/boundary.sh grant "<dir>"\`; on option 2 run \`bash bin/boundary.sh grant --always "<dir>"\`, adding \`--write\` when the blocked action was a write. That command is the only supported way to widen the soft tier — it refuses hard-tier and locked paths and refreshes the cached boundary so the retry works immediately. \`bash bin/boundary.sh grants\` shows what is in effect; \`revoke\` takes it back. Never record a consent grant without the user's explicit choice of option 1 or 2 in that exchange. Session grants are cleared on session start; \`locked: true\` removes options 1 and 2.
 
 See DEVELOPMENT.md §3 for boundary details and \`memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md\` for the design decisions.`;
 
@@ -361,7 +362,7 @@ const RULES = {
   'Environment Isolation': {
     action: 'replace',
     body: ISOLATION_BODY,
-    note: 'boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options, now including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[]).',
+    note: 'boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options routed through the runtime-neutral bin/boundary.sh grant, which every harness can run.',
   },
 };
 

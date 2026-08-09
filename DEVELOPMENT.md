@@ -201,17 +201,21 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 ### Security & Isolation
 
 #### `boundary.sh`
-- **Purpose**: Path validation for environment isolation (multi-tenant safety)
-- **Called by**: PreToolUse hook (boundary-check.sh)
-- **Reads**: `egregore.json` (repos[])
-- **Writes**: Nothing
+- **Purpose**: Path validation and consent management for environment isolation (multi-tenant safety)
+- **Called by**: PreToolUse hook (boundary-check.sh); the agent, for `grant`/`revoke`/`grants`/`refresh`
+- **Reads**: `egregore.json` (`repos[]`, `boundary`), `.egregore-boundary.local.json`, `/tmp/egregore-boundary-*.json`
+- **Writes**: `.egregore-boundary-consent`, `.egregore-boundary.local.json`, `/tmp/egregore-boundary-*.json` (grant/revoke only)
 - **External deps**: jq, realpath
 - **Session boundary** = this project directory + memory directory (resolved symlink) + managed repos from `egregore.json`
 - **Allowed paths**: this project dir, memory repo (via symlink), managed repos in `egregore.json` → `repos[]`, `~/.claude`, `/tmp`, system paths (`/usr`, `/etc`, `/bin`)
 - **Two-tier enforcement** (boundary-check.sh, decided 2026-07-08 — see `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md`):
-  - **Hard tier — other Egregore instance directories** (from `~/.egregore/instances.json`): denied for every tool including Bash (path-literal grep). No consent path.
-  - **Soft tier — everything else outside the boundary**: consent-gated for every tool. Read roots (`~/Downloads`, `~/Desktop` by default) are readable without consent; other reads and all outside writes prompt a consent flow whose grant lands in `.egregore-boundary-consent` (session) or `.egregore-boundary.local.json` (instance). Bash is checked best-effort for user-home path literals — a miss degrades to "no prompt", never a hard-tier breach.
-- **Posture** `strict | standard | open` + `locked` from `egregore.json` → `boundary { posture, read[], locked }` merged with the personal local file at session start into `/tmp/egregore-boundary-*.json`. `open` allows outside reads (writes still gated); sessions in `bypassPermissions` skip the soft tier entirely; `locked: true` disables personal extensions, consent, and bypass relaxation — hard tier only ever says no.
+  - **Hard tier — other Egregore instance directories** (from `~/.egregore/instances.json`): denied for every tool including Bash (path-literal grep over the *raw* command). No consent path; `boundary.sh grant` refuses these too.
+  - **Soft tier — everything else outside the boundary**: consent-gated for every tool. Read roots (`~/Downloads`, `~/Desktop` by default) are readable without consent; other reads and all outside writes prompt a consent flow whose grant lands in `.egregore-boundary-consent` (session, covers read+write) or `.egregore-boundary.local.json` `read[]`/`write[]` (persistent, least-privilege split). Bash is checked best-effort for user-home path literals — a miss degrades to "no prompt", never a hard-tier breach.
+- **Posture** `strict | standard | open` + `locked` from `egregore.json` → `boundary { posture, read[], write[], locked }` merged with the personal local file by `bin/lib/boundary-policy.sh` into `/tmp/egregore-boundary-*.json`. `open` allows outside reads (writes still gated); sessions in `bypassPermissions` skip the soft tier entirely; `locked: true` disables personal extensions, consent, and bypass relaxation — hard tier only ever says no.
+- **The grant path must stay reachable.** The block message names the blocked directory, so any ad-hoc shell command that records the grant contains that directory and trips the same scan. `bin/boundary.sh grant` is therefore exempt from the soft-tier Bash scan — but only when the entire command is one `grant` invocation of this instance's own `boundary.sh`, with no chaining, redirection, or substitution. Widen that exemption and it becomes a wrapper for smuggling commands past the scan.
+- **Local vs remote.** The soft tier strips remote-execution payloads before scanning (`ssh` arguments after the host, `docker`/`kubectl exec` payloads, `scp`/`rsync` `host:path` operands): a path inside a remote script exists on the other machine, and resolving it against the local `$HOME` blocks working commands. Local operands on the same line — `ssh -i ~/.ssh/key`, redirect targets, `scp` sources — are still scanned, and the hard tier scans the raw command.
+- **Cache freshness.** Grants must apply within the session that asks for them. `boundary.sh grant` rewrites the cache directly, and the hook re-merges the policy layers whenever `egregore.json` or `.egregore-boundary.local.json` is newer than the cache, so a hand-edit is picked up on the next tool call.
+- **Tests**: `tests/test-boundary-check.sh` (fixture matrix, `tests/fixtures/boundary-check-cases.jsonl`) and `tests/test-boundary-grant.sh` (grant/refresh/branch-guard end to end). Point the matrix at an older hook with `BOUNDARY_HOOK=/path/to/old-boundary-check.sh` to confirm a regression case fails without the fix.
 
 #### `preflight.sh`
 - **Purpose**: Multi-tenancy violation detection (hardcoded orgs, direct API calls)
