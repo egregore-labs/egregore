@@ -91,6 +91,39 @@ def page_count(path: Path) -> int | None:
     return count if count > 0 else None
 
 
+# How many lines must show the same whitespace channel before a page counts as
+# multi-column. A handful of aligned gaps happen by chance in ordinary prose.
+COLUMN_EVIDENCE = 6
+
+# A gap this wide between words is a column gutter rather than sentence spacing.
+GUTTER = 4
+
+
+def looks_multi_column(text: str) -> bool:
+    """Whether a page is laid out in columns.
+
+    Linearised extraction reads a two-column page straight across, so a sentence
+    that spans the gutter is cut in half and its remainder lands beside whatever
+    followed in the other column. Measured on a real ministry leaflet: the
+    sentence giving Ayvalık's oil content was severed from the word "Ayvalık",
+    and its figure came to rest next to a different cultivar. Anything reading
+    that text then attributes 23% to a variety whose actual figure is 24%.
+
+    Detection is the same whitespace-channel idea the dose-table extractor uses:
+    a run of lines that all break in the same place is a gutter, not prose.
+    """
+    lines = [line for line in (text or "").split("\n") if len(line.strip()) > 20]
+    if len(lines) < COLUMN_EVIDENCE:
+        return False
+    gaps: dict = {}
+    for line in lines:
+        for match in re.finditer(r"\S {%d,}\S" % GUTTER, line):
+            column = match.start() + 1
+            # Bucket to absorb a character of jitter between lines.
+            gaps[column // 3] = gaps.get(column // 3, 0) + 1
+    return any(count >= COLUMN_EVIDENCE for count in gaps.values())
+
+
 def all_pages(path: Path, layout: bool = False) -> list[str] | None:
     """Every page's text from a single extraction pass.
 
@@ -163,7 +196,7 @@ def ocr_page(path: Path, page: int) -> str:
         return read.stdout
 
 
-def extract(path: Path, layout: bool = False) -> Result:
+def extract(path: Path, layout: bool | None = None) -> Result:
     """Extract a PDF page by page, falling back to OCR where the text layer is absent."""
     if not shutil.which("pdftotext"):
         return Result(error="pdf requires a text-layer or runtime-native extraction")
@@ -189,6 +222,17 @@ def extract(path: Path, layout: bool = False) -> Result:
 
     # One pass for the whole document; per-page calls only if the split is
     # inconsistent with the page count.
+    # Choose the extraction mode from the document rather than from a caller who
+    # cannot know. A single-column document reads better linearised; a
+    # multi-column one must keep its blocks apart or its sentences are severed.
+    detected_columns = False
+    if layout is None:
+        probe = all_pages(path, layout=True)
+        if probe:
+            sample = probe[: min(3, len(probe))]
+            detected_columns = any(looks_multi_column(page) for page in sample)
+        layout = detected_columns
+
     bulk = all_pages(path, layout=layout)
     if bulk is not None and len(bulk) != total:
         bulk = None
