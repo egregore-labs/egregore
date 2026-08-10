@@ -24,12 +24,18 @@ from dataclasses import dataclass, field
 
 SENTENCE_END = re.compile(r"(?<=[.!?:;])\s+|\n{2,}")
 
+# A line that names what follows rather than saying something about it: short,
+# on its own, and not ending in sentence punctuation.
+HEADING = re.compile(r"^\s*([A-ZÇĞİÖŞÜ][^\n.!?]{2,60})\s*$", re.MULTILINE)
+
 # Risks named so a reviewer knows what to look for, rather than re-reading blind.
 RISK_NEGATION = "negation present — dropping it inverts the advice"
 RISK_CONDITION = "conditional — the advice does not hold unconditionally"
 RISK_TIME = "carries timing — without it the advice is unusable"
 RISK_NUMBER = "carries figures — a mis-transcribed value is undetectable downstream"
 RISK_NOT_ACTION = "reads as an observation, not an instruction"
+RISK_ORPHAN_FIGURE = ("carries a figure but names no subject — it belongs to the heading "
+                      "above it, and read alone the number attaches to whatever is nearest")
 
 
 @dataclass
@@ -42,10 +48,11 @@ class Candidate:
     figures: list[str] = field(default_factory=list)
     vocabulary: dict = field(default_factory=dict)
     risks: list[str] = field(default_factory=list)
+    heading: str | None = None
 
     def as_dict(self) -> dict:
         out = {"text": self.text, "polarity": self.polarity}
-        for name in ("marker", "conditions", "times", "figures", "vocabulary", "risks"):
+        for name in ("marker", "conditions", "times", "figures", "vocabulary", "risks", "heading"):
             value = getattr(self, name)
             if value:
                 out[name] = value
@@ -87,6 +94,46 @@ def _matches(patterns: list[re.Pattern], text: str) -> list[str]:
     return found
 
 
+def _names_a_subject(sentence: str, hits: dict | None = None) -> bool:
+    """Whether a sentence carries a subject of its own.
+
+    A term the ontology recognises is the strongest signal: if the instance
+    knows "Ayvalık" is a cultivar and the sentence says it, the figure has
+    something to attach to. Failing that, a capitalised word after the first is
+    usually the thing being discussed — the first word is ambiguous because
+    every sentence starts capitalised.
+
+    This is a screen, not a parse. It only has to notice when there is nothing
+    in the sentence for a number to belong to.
+    """
+    if hits:
+        return True
+    words = sentence.split()
+    return any(w[:1].isupper() for w in words[1:] if len(w) > 2)
+
+
+def headings_by_offset(text: str) -> list:
+    """Where each heading starts, so a sentence can find the one above it.
+
+    A figure often sits in a sentence whose subject is a heading further up:
+    "AYVALIK" on one line, then "%24 yağ oranı ile yağlık bir çeşit olarak
+    kullanılabilir." two sentences later. Read alone that sentence belongs to
+    nothing, and the next reader attaches it to whichever name is nearest —
+    which on a real ministry leaflet meant Ayvalık's oil content being recorded
+    against a different cultivar whose own figure was one percent away.
+    """
+    return [(m.start(), m.group(1).strip()) for m in HEADING.finditer(text or "")]
+
+
+def heading_above(offset: int, headings: list) -> str | None:
+    found = None
+    for start, title in headings:
+        if start > offset:
+            break
+        found = title
+    return found
+
+
 def sentences(text: str) -> list[str]:
     parts = [s.strip() for s in SENTENCE_END.split(text or "") if s and s.strip()]
     return [s for s in parts if len(s) >= 25]
@@ -98,14 +145,21 @@ def find(text: str, grammar: dict, vocabulary: dict | None = None) -> list[Candi
         return []
 
     vocabulary = vocabulary or {}
+    headings = headings_by_offset(text)
+    cursor = 0
     results: list[Candidate] = []
 
     for sentence in sentences(text):
+        # Track where this sentence sits so it can claim the heading above it.
+        found_at = text.find(sentence, cursor)
+        if found_at >= 0:
+            cursor = found_at
         obligations = _matches(grammar["obligation"], sentence)
         observations = _matches(grammar.get("observation") or [], sentence)
 
         if not obligations and not observations:
             continue
+        heading = heading_above(cursor, headings)
 
         negations = _matches(grammar.get("negation") or [], sentence)
         # An observation pattern wins over an obligation one. The two overlap by
@@ -142,6 +196,10 @@ def find(text: str, grammar: dict, vocabulary: dict | None = None) -> list[Candi
             risks.append(RISK_NUMBER)
         if polarity == "observe":
             risks.append(RISK_NOT_ACTION)
+        # A figure with no subject of its own is only interpretable through the
+        # heading above it. Flagged so nothing downstream reads it standalone.
+        if figures and heading and not _names_a_subject(sentence, hits):
+            risks.append(RISK_ORPHAN_FIGURE)
 
         results.append(
             Candidate(
@@ -153,6 +211,7 @@ def find(text: str, grammar: dict, vocabulary: dict | None = None) -> list[Candi
                 figures=figures,
                 vocabulary=hits,
                 risks=risks,
+                heading=heading,
             )
         )
 
