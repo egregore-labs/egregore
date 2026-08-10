@@ -51,6 +51,18 @@ TIER_WEIGHT = {"T1": 1.0, "T2": 0.8, "T3": 0.5}
 # and the half-life says how fast confidence in it should decay.
 FRESHNESS_HALF_LIFE_YEARS = 12.0
 
+# What an undated source is worth. Not nothing — most archives record a year for
+# almost nothing, and measured on a real 2,748-document corpus only about forty
+# carried one. Treating unknown age as disqualifying made 98% of that archive
+# unservable and refused twenty-one of twenty-four grower questions, while the
+# passages themselves were correct, in zone and correctly cited.
+#
+# So an unknown year lowers confidence rather than voiding it, and the answer
+# shows the source as undated so the reader can weigh that themselves. The
+# alternative — silently scoring it as fresh — is the thing worth avoiding, and
+# this is not that.
+UNDATED_WEIGHT = 0.6
+
 # A violation of any of these means the statement is wrong, not merely thin.
 HARD = "hard"
 SOFT = "soft"
@@ -253,24 +265,48 @@ def freshness(year, today: date | None = None) -> float | None:
     return 0.5 ** (age / FRESHNESS_HALF_LIFE_YEARS)
 
 
+# Provenance resolution reports confidence as a word; scoring needs a number.
+# The two halves were written apart and met for the first time on a real corpus,
+# where a caller had to bridge them by hand. Accepting both is the seam.
+CONFIDENCE_WORDS = {"high": 1.0, "medium": 0.7, "moderate": 0.7, "low": 0.4}
+
+
+def _as_confidence(value):
+    """A confidence as a number, whether it arrived as one or as a word."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return CONFIDENCE_WORDS.get(value.strip().lower())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def integrity(tier: str, zone_confidence, year, violations: list, today: date | None = None):
     """A single number for how much a statement can be relied on, or None.
 
-    None where a component is missing. A composite that silently substitutes a
-    default for an unknown reports confidence it does not have, and this number
-    is what decides whether a grower sees the statement at all.
+    None only where the statement is genuinely unusable: it failed a hard check,
+    its publisher class is unknown, or it could not be placed. Those are facts
+    about whether it may be served at all.
+
+    An unknown publication year is not one of them. It is missing information
+    about a real statement, and it is weighted down rather than treated as
+    disqualifying — see UNDATED_WEIGHT for what that cost.
     """
     if any(v.severity == HARD for v in violations):
         return None
     weight = TIER_WEIGHT.get(tier)
     if weight is None:
         return None
-    if zone_confidence is None:
+    confidence = _as_confidence(zone_confidence)
+    if confidence is None:
         return None
     fresh = freshness(year, today=today)
     if fresh is None:
-        return None
-    score = weight * float(zone_confidence) * fresh
+        # Age unknown. Weigh it below anything of known recency, and serve it.
+        fresh = UNDATED_WEIGHT
+    score = weight * confidence * fresh
     # A soft violation is a real reduction in usefulness, not a note.
     score *= 0.8 ** sum(1 for v in violations if v.severity == SOFT)
     return round(min(1.0, max(0.0, score)), 3)

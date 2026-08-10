@@ -35,6 +35,11 @@ The filesystem remains authoritative. qmd indexes the uncurated intake edge. The
 - `user-interview ...` → follow `.claude/skills/ingest-user-interview/SKILL.md`
 - `google ...` → follow `.claude/skills/ingest-google/SKILL.md`
 - `notion ...` → follow `.claude/skills/ingest-notion/SKILL.md`
+- a body of documents to be **asked questions of** — hundreds or thousands of files, subject
+  folders, "build a knowledge base", "make this answerable" → follow
+  `.claude/skills/ingest-corpus/SKILL.md`. That path additionally works out which document may
+  answer which question, extracts the sentences carrying advice, and checks each against its
+  source. Connected mode only.
 - no path, "choose files", "upload files", or "open ingest" → use the local picker below
 - file path, folder, corpus, "everything from the org", or bulk import → use the corpus pipeline below
 - ambiguous single item → ask whether it is a meeting, interview, Google item, or file/folder
@@ -66,8 +71,9 @@ done and the guided setup continues here in the terminal:
   `auth accounts`). When authorized, continue with the `ingest-google` skill
   for the actual intake. In connected mode, project the lifecycle after each
   step (see Connector lifecycle below).
-- `"connector": "notion"` → route to the `notion-connect` skill, then
-  `ingest-notion` for intake.
+- `"connector": "notion"` → route directly to `ingest-notion`. It checks for
+  Notion MCP, guides OAuth through `notion-connect` when needed, then resumes
+  search, selection, and import.
 
 Walk one step at a time and confirm each authorization succeeded before moving
 on — this flow is the product's guided setup, not a script dump.

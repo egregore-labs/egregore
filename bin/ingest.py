@@ -267,6 +267,17 @@ def add_path(args: argparse.Namespace) -> dict:
     )
     repair_map = text_repair.load_mapping(profile or {})
     ingested = unchanged = metadata_updated = skipped = pruned = 0
+    # How often progress is written. The manifest used to be saved once, after
+    # every file, so an interrupted run lost everything it had extracted — on a
+    # 921-document folder that was two and a half hours of OCR with nothing to
+    # show. Documents already on disk were re-extracted because nothing recorded
+    # them. Writing periodically means an interruption costs at most this many.
+    checkpoint_every = int(os.environ.get("EGREGORE_INGEST_CHECKPOINT", "25") or 0)
+    since_checkpoint = 0
+    # Read before the loop rather than after it, so a checkpoint writes the real
+    # deletion records instead of dropping them. Pruning still happens later; a
+    # mid-run save simply carries forward what the previous run recorded.
+    tombstones = existing_manifest.get("tombstones", [])
     errors: list[dict] = []
     seen_paths: set[str] = set()
 
@@ -438,12 +449,18 @@ def add_path(args: argparse.Namespace) -> dict:
             "status": "unverified",
             "ingested_at": now,
         }
+        since_checkpoint += 1
+        if checkpoint_every and since_checkpoint >= checkpoint_every:
+            # A crash between the document write and this one costs re-extraction
+            # of at most `checkpoint_every` files, never the whole run.
+            write_manifest(directory, source_id, org, args, boundaries, base, now,
+                           previous, tombstones, errors)
+            since_checkpoint = 0
         if existing and existing.get("content_hash") == content_hash:
             metadata_updated += 1
         else:
             ingested += 1
 
-    tombstones = existing_manifest.get("tombstones", [])
     if args.prune:
         if not input_path.is_dir():
             raise ValueError("--prune requires a directory snapshot")
@@ -465,11 +482,23 @@ def add_path(args: argparse.Namespace) -> dict:
     # Current documents always win over historical deletion records.
     tombstones = [row for row in tombstones if row["id"] not in previous]
 
+    write_manifest(directory, source_id, org, args, boundaries, base, now,
+                   previous, tombstones, errors)
+    return {"org": org, "source": source_id, "ingested": ingested, "unchanged": unchanged, "metadata_updated": metadata_updated, "skipped": skipped, "pruned": pruned, "documents": len(previous), "metadata_root": str(directory), "data_root": str(docs_dir)}
+
+
+def write_manifest(directory, source_id, org, args, boundaries, base, now,
+                   previous, tombstones, errors) -> None:
+    """Persist progress. Called periodically during a run and once at the end.
+
+    One writer for both so a checkpoint and a completed run cannot record the
+    corpus differently.
+    """
     source_record = {
         "id": source_id,
         "org": org,
-        "name": args.name or source_id,
-        "kind": args.kind,
+        "name": getattr(args, "name", None) or source_id,
+        "kind": getattr(args, "kind", None),
         "boundaries": boundaries,
         "root_hint": base.name,
         "updated_at": now,
@@ -486,7 +515,6 @@ def add_path(args: argparse.Namespace) -> dict:
             "errors": errors,
         },
     )
-    return {"org": org, "source": source_id, "ingested": ingested, "unchanged": unchanged, "metadata_updated": metadata_updated, "skipped": skipped, "pruned": pruned, "documents": len(previous), "metadata_root": str(directory), "data_root": str(docs_dir)}
 
 
 def cmd_add(args: argparse.Namespace) -> int:

@@ -55,6 +55,26 @@ GAP_NO_STATEMENTS = "no statement in the archive matches this question"
 GAP_OUT_OF_ZONE = "statements exist but none apply to this zone"
 GAP_NO_PROVENANCE = "matching statements carry no source chunk and cannot be served"
 GAP_STALE = "matching statements cite a revision the document no longer has"
+GAP_NOT_SERVABLE = ("matching statements exist and carry their sources, but none passed "
+                    "the checks required to serve them")
+GAP_NOTHING_RELEVANT = ("nothing in the archive addresses this question closely enough "
+                        "to answer it")
+
+# How much of the question a statement must actually be about. Retrieval always
+# returns its best match, and when a corpus holds nothing on the subject the best
+# match is still returned — measured on a real archive, a question about drip
+# irrigation on a sloped grove was answered with the critical history of Turkish
+# democracy, correctly cited and tiered. Ranking cannot express "none of these",
+# so the floor has to.
+#
+# Expressed as a share of the question's content words rather than a raw score,
+# because BM25 scores are not comparable across corpora and any absolute
+# threshold would be a number tuned to one archive.
+MIN_TERM_OVERLAP = 0.18
+
+# Text this damaged is not a statement. OCR of fill-in-the-blank workbooks
+# produced runs of dots that reached real answers.
+DAMAGED = re.compile(r"[.…]{6,}|_{6,}")
 
 WORD = re.compile(r"\w{4,}", re.UNICODE)
 
@@ -113,6 +133,7 @@ class Answer:
     review_candidates: list = field(default_factory=list)
     follow_ups: list = field(default_factory=list)
     gap: str | None = None
+    withheld: dict = field(default_factory=dict)
 
     @property
     def answered(self) -> bool:
@@ -133,6 +154,7 @@ class Answer:
             "review_candidates": [c.as_dict() for c in self.review_candidates],
             "follow_ups": self.follow_ups,
             "gap": self.gap,
+            "withheld": self.withheld,
         }
 
 
@@ -165,8 +187,45 @@ def follow_ups_for(question: str, rules: list) -> list:
     return asks
 
 
+def _why_withheld(statements: list) -> dict:
+    """Counted reasons a set of statements could not be served.
+
+    A refusal that names no cause is a dead end for whoever has to fix it. These
+    are the counts, so "none of them carry a trust tier" is visible immediately
+    rather than after a day of reading code.
+    """
+    reasons: dict = {}
+    for s in statements:
+        for v in s.violations:
+            reasons[v.kind] = reasons.get(v.kind, 0) + 1
+        if not s.violations and s.integrity_score is None:
+            reasons["integrity_unavailable"] = reasons.get("integrity_unavailable", 0) + 1
+    return dict(sorted(reasons.items(), key=lambda kv: -kv[1]))
+
+
 def _subject(text: str) -> set:
     return set(WORD.findall((text or "").lower()))
+
+
+def term_overlap(question: str, claim: str) -> float:
+    """The share of the question's content words the claim actually contains.
+
+    Deliberately crude and corpus-independent. It is not a relevance score — it
+    is a floor under one, answering "is this even about the same thing".
+    """
+    asked = _subject(question)
+    if not asked:
+        return 0.0
+    return len(asked & _subject(claim)) / len(asked)
+
+
+def looks_damaged(claim: str) -> bool:
+    """Whether extraction left this too broken to serve.
+
+    A workbook line reading "meyveler ……… renge döndüğü zaman" is a question
+    with the answer removed, and serving it presents a blank as guidance.
+    """
+    return bool(DAMAGED.search(claim or ""))
 
 
 def find_review_candidates(served: list, statements: list, vocabulary=None,
@@ -236,7 +295,8 @@ def assemble(question: str, zone: str, statements: list, hierarchy: dict,
              follow_up_rules: list | None = None, limit: int = 5,
              current_revisions: dict | None = None, vocabulary=None,
              relevance: list | None = None, genre_of: dict | None = None,
-             genre_preferences: dict | None = None) -> Answer:
+             genre_preferences: dict | None = None,
+             min_overlap: float = MIN_TERM_OVERLAP) -> Answer:
     """Turn matching statements into an answer, applying every invariant.
 
     `statements` are the candidates retrieval already found. This stage does not
@@ -291,7 +351,11 @@ def assemble(question: str, zone: str, statements: list, hierarchy: dict,
 
     servable = [s for s in with_source if s.servable]
     if not servable:
-        answer.gap = GAP_NO_PROVENANCE
+        # Not a provenance failure — these have their chunks. Reporting it as one
+        # sent a real investigation down the wrong path: twenty-one questions
+        # were refused and the printed reason named the one thing that was fine.
+        answer.gap = GAP_NOT_SERVABLE
+        answer.withheld = _why_withheld(with_source)
         return answer
 
     revisions = current_revisions or {}
@@ -300,6 +364,12 @@ def assemble(question: str, zone: str, statements: list, hierarchy: dict,
         current = revisions.get(st.source.get("document"))
         cited = st.source.get("revision")
         return bool(current and cited and current != cited)
+
+    servable = [s for s in servable if not looks_damaged(s.claim)]
+    if not servable:
+        answer.gap = GAP_NOT_SERVABLE
+        answer.withheld = {"extraction_damaged": 1}
+        return answer
 
     fresh = [s for s in servable if not is_stale(s)]
     if not fresh:
@@ -342,6 +412,27 @@ def assemble(question: str, zone: str, statements: list, hierarchy: dict,
     # is how a live controversy gets presented as settled.
     all_served = [serve(s) for s in fresh]
     candidates = find_review_candidates(all_served, fresh, vocabulary=vocabulary)
+
+    # Refuse rather than serve the least-bad match. Without this the system
+    # always answers, which reads as coverage and is the opposite.
+    on_topic = [s for s in fresh if term_overlap(question, s.claim) >= min_overlap]
+    if not on_topic:
+        answer.gap = GAP_NOTHING_RELEVANT
+        answer.withheld = {"below_relevance_floor": len(fresh)}
+        return answer
+    fresh = on_topic
+
+    # One sentence said twice is not two sources. Duplicate documents in the
+    # archive made the same claim appear five times in a single answer.
+    seen_claims: set = set()
+    deduped = []
+    for s in fresh:
+        key = " ".join(sorted(_subject(s.claim)))
+        if key in seen_claims:
+            continue
+        seen_claims.add(key)
+        deduped.append(s)
+    fresh = deduped
 
     chosen = fresh[:limit]
     answer.served = [serve(s) for s in chosen]
@@ -411,6 +502,8 @@ def render(answer: Answer) -> str:
     """The answer as a grower reads it, tier and source always attached."""
     if not answer.answered:
         lines = [f"No answer in the archive for this. Reason: {answer.gap}"]
+        if answer.withheld:
+            lines.append("  withheld: " + ", ".join(f"{k} ×{v}" for k, v in answer.withheld.items()))
         if answer.follow_ups:
             lines.append("")
             lines.extend(f"  ? {q}" for q in answer.follow_ups)
