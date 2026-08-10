@@ -87,6 +87,32 @@ The intended sequence is: **intent → safe workspace → relevant context →
 consequential assumptions → execution**. Keep technical identifiers available,
 but always subordinate them to user value.
 
+### Returning-work UX contract
+
+When the user continues work already carried by the current working branch or
+explicitly asks to resume prior work, make continuity visible before execution:
+
+- **Recognize continuation** — distinguish a genuine continuation from a new
+  topic. Do not create a new workspace when the current working branch already
+  carries the requested work.
+- **Restore the workspace** — only after confirming the branch or worktree is
+  relevant, lead with the continuity benefit:
+  `I found your previous work on **{topic}** and restored its workspace and context.`
+  Then expose the implementation as secondary detail:
+  `Workspace: {branch} (worktree).`
+- **Restore context** — retrieve the decisions, handoffs, or prior session work
+  needed to continue. Keep the Egregore Retrieval Beat and use the existing
+  `↳ Context restored:` receipt for each materially relevant result. Never claim
+  context was restored from a branch name alone.
+- **Surface open threads** — name only unresolved questions, risks, or next
+  steps that could change what happens next. Do not replay the previous session.
+- **Resume execution** — state the next outcome in one short sentence and
+  continue from the restored state without another setup recap.
+
+The intended sequence is: **continuation intent → prior workspace → restored
+context → open threads → resumed execution**. The user should experience a
+return as picking up a living thread, not reconstructing a Git session.
+
 ### Handoff claiming
 
 If `addressed_to_user` handoffs exist and the user is picking one up, create the IMPLEMENTS link after branch creation:

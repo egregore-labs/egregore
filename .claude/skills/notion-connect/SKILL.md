@@ -1,206 +1,119 @@
-Set up Notion as a content source for your Egregore. Guided, step by step — your workspace's own private connection, readable only by this Egregore.
+Connect the current agent runtime directly to Notion's official hosted MCP.
 
 Arguments: $ARGUMENTS (Optional: `status` or `revoke`)
 
 ## When to invoke
 
-**Trigger phrases:**
-- "connect notion", "set up notion", "link notion", "connect our notion", "enable notion" → run the setup flow
+- "connect notion", "set up notion", "link notion" → run the connection flow
 - "notion status", "is notion connected" → status
-- "disconnect notion", "revoke notion", "unlink notion" → revoke
+- "disconnect notion", "revoke notion" → revoke
+- `/ingest notion` also enters this flow automatically when the MCP tools are
+  missing. Users do not need to run this skill first.
 
-**Disambiguation:**
-- "ingest from notion", "import our notion docs" → NOT this skill — route to `/ingest notion`
-- "check notion for X" → NOT this skill — the connector is already usable: `bash bin/connector-notion.sh search "X"`
+## Product boundary
 
-Design contract: `docs/specs/notion-connector.md`.
+Notion provides the bridge. Egregore does not register a Notion OAuth app and
+does not receive or store the user's Notion OAuth token. The current agent
+runtime connects directly to `https://mcp.notion.com/mcp`; Notion owns the
+login and consent screen, and the runtime stores its own authorization.
 
-**CLI resolution (all commands below):** use `bash bin/connector-notion.sh`
-when that file exists (framework checkout). On hosted Connect workspaces the
-repo does not carry it — run `connector-notion.sh` from PATH instead (the
-workspace image ships it at `/opt/egregore/bin`). If neither exists, Notion
-isn't available in this installation — say so plainly and stop.
+Say this before opening the login flow:
 
-## OSS tier — visible, gated, honest
+> Notion will connect directly to this agent. Egregore Labs does not receive
+> your Notion login or token. The agent can see what your Notion account can
+> see. Search and fetched content pass through this session; pages you approve
+> are additionally saved as curated shared memory.
 
-This skill ships to every Egregore, but the connector itself runs on the
-Connected tier. **Before anything else**, detect the tier:
+Do not claim that the MCP is read-only or limited to selected pages. Notion MCP
+uses the signed-in user's permissions. Normal Egregore session capture may
+include tool results the agent inspected. The `/ingest notion` review step is
+the boundary for what becomes a curated Notion source in shared memory.
 
-```bash
-MODE=$(jq -r '.mode // empty' egregore.json 2>/dev/null)
-API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
-```
+## Readiness check
 
-The tier predicate is exactly the canonical `_detect_mode` truth table
-(`bin/lib/config.sh`): the instance is on the **local (OSS) tier** when
-`MODE` is `local` **or** `API_URL` is empty. (A hand-set `mode: "connected"`
-without an `api_url` is still local — never treat it as an unlock.) Deliver exactly this message, then the question — do not
-paraphrase the message:
+First discover available tools using the runtime's tool registry:
 
-> You can expand your knowledge base with connections to Notion, Google Drive, Docs, Sheets, and many more. Upgrade to Connected Tier to accelerate.
+- Claude Code: use ToolSearch with `notion`.
+- Codex/OpenAI clients: search for Notion MCP tools. OpenAI may expose
+  `notion-search` and `notion-fetch` as `search` and `fetch`.
+- Other MCP-aware runtimes: inspect the loaded tools for the Notion server.
 
-AskUserQuestion:
-- **Upgrade to Connected Tier** — tell them the one sanctioned path: run
-  `egregore connect` in a terminal (the launcher walks the whole upgrade:
-  registers your org with the platform, provisions the key, replays your
-  graph). On hosted workspaces this skill unlocks on the next session; on
-  self-hosted setups the connector itself is installed with our team during
-  Connect onboarding — say that honestly rather than promising an instant
-  unlock.
-- **Not now** — respect it and stop. The skill is not usable on the local
-  tier; do not improvise config edits, api_url values, or partial flows.
+The connection is ready when both search and fetch are available. Prefer a
+`notion-get-self`/`get-self` call for status when present; otherwise a small
+search is enough to verify access.
 
-Only continue past this section on a connected instance.
+## Setup
 
-## The one message that must always land
+Use the path for the current runtime. These commands register Notion's official
+remote MCP only; they do not install an Egregore connector.
 
-Open the flow with the privacy framing, in plain words, before any step:
-
-> **This connection is private to your organization.** You create a key inside
-> your own Notion workspace; it is stored only in this Egregore and never
-> leaves your machines. **Egregore Labs has no access** — there is no Egregore
-> app registered with Notion, no server that sees your key, nothing on their
-> side that could read your content. You can revoke it in your Notion settings
-> at any time.
-
-Do not skip or paraphrase this into vagueness. It is the reason a
-security-conscious org can say yes.
-
-## Conduct rules
-
-Agent-conducted — never a CLI interview. One step per turn. Verify each step
-actually worked before offering the next. If the user is mid-flow from an
-earlier attempt, run `bash bin/connector-notion.sh status` first and resume at
-the right step instead of restarting.
-
-## Setup flow
-
-### Step 0 — Gates
+### Claude Code
 
 ```bash
-jq '.connectors.notion.enabled // false' egregore.json
+claude mcp get notion >/dev/null 2>&1 || \
+  claude mcp add --transport http --scope project notion https://mcp.notion.com/mcp
+claude mcp login notion
 ```
-If false: "Notion isn't enabled for this org yet. An admin adds
-`connectors.notion.enabled: true` to egregore.json." Stop.
 
-Read `.egregore-state.json` — if `notion_auth_complete` is true, show
-`bash bin/connector-notion.sh status` and ask whether they want to reconnect
-or are here to revoke. Skip the rest when already healthy.
+If the tools do not appear after login, say:
 
-### Step 1 — Framing + owner check
+> Notion is connected. Restart this Claude Code session, then run `/ingest notion` again.
 
-Deliver the privacy message above. Then confirm the user is (or can reach) a
-**Notion workspace owner** — only an owner can create the connection. If they
-are not, help them draft the one-line ask to their admin and stop until the
-owner is present.
+### Codex
 
-### Step 2 — Create the connection (their workspace, their key)
-
-Open the portal for them:
+The Egregore project config already declares the server. If it is absent in an
+older installation:
 
 ```bash
-open "https://app.notion.com/developers"
+codex mcp get notion >/dev/null 2>&1 || \
+  codex mcp add notion --url https://mcp.notion.com/mcp
+codex mcp login notion
 ```
 
-Narrate, one screen at a time, and wait for their confirmation before moving
-on. The portal's create dialog and the capabilities screen are **separate**
-steps — do not conflate them.
+If the tools do not appear after login, say:
 
-**Create dialog:**
+> Notion is connected. Restart this Codex session, then run `$ingest notion` again.
 
-1. Click **+ New connection**
-2. Name it `<org> Egregore`
-3. Authentication method: **Access token** — workspace-scoped static token,
-   which is what an org connector wants. (Not OAuth: that one is user-scoped
-   and for marketplace apps.)
-4. **Installable in**: confirm it shows their workspace
-5. Click **Create connection**
+### Pi
 
-**Capabilities** — Notion does *not* take them there automatically. Guide
-them: portal sidebar → **Connections** → click the new `<org> Egregore`
-connection → **Configuration** tab. The defaults are broader than needed
-(update/insert content and user info can be pre-enabled), so this step is
-about turning things off:
+Pi does not provide MCP support. Do not fall back to the legacy REST connector.
+Say:
 
-6. Recommended: keep **Read content** + **Read comments**; disable
-   **Update content**, **Insert content**, and set user information to
-   **No user information**.
-   One genuine choice to offer, not bury: if they want Egregore to write to
-   Notion later (create or update pages), they can leave Update/Insert
-   enabled — note their choice and move on. Read-only stays the recommended
-   default.
-7. Save, then reveal and copy the **Access token** — it starts with `ntn_`.
+> Notion MCP is not available in Pi yet. Open this Egregore in Claude Code or Codex to connect and import Notion pages.
 
-### Step 3 — Store the key (never through chat)
+Stop.
 
-The user just copied the key, so it is on their clipboard. In-session (`!`
-commands have no interactive terminal), the clipboard pipe is the way — the
-key appears nowhere, not in the command line and not in the log:
+### Other MCP clients
 
-```
-! pbpaste | bash bin/connector-notion.sh auth set
-```
+Add `https://mcp.notion.com/mcp` as a Streamable HTTP server named `notion`,
+then complete Notion's OAuth flow. If the client only loads new servers at
+startup, ask the user to restart and return to `/ingest notion`.
 
-(Linux: `xclip -o |` or `wl-paste |` instead of `pbpaste |`.) In a real
-terminal, plain `bash bin/connector-notion.sh auth set` gives a hidden
-prompt instead. Either way the CLI validates the key against the API and
-writes gitignored `.env` only on success. **If they paste the key into the
-chat itself**, accept it gracefully but tell them to rotate it in the
-developer portal afterwards — chat transcripts are captured; this flow exists
-so the key never is.
+## Continue into ingest
 
-Verify:
+Once search and fetch are available, return directly to the calling
+`/ingest notion` flow. When this skill was invoked on its own, close with:
 
-```bash
-bash bin/connector-notion.sh auth status
-```
-
-Report the workspace name back (or, with minimal capabilities, the
-token-valid-but-name-unavailable note — that is success, say so).
-
-### Step 4 — Choose what it can see
-
-On the connection's page in the portal: the **Content access** tab →
-**+ Add pages & databases**. Granting a top-level page or teamspace includes
-everything under it. The same tab lists current access and revokes it —
-their side, unilateral, any time. (Also reachable from inside Notion via
-Settings → Connections → the connection.)
-
-Prove it:
-
-```bash
-bash bin/connector-notion.sh list --max 5
-```
-
-Titles come back → connected. Empty → nothing shared yet; return to the
-settings screen with them.
-
-### Step 5 — Land it
-
-Update state (the CLI already wrote `notion_connector` / `notion_auth_complete` /
-`notion_workspace`). Telemetry, fire-and-forget:
-
-```bash
-bash bin/telemetry.sh emit "command" '{"command":"notion-connect"}' 2>/dev/null &
-```
-
-Close with the next move, not a manual: "Connected. Say **/ingest notion**
-and I'll shortlist the five docs most worth bringing into shared memory —
-you pick, I import."
+> Connected. Run `/ingest notion` and tell me what you want to bring into memory.
 
 ## Status
 
-```bash
-bash bin/connector-notion.sh status
-```
-
-Show org gate, key validity, workspace, last sync — formatted, no raw JSON.
+Discover the Notion tools and call `notion-get-self`/`get-self` when available.
+Report only connected workspace/user information returned by Notion. Do not
+read `.egregore-state.json`; MCP authorization belongs to the runtime.
 
 ## Revoke
 
-```bash
-bash bin/connector-notion.sh auth revoke
-```
+- Claude Code: `claude mcp logout notion`
+- Codex: `codex mcp logout notion`
+- Other clients: disconnect Notion from that client's MCP settings.
 
-Confirm: "Key removed from this Egregore. To kill the key itself, also delete
-the connection in Notion → Settings → Connections."
+Confirm:
+
+> Disconnected here. Pages already imported into Egregore memory remain until you remove them.
+
+Telemetry, fire-and-forget:
+
+```bash
+bash bin/telemetry.sh emit "command" '{"command":"notion-connect","transport":"mcp"}' 2>/dev/null &
+```

@@ -1,6 +1,9 @@
 [features]
 hooks = true
 
+[mcp_servers.notion]
+url = "https://mcp.notion.com/mcp"
+
 [tui]
 # Codex currently accepts built-in footer item IDs only. Egregore's dynamic
 # ◆ CONNECTED / ◇ LOCAL identity is rendered by bin/codex-session-start.sh.

@@ -279,6 +279,13 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Tools**: `list_meetings`, `get_meetings`, `get_meeting_transcript`, `query_granola_meetings`
 - **Setup**: `/connect granola`
 
+#### Notion (MCP)
+- **Purpose**: Search and fetch selected Notion pages through Notion's official hosted MCP; `/ingest notion` reviews and writes approved pages into Egregore memory
+- **Server**: `https://mcp.notion.com/mcp`
+- **Auth**: User OAuth owned by Notion and the current agent runtime; Egregore Labs has no Notion OAuth app or token broker
+- **Tools**: `notion-search`, `notion-fetch` (OpenAI clients may expose them as `search`, `fetch`)
+- **Setup**: `/ingest notion` guides connection automatically; `/connect notion` remains a direct entry point
+
 #### `connector-google.sh`
 - **Purpose**: Wrapper delegating to TypeScript connector implementation
 - **Reads**: Nothing
@@ -293,8 +300,8 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **External deps**: npx
 
 #### `connector-notion.sh`
-- **Purpose**: Wrapper delegating to the Notion connector TypeScript CLI (`bin/connector-notion/`) — client-owned integration token, direct REST, native markdown export; feeds `/ingest notion` (spec: `docs/specs/notion-connector.md`)
-- **Called by**: `/connect notion`, `/ingest notion`, ad-hoc lookups
+- **Purpose**: Legacy direct-REST connector retained temporarily for rollback and comparison while the MCP ingestion path is smoke-tested (spec: `docs/specs/notion-connector.md`)
+- **Called by**: No active skill; pending removal after MCP verification
 - **Reads**: `.env` (`NOTION_API_TOKEN`), `egregore.json` (`connectors.notion`), `.egregore-state.json`
 - **Writes**: `.env` (auth set), `.egregore-state.json` (notion_* keys), `~/.egregore/context/notion/` cache, export dirs
 - **External deps**: npx, tsx
