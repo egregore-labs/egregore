@@ -93,6 +93,30 @@ question will be refused.
 
 Expect roughly two hours per thousand documents. Run it in the background.
 
+## Correcting the profile after ingest
+
+A profile is usually wrong the first time in a way nothing reveals until questions
+are asked of it — a publisher classed regional that is national, a tier too low. Fix
+the profile, then apply it:
+
+```bash
+python3 bin/ingest.py reresolve --source <id> --dry-run   # what would change
+python3 bin/ingest.py reresolve --source <id>             # apply it
+```
+
+**Do not re-run `add` to apply a profile change.** It skips on the content hash and
+returns before it consults the profile, so it reports every document unchanged and
+applies nothing — which reads as the correction not working.
+
+`reresolve` re-runs the resolver against each document's stored path. No file is
+reopened and no text is re-extracted, so a corpus that took hours to ingest is
+corrected in seconds. A boundary the operator stated with `--boundary`, or one the
+catalogue recorded, is reported as `protected` and never overwritten.
+
+Report `placed` (documents that had no zone and now have one) first. Those were
+invisible: a zoneless passage is dropped before ranking, so they could not be
+retrieved at all, however well they matched.
+
 ## Step 6 — Check it before handing it over
 
 ```bash

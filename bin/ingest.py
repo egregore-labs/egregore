@@ -522,6 +522,160 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def rewrite_frontmatter(path: Path, updates: dict) -> bool:
+    """Replace named frontmatter fields in place, leaving the text untouched.
+
+    A document's placement lives in two files — the manifest record and this
+    document's own frontmatter — and a reader may consult either. Updating one
+    and not the other produces a corpus that disagrees with itself, which is
+    worse than the stale value it replaced.
+
+    Only the named lines are rewritten. The body is never reparsed, so nothing
+    that survived extraction can be lost by a maintenance pass.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return False
+    try:
+        close = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+    except StopIteration:
+        return False
+    remaining = dict(updates)
+    for i in range(1, close):
+        key = lines[i].split(":", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}: {json.dumps(remaining.pop(key), ensure_ascii=False)}"
+    # A field the original write omitted is appended rather than dropped, so a
+    # document ingested before a field existed still gains it.
+    for key, value in remaining.items():
+        lines.insert(close, f"{key}: {json.dumps(value, ensure_ascii=False)}")
+        close += 1
+    atomic_text(path, "\n".join(lines))
+    return True
+
+
+def reresolve_source(args: argparse.Namespace) -> dict:
+    """Re-derive placement for documents already ingested.
+
+    Placement is written once, at ingest, and never revisited. That is right
+    for content — the text of a document does not change because a rule did —
+    but wrong for the rules themselves. Correcting a publisher profile changed
+    nothing about the corpus it governs: `add` skips on the content hash and
+    returns before it ever consults the profile, so it reported every document
+    unchanged while the corrected rule went unapplied. The only way to apply a
+    fix was to re-extract thousands of documents, redoing OCR to recompute a
+    field that depends on nothing but the filename.
+
+    So this re-runs the resolver alone. No file is reopened, no text is
+    re-extracted; the stored path is all the resolver ever needed.
+
+    Evidence precedence is the same as at ingest, and is the reason this is
+    safe to run at any time: a value the operator stated, or one the
+    organisation's own catalogue recorded, is never overwritten by an
+    inference. Only a placement this resolver derived — or the absence of one —
+    is open to revision.
+    """
+    config = load_config()
+    source_id = slug(args.source)
+    directory = source_dir(source_id)
+    manifest = load_manifest(directory)
+    records = manifest.get("documents") or []
+    if not records:
+        return {"source": source_id, "error": "no manifest, or no documents in it",
+                "metadata_root": str(directory)}
+
+    profile = publisher_profile()
+    if profile is None:
+        return {"source": source_id,
+                "error": "no publisher-profile.json found — nothing to resolve against"}
+    key = source_profile.boundary_key(profile)
+    if not key:
+        return {"source": source_id, "error": "profile declares no boundary key"}
+
+    docs_dir = data_root() / "sources" / source_id / "documents"
+    placed = rezoned = unchanged = protected = missing = 0
+    changes: list = []
+
+    for record in records:
+        relative = record.get("source_path")
+        if not relative:
+            unchanged += 1
+            continue
+        boundaries = dict(record.get("boundaries") or {})
+        provenance = dict(record.get("provenance") or {})
+        current = boundaries.get(key)
+        # Anything the operator stated or the catalogue recorded outranks an
+        # inference and is left exactly as it is.
+        stated_elsewhere = bool(provenance.get("from_catalogue", {}).get(key))
+        derived_here = provenance.get("derived") is True and provenance.get("applied_boundary") == key
+        if (current and not derived_here) or stated_elsewhere:
+            protected += 1
+            continue
+
+        resolved = source_profile.resolve(profile, filename=relative)
+        if not resolved.zone:
+            unchanged += 1
+            continue
+        if resolved.zone == current:
+            unchanged += 1
+            continue
+
+        inferred = resolved.as_dict()
+        catalogued = provenance.get("from_catalogue")
+        updated_provenance = dict(inferred)
+        if catalogued:
+            updated_provenance["from_catalogue"] = catalogued
+            updated_provenance["confidence"] = provenance.get("confidence", "high")
+        updated_provenance["applied_boundary"] = key
+        updated_provenance["derived"] = True
+        boundaries[key] = resolved.zone
+
+        changes.append({"id": record["id"], "source_path": relative,
+                        "from": current, "to": resolved.zone})
+        if current:
+            rezoned += 1
+        else:
+            placed += 1
+
+        if args.dry_run:
+            continue
+        record["boundaries"] = boundaries
+        record["provenance"] = updated_provenance
+        file_path = record.get("file_path")
+        target = (data_root() / file_path) if file_path else (docs_dir / f"{record['id']}.md")
+        if not rewrite_frontmatter(target, {"boundaries": boundaries,
+                                            "provenance": updated_provenance}):
+            missing += 1
+
+    if not args.dry_run and (placed or rezoned):
+        manifest["documents"] = sorted(records, key=lambda d: d["id"])
+        atomic_json(directory / "manifest.json", manifest)
+
+    return {
+        "org": slug(config.get("slug") or "egregore"),
+        "source": source_id,
+        "dry_run": bool(args.dry_run),
+        "documents": len(records),
+        "placed": placed,
+        "rezoned": rezoned,
+        "unchanged": unchanged,
+        "protected": protected,
+        "frontmatter_not_found": missing,
+        "examples": changes[: max(0, args.examples)],
+        "metadata_root": str(directory),
+    }
+
+
+def cmd_reresolve(args: argparse.Namespace) -> int:
+    result = reresolve_source(args)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 1 if result.get("error") else 0
+
+
 def selection_relative_path(value: object) -> str:
     if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
         raise ValueError("selection contains an invalid relative path")
@@ -747,6 +901,15 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument("--boundary", action="append", default=[])
     add.add_argument("--prune", action="store_true", help="tombstone files absent from this authoritative directory snapshot")
     add.set_defaults(func=cmd_add)
+    reresolve = sub.add_parser(
+        "reresolve",
+        help="re-derive placement from the current profile, without re-reading any document")
+    reresolve.add_argument("--source", required=True, help="source id to re-resolve")
+    reresolve.add_argument("--dry-run", action="store_true",
+                           help="report what would change and write nothing")
+    reresolve.add_argument("--examples", type=int, default=10,
+                           help="how many changed documents to list (default 10)")
+    reresolve.set_defaults(func=cmd_reresolve)
     add_selection = sub.add_parser("add-selection")
     add_selection.add_argument("manifest")
     add_selection.set_defaults(func=cmd_add_selection)
