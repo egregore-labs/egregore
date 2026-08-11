@@ -1,16 +1,22 @@
 name: ShellCheck
 
+# Pull requests only. The push trigger carried no branch filter, so every
+# commit pushed to a dev/* branch linted once on the push and again on the
+# pull request — measured, twice as many runs as pull requests for the same
+# result. A pull request is checked against refs/pull/N/merge, which is the
+# merged tree, so the push run added nothing the pull request had not seen.
 on:
-  push:
-    paths:
-      - 'bin/**/*.sh'
-      - '.claude/hooks/**/*.sh'
-      - 'packages/create-egregore/**'
   pull_request:
     paths:
       - 'bin/**/*.sh'
       - '.claude/hooks/**/*.sh'
       - 'packages/create-egregore/**'
+
+# A new commit supersedes the run already in flight. Without this, pushing a
+# fixup leaves the previous run going to completion with nobody reading it.
+concurrency:
+  group: shellcheck-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   shellcheck:
