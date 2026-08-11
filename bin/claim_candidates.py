@@ -24,9 +24,22 @@ from dataclasses import dataclass, field
 
 SENTENCE_END = re.compile(r"(?<=[.!?:;])\s+|\n{2,}")
 
-# A line that names what follows rather than saying something about it: short,
-# on its own, and not ending in sentence punctuation.
-HEADING = re.compile(r"^\s*([A-ZÇĞİÖŞÜ][^\n.!?]{2,60})\s*$", re.MULTILINE)
+# Text indented past this is running down a margin, not heading a section. A
+# two-column brochure puts its masthead there — "ZEYTİN" at column 129 and
+# "FİDANI" at 132, interleaved with the body text. Read as headings, they take
+# ownership of every sentence after them, which put a cultivar's oil content
+# under half of the word "seedling".
+MARGIN = 40
+
+# A line ending in one of these is a wrapped sentence, not a title.
+CONTINUES = re.compile(r"\b(ve|veya|ile|için|ya da|gibi|olarak|and|or|with|for|the|of)$",
+                       re.IGNORECASE)
+
+# Layout-preserved extraction of a two-column page puts both columns on one
+# line, separated by a wide gutter: a cultivar name on the left, a margin
+# sentence on the right. Measured, that made a five-character heading a
+# 160-character line, and the length test then discarded a real heading.
+GUTTER_SPLIT = re.compile(r"\s{4,}")
 
 # Risks named so a reviewer knows what to look for, rather than re-reading blind.
 RISK_NEGATION = "negation present — dropping it inverts the advice"
@@ -122,7 +135,26 @@ def headings_by_offset(text: str) -> list:
     which on a real ministry leaflet meant Ayvalık's oil content being recorded
     against a different cultivar whose own figure was one percent away.
     """
-    return [(m.start(), m.group(1).strip()) for m in HEADING.finditer(text or "")]
+    found = []
+    offset = 0
+    for line in (text or "").split("\n"):
+        start = offset
+        offset += len(line) + 1
+        indent = len(line) - len(line.lstrip())
+        # Keep only what is in the leftmost column of the line.
+        title = GUTTER_SPLIT.split(line.strip(), maxsplit=1)[0].strip()
+        if not (2 < len(title) <= 60):
+            continue
+        if indent > MARGIN:
+            continue                      # margin furniture, not a heading
+        if not title[:1].isupper():
+            continue                      # a heading names something
+        if any(ch in title for ch in ".!?"):
+            continue                      # a sentence, not a title
+        if CONTINUES.search(title):
+            continue                      # a wrapped line of prose
+        found.append((start, title))
+    return found
 
 
 def heading_above(offset: int, headings: list) -> str | None:

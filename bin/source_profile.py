@@ -170,6 +170,19 @@ def resolve(profile: dict, *, url: str = "", institution: str = "", filename: st
                     result.notes.append(
                         f"ambiguous region in provenance ({name}) — zone must be supplied"
                     )
+                elif rule.get("zone_fallback") == "national":
+                    # A national body's own domain, with no province named. The
+                    # document is national, not unplaceable. Leaving it unzoned
+                    # is the worse error: a zone-less passage is dropped before
+                    # ranking, so the document is not merely unservable but
+                    # invisible — measured, three ministry documents added to a
+                    # real corpus could never be retrieved at all.
+                    result.zone = profile.get("national_zone")
+                    result.confidence = "medium"
+                    result.notes.append(
+                        "national publisher with no province in provenance — zone falls "
+                        "back to national, which is broader than the document may be"
+                    )
                 else:
                     result.notes.append(
                         "regional publisher but no region identified in provenance — "
