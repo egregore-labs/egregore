@@ -154,6 +154,36 @@ def chunks(text: str, limit: int = 7000) -> list[str]:
     return result
 
 
+# Catalogue columns that carry provenance, by what they mean rather than by
+# what any one organisation calls them. A profile's `map` already renames its
+# own columns to these, so no further configuration is needed.
+CATALOGUE_URL_FIELDS = ("url", "source_url", "link")
+CATALOGUE_INSTITUTION_FIELDS = ("institution", "publisher", "source_type", "source")
+
+
+def catalogue_provenance(catalogued: dict) -> tuple:
+    """The URL and institution a catalogue records for a document.
+
+    The resolver has always accepted these and ranks both above a filename,
+    because a filename is what someone happened to save a file as. Ingest
+    passed only the filename, so the stronger evidence sitting in the row it
+    had just read went unused.
+
+    Measured on a real archive that was not a marginal loss. Seventy articles
+    downloaded from two journal indexes were saved under bare article titles,
+    carrying no publisher token to match. The profile had rules for both
+    indexes and the catalogue named the index for every one of them, and still
+    nothing matched — the one input that could have identified them was the one
+    input never passed.
+    """
+    if not catalogued:
+        return "", ""
+    url = next((str(catalogued[f]) for f in CATALOGUE_URL_FIELDS if catalogued.get(f)), "")
+    institution = next(
+        (str(catalogued[f]) for f in CATALOGUE_INSTITUTION_FIELDS if catalogued.get(f)), "")
+    return url, institution
+
+
 def find_publisher_profile() -> Path | None:
     """Where this instance's publisher profile is, if it has one.
 
@@ -401,7 +431,10 @@ def add_path(args: argparse.Namespace) -> dict:
             provenance["confidence"] = "high"
 
         if profile:
-            resolved = source_profile.resolve(profile, filename=relative)
+            catalogue_url, catalogue_institution = catalogue_provenance(catalogued)
+            resolved = source_profile.resolve(
+                profile, url=catalogue_url, institution=catalogue_institution,
+                filename=relative)
             if resolved.publisher_class or resolved.notes:
                 inferred = resolved.as_dict()
                 # Keep the inference visible even when the catalogue answered,
@@ -597,7 +630,7 @@ def reresolve_source(args: argparse.Namespace) -> dict:
         return {"source": source_id, "error": "profile declares no boundary key"}
 
     docs_dir = data_root() / "sources" / source_id / "documents"
-    placed = rezoned = unchanged = protected = missing = 0
+    placed = rezoned = identified = unchanged = protected = missing = 0
     changes: list = []
 
     for record in records:
@@ -607,39 +640,69 @@ def reresolve_source(args: argparse.Namespace) -> dict:
             continue
         boundaries = dict(record.get("boundaries") or {})
         provenance = dict(record.get("provenance") or {})
+        catalogued = provenance.get("from_catalogue") or {}
+
+        # The same evidence the original ingest had, re-read from the record so
+        # a document identified only by its catalogue row resolves here too.
+        catalogue_url, catalogue_institution = catalogue_provenance(catalogued)
+        resolved = source_profile.resolve(
+            profile, url=catalogue_url, institution=catalogue_institution,
+            filename=relative)
+
+        # Placement and identification are decided separately. A document can
+        # become identifiable — a journal index naming its publisher — without
+        # that saying anything about which region it applies to, and reporting
+        # only the placement would call that document unchanged when the thing
+        # that decides how far to trust it has just been settled.
         current = boundaries.get(key)
         # Anything the operator stated or the catalogue recorded outranks an
         # inference and is left exactly as it is.
-        stated_elsewhere = bool(provenance.get("from_catalogue", {}).get(key))
-        derived_here = provenance.get("derived") is True and provenance.get("applied_boundary") == key
-        if (current and not derived_here) or stated_elsewhere:
-            protected += 1
+        derived_here = (provenance.get("derived") is True
+                        and provenance.get("applied_boundary") == key)
+        zone_open = not ((current and not derived_here) or catalogued.get(key))
+        zone_changes = bool(zone_open and resolved.zone and resolved.zone != current)
+
+        # A tier the catalogue stated is likewise not ours to revise.
+        class_open = not catalogued.get("tier")
+        class_changes = bool(
+            class_open and resolved.publisher_class
+            and (resolved.publisher_class != provenance.get("publisher_class")
+                 or resolved.tier != provenance.get("tier")))
+
+        if not zone_changes and not class_changes:
+            if not zone_open and not class_open:
+                protected += 1
+            elif current and not zone_open:
+                protected += 1
+            else:
+                unchanged += 1
             continue
 
-        resolved = source_profile.resolve(profile, filename=relative)
-        if not resolved.zone:
-            unchanged += 1
-            continue
-        if resolved.zone == current:
-            unchanged += 1
-            continue
-
-        inferred = resolved.as_dict()
-        catalogued = provenance.get("from_catalogue")
-        updated_provenance = dict(inferred)
+        # The fresh resolution replaces the recorded inference whenever either
+        # half moved. Refreshing only on a class change once left a re-zoned
+        # document carrying the confidence and notes of the resolution it no
+        # longer had — a record that reported an inferred national zone with
+        # the confidence of a precise one.
+        updated_provenance = dict(provenance)
+        updated_provenance.update(resolved.as_dict())
+        if class_changes:
+            identified += 1
         if catalogued:
             updated_provenance["from_catalogue"] = catalogued
-            updated_provenance["confidence"] = provenance.get("confidence", "high")
-        updated_provenance["applied_boundary"] = key
-        updated_provenance["derived"] = True
-        boundaries[key] = resolved.zone
+        if zone_changes:
+            updated_provenance["applied_boundary"] = key
+            updated_provenance["derived"] = True
+            boundaries[key] = resolved.zone
+            if current:
+                rezoned += 1
+            else:
+                placed += 1
 
         changes.append({"id": record["id"], "source_path": relative,
-                        "from": current, "to": resolved.zone})
-        if current:
-            rezoned += 1
-        else:
-            placed += 1
+                        "zone": {"from": current, "to": boundaries.get(key)},
+                        "class": {"from": provenance.get("publisher_class"),
+                                  "to": updated_provenance.get("publisher_class")},
+                        "matched_by": resolved.matched_by})
 
         if args.dry_run:
             continue
@@ -651,7 +714,7 @@ def reresolve_source(args: argparse.Namespace) -> dict:
                                             "provenance": updated_provenance}):
             missing += 1
 
-    if not args.dry_run and (placed or rezoned):
+    if not args.dry_run and (placed or rezoned or identified):
         manifest["documents"] = sorted(records, key=lambda d: d["id"])
         atomic_json(directory / "manifest.json", manifest)
 
@@ -662,6 +725,7 @@ def reresolve_source(args: argparse.Namespace) -> dict:
         "documents": len(records),
         "placed": placed,
         "rezoned": rezoned,
+        "identified": identified,
         "unchanged": unchanged,
         "protected": protected,
         "frontmatter_not_found": missing,
