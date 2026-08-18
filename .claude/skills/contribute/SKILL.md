@@ -1,3 +1,8 @@
+---
+name: contribute
+description: "Contribute an improvement back to the upstream Egregore framework as a cross-fork pull request. Use for /contribute, or submitting a framework fix upstream — not saving org work (/save) or filing a bug (/issue)."
+---
+
 Contribute an improvement back to the upstream Egregore framework.
 
 Arguments: $ARGUMENTS
@@ -179,13 +184,13 @@ git add bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/nu
 
 If nothing staged: "No framework changes to submit." Stop.
 
-Commit message — use AskUserQuestion:
+Commit message — per `.claude/context/commit-format.md`; use AskUserQuestion:
 
 ```
 header: "Message"
 question: "Describe your contribution:"
 options:
-  - label: "{auto-derived from diff — e.g. 'fix: improve /save error handling'}"
+  - label: "{auto-derived from diff — e.g. 'fix(save): improve error handling'}"
     description: "Based on your changes"
   - label: "I'll write my own"
     description: "Enter a custom message"

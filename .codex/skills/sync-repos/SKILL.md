@@ -1,6 +1,6 @@
 ---
 name: sync-repos
-description: 'Fallback Codex adapter for the Egregore sync-repos workflow.'
+description: 'Smart sync of all Egregore repos (memory + managed repos + current repo) — fetches first, only pulls if behind. Use for /sync-repos or ''sync all repos''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

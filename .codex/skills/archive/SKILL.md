@@ -1,6 +1,6 @@
 ---
 name: archive
-description: 'Fallback Codex adapter for the Egregore archive workflow.'
+description: 'Capture an effective prompting technique or steering pattern as reusable knowledge. Use for /archive, or when a prompt worked especially well and is worth reusing — not insight about the work itself (/reflect).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

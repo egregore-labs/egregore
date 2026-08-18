@@ -1,3 +1,8 @@
+---
+name: ingest
+description: "Unified ingestion entry point — brings files, meetings, Google Workspace, Notion, or bulk corpora into intake, then promotes useful material into curated memory. Say 'ingest', 'bring this into Egregore'."
+---
+
 Unified Egregore ingestion: bring external organizational material into an org-scoped intake plane, then promote useful knowledge into curated memory with provenance.
 
 Arguments: $ARGUMENTS (source type, file/folder path, connector query, or corpus id)

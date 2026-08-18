@@ -1,6 +1,6 @@
 ---
 name: contribute
-description: 'Fallback Codex adapter for the Egregore contribute workflow.'
+description: 'Contribute an improvement back to the upstream Egregore framework as a cross-fork pull request. Use for /contribute, or submitting a framework fix upstream — not saving org work (/save) or filing a bug (/issue).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

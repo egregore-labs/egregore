@@ -1,4 +1,14 @@
+---
+name: update
+description: "Update local Egregore environment — sync the framework from upstream, run post-update migrations, and pull repos. Use for /update or when framework behavior seems broken or missing."
+---
+
 Update local Egregore environment — sync framework from upstream and pull repos.
+
+## When to invoke
+
+User says: "/update", "update Egregore", "sync the framework", "get the latest framework" — or framework behavior seems broken or missing (the first thing to try).
+Not this: syncing managed repos + memory only, no framework sync → `/pull`
 
 ## What to do
 
@@ -87,6 +97,11 @@ if [ "$IN_WORKTREE" = "true" ]; then
     git -C "$MAIN_DIR" checkout upstream/main -- AGENTS.md .codex/spec-manifest.json 2>/dev/null || true
   fi
 
+  # Regenerate Codex adapter skills from the freshly-synced Claude skills.
+  # Generated adapters carry a marker; hand-written natives are never touched.
+  # Without this, adapters for changed skills go stale until the next manual run.
+  [ -f "$MAIN_DIR/bin/codex-sync-skills.sh" ] && (cd "$MAIN_DIR" && bash bin/codex-sync-skills.sh) >/dev/null 2>&1 || true
+
   # Restore org-owned skills (egregore.json → owned_skills[]) before committing.
   # On a name collision the org's committed version wins; the script reports it.
   (cd "$MAIN_DIR" && bash bin/restore-owned-skills.sh) || true
@@ -94,8 +109,9 @@ if [ "$IN_WORKTREE" = "true" ]; then
   # Show what changed
   git -C "$MAIN_DIR" diff --stat HEAD
 
-  # Commit on base branch in main repo
-  git -C "$MAIN_DIR" add -A .claude/ .pi/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json 2>/dev/null
+  # Commit on base branch in main repo (.codex/skills/ carries the
+  # regenerated adapters)
+  git -C "$MAIN_DIR" add -A .claude/ .pi/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json .codex/skills/ 2>/dev/null
   if ! git -C "$MAIN_DIR" diff --cached --quiet 2>/dev/null; then
     EGREGORE_FRAMEWORK_UPDATE=1 git -C "$MAIN_DIR" commit -m "Update Egregore framework from upstream"
     git -C "$MAIN_DIR" push origin "$BASE_BRANCH" --quiet 2>/dev/null || true
@@ -140,6 +156,10 @@ if [ "$IN_WORKTREE" = "false" ]; then
     git checkout upstream/main -- AGENTS.md .codex/spec-manifest.json 2>/dev/null || true
   fi
 
+  # Regenerate Codex adapter skills from the freshly-synced Claude skills
+  # (generated adapters carry a marker; hand-written natives are never touched).
+  [ -f bin/codex-sync-skills.sh ] && bash bin/codex-sync-skills.sh >/dev/null 2>&1 || true
+
   # Restore org-owned skills (egregore.json → owned_skills[]) before committing.
   # On a name collision the org's committed version wins; the script reports it.
   bash bin/restore-owned-skills.sh || true
@@ -150,7 +170,7 @@ fi
 ```
 
 **Framework paths synced:** `bin/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `loom/`, `CLAUDE.md`, `skills/`
-**Regenerated:** `AGENTS.md` + `.codex/spec-manifest.json` via `bin/codex-render-spec.mjs`, then `.pi/APPEND_SYSTEM.md` + `.pi/spec-manifest.json` via `bin/pi-render-spec.mjs`, so both derived harnesses stay aligned with `CLAUDE.md`.
+**Regenerated:** `AGENTS.md` + `.codex/spec-manifest.json` via `bin/codex-render-spec.mjs`, then `.pi/APPEND_SYSTEM.md` + `.pi/spec-manifest.json` via `bin/pi-render-spec.mjs`, then the generated Codex adapter skills via `bin/codex-sync-skills.sh`, so all derived harnesses stay aligned with `CLAUDE.md` and the canonical skills.
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
 **Org-owned skills:** names in `egregore.json` → `owned_skills[]` are restored from the org's committed state after the overlay (`bin/restore-owned-skills.sh`) — upstream never overwrites them; collisions are reported instead.
 

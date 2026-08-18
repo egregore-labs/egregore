@@ -36,6 +36,11 @@ set -euo pipefail
 #   1 on unrecoverable failure (file write, memory push, bad args).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=bin/lib/git-message.sh
+. "$SCRIPT_DIR/bin/lib/git-message.sh" 2>/dev/null || true
+type egregore_commit >/dev/null 2>&1 || egregore_commit() {
+  local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
+}
 CONFIG="$SCRIPT_DIR/egregore.json"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -326,12 +331,12 @@ PID_ARTIFACTS=$!
     git add "$REL_FILE" handoffs/index.md >/dev/null 2>&1
 
     if [ -n "$RECIPIENT" ]; then
-      MSG_COMMIT="Handoff: ${TOPIC} (to ${RECIPIENT})"
+      MSG_COMMIT="chore(handoff): record ${TOPIC} (to ${RECIPIENT})"
     else
-      MSG_COMMIT="Handoff: ${TOPIC}"
+      MSG_COMMIT="chore(handoff): record ${TOPIC}"
     fi
 
-    git commit -m "$MSG_COMMIT" >/dev/null 2>&1 || true
+    egregore_commit . "$SCRIPT_DIR" "$MSG_COMMIT" >/dev/null 2>&1 || true
 
     STASHED=0
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then

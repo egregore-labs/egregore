@@ -1,6 +1,6 @@
 ---
 name: tutorial
-description: 'Fallback Codex adapter for the Egregore tutorial workflow.'
+description: 'Interactive walkthrough of Egregore''s core loop — /activity, /reflect, and /quest or /add — with adaptive questions and real artifacts. Use for /tutorial or ''walk me through Egregore''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

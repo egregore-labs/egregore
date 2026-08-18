@@ -1,6 +1,6 @@
 ---
 name: summon
-description: 'Fallback Codex adapter for the Egregore summon workflow.'
+description: 'Design and launch a persistent agent (a spirit) that runs on a schedule or watches for conditions, via adaptive questioning that produces a reviewable spec before launch.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

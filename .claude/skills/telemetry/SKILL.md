@@ -1,4 +1,14 @@
+---
+name: telemetry
+description: "Manage your own telemetry settings — check status, opt in/out, view or clear the buffered events. Use for /telemetry, 'turn off telemetry', or 'what data do you collect'."
+---
+
 Manage telemetry settings. Shows status by default.
+
+## When to invoke
+
+User says: "/telemetry", "telemetry status", "turn off telemetry", "disable telemetry", "what data do you collect", "show my telemetry events", "clear telemetry buffer"
+Not this: viewing telemetry across all registered orgs (internal, admin only) → `/telemetry-admin`
 
 ## Arguments
 

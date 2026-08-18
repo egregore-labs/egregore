@@ -47,19 +47,16 @@ done
 
 case "$KIND" in
   autosave)
-    MSG_PREFIX="Auto-save"
+    MSG_PREFIX="chore(autosave): save"
     PR_WHAT="Save session content captured by the opted-in autosave workflow."
     PR_WHY="This preserves unattended non-coding work without requiring an explicit /save."
     ;;
   *)
-    MSG_PREFIX="Handoff"
+    MSG_PREFIX="chore(handoff): record"
     PR_WHAT="Save core-repository session work captured when the handoff was created."
     PR_WHY="The handoff records shared context immediately; this companion PR keeps the originating checkout's work from remaining only local."
     ;;
 esac
-PR_BODY=$(printf '## What\n\n- %s\n\n## Why\n\n%s Topic: `%s`.\n\n## Verification\n\nNot verified — background %s save; review code or configuration changes before merging.\n\n🤖 Saved via `bin/handoff-save-egregore.sh`\n' \
-  "$PR_WHAT" "$PR_WHY" "$TOPIC" "$KIND")
-
 [ -n "$AUTHOR" ] || { echo "handoff-save-egregore: missing author" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -87,6 +84,21 @@ BASE_REF="origin/$BASE_BRANCH"
 # shellcheck source=bin/lib/git-safe.sh
 . "$SCRIPT_DIR/bin/lib/git-safe.sh" 2>/dev/null || true
 type git_add_guarded >/dev/null 2>&1 || git_add_guarded() { git add -A 2>/dev/null || true; }
+
+# Shared commit/PR message mechanics (trailers + skeleton body shape).
+# shellcheck source=bin/lib/git-message.sh
+. "$SCRIPT_DIR/bin/lib/git-message.sh" 2>/dev/null || true
+type egregore_commit >/dev/null 2>&1 || egregore_commit() {
+  local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
+}
+type egregore_pr_skeleton >/dev/null 2>&1 || egregore_pr_skeleton() {
+  printf '## What\n%s\n\n## Why\n%s\n\n## Verification\n%s\n\n%s\n' "$1" "$2" "$3" "$4"
+}
+PR_BODY=$(egregore_pr_skeleton \
+  "- $PR_WHAT" \
+  "$PR_WHY Topic: \`$TOPIC\`." \
+  "Not verified — background $KIND save; review code or configuration changes before merging." \
+  "🤖 Saved via \`bin/handoff-save-egregore.sh\`")
 
 # Shared non-coding classifier (auto-merge policy lives in one place).
 # shellcheck source=bin/lib/noncode.sh
@@ -131,7 +143,7 @@ fi
 # --- Commit whatever is uncommitted --------------------------------------
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   git_add_guarded
-  git commit -m "${MSG_PREFIX}: ${TOPIC}" --quiet 2>/dev/null || true
+  egregore_commit . "$REPO_DIR" "${MSG_PREFIX} ${TOPIC}" --quiet 2>/dev/null || true
 fi
 
 # --- Rebase onto the configured base, fall back to merge on conflicts ----
@@ -182,7 +194,7 @@ else
   PR_URL=$(gh pr create \
     --base "$BASE_BRANCH" \
     --head "$CURRENT_BRANCH" \
-    --title "${MSG_PREFIX}: ${TOPIC}" \
+    --title "${MSG_PREFIX} ${TOPIC}" \
     --body "$PR_BODY" \
     2>/dev/null || echo "")
   PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$' || echo "")

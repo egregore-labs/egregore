@@ -1,4 +1,14 @@
+---
+name: push
+description: "Use for /push, or 'push my branch' — pushes the current branch to origin, setting upstream on first push, before opening a PR with /pr."
+---
+
 Push current branch to remote.
+
+## When to invoke
+
+User says: "/push", "push my branch", "push this up", "get my branch onto GitHub", or needs the current branch pushed to origin before opening a PR.
+Not this: ready to open the PR itself → `/pr` (run after push).
 
 ## Loom routing
 

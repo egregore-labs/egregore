@@ -1,3 +1,8 @@
+---
+name: harvest
+description: "Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people think about a topic. Say 'harvest', 'run a harvest', 'align the team on'. Not a casual question or unstructured chat."
+---
+
 Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people actually think about a topic.
 
 ## When to invoke

@@ -1,6 +1,6 @@
 ---
 name: commit
-description: 'Fallback Codex adapter for the Egregore commit workflow.'
+description: 'Stage changes and create a commit with a properly formatted message. Use for /commit, or saving work locally — not sharing it (/push) or opening a pull request (/pr).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

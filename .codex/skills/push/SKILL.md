@@ -1,6 +1,6 @@
 ---
 name: push
-description: 'Fallback Codex adapter for the Egregore push workflow.'
+description: 'Use for /push, or ''push my branch'' — pushes the current branch to origin, setting upstream on first push, before opening a PR with /pr.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

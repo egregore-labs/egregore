@@ -3,7 +3,8 @@ name: PR Format
 # Deterministic gate for the PR description convention
 # (.claude/context/pr-format.md). Applies to every author — human or any
 # agent harness. Fails the check and posts a fix-it comment; exempts
-# drafts, release PRs, and bots.
+# drafts, release PRs, and bots. Commit subjects are reported against
+# .claude/context/commit-format.md as advisory only — never gated.
 
 on:
   pull_request:
@@ -37,37 +38,85 @@ jobs:
               return;
             }
 
+            // Split the body into ## sections so present-but-empty headings fail.
+            const sections = {};
+            for (const part of body.split(/^(?=##\s)/m)) {
+              const m = part.match(/^##\s+([^\n]+)/);
+              if (m) sections[m[1].trim()] = part.replace(/^##[^\n]*\n?/, '').trim();
+            }
+            const has = (name) => Object.prototype.hasOwnProperty.call(sections, name);
+
             const problems = [];
+            const requireSection = (names, missingMsg) => {
+              const present = names.find(has);
+              if (!present) { problems.push(missingMsg); return; }
+              if (!sections[present]) {
+                problems.push('`## ' + present + '` is empty — a heading alone does not satisfy the gate.');
+              }
+            };
+
             if (!body.trim()) {
               problems.push('Description is empty — every PR needs one.');
             } else {
-              if (!/^##\s+What\b/m.test(body)) problems.push('Missing `## What` section.');
-              if (!/^##\s+Why\b/m.test(body)) problems.push('Missing `## Why` section.');
+              requireSection(['What'], 'Missing `## What` section.');
+              requireSection(['Why'], 'Missing `## Why` section.');
             }
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner, repo, pull_number: pr.number, per_page: 100,
             });
             const touchesCode = files.some(f => !f.filename.endsWith('.md'));
-            if (touchesCode && !/^##\s+(Verification|Testing)\b/m.test(body)) {
-              problems.push('Missing `## Verification` section — required because the diff touches non-markdown files. Say how this was checked, or state plainly that it was not.');
+            if (touchesCode && body.trim()) {
+              requireSection(['Verification', 'Testing'],
+                'Missing `## Verification` section — required because the diff touches non-markdown files. Say how this was checked, or state plainly that it was not.');
             }
 
-            const titleOk = /^(feat|fix|docs|refactor|chore|test|perf|ci|build|release)(\([\w ./-]+\))?!?: \S/.test(title);
-            const advisory = titleOk ? '' : '\n> Advisory (not gated): title should follow `type(scope): imperative summary`.';
+            // Advisory layer — reported, never gated.
+            const grammar = /^(feat|fix|docs|refactor|chore|test|perf|ci|build|release)(\([\w ./-]+\))?!?: \S/;
+            const advisories = [];
+            if (!grammar.test(title)) {
+              advisories.push('title should follow `type(scope): imperative summary`.');
+            }
+
+            // Commit subjects (spec: .claude/context/commit-format.md).
+            // Skip git-generated shapes: merges, reverts, autosquash fixups.
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+            const generated = /^(Merge |Revert |fixup!|squash!)/;
+            const bad = commits
+              .filter(c => (c.parents || []).length <= 1)
+              .map(c => (c.commit.message || '').split('\n')[0])
+              .filter(s => s && !generated.test(s) && !grammar.test(s));
+            if (bad.length) {
+              advisories.push(
+                'commit subjects should follow `type(scope): imperative summary` (spec: `.claude/context/commit-format.md`):\n' +
+                bad.slice(0, 10).map(s => '>   - `' + s.replace(/`/g, '') + '`').join('\n') +
+                (bad.length > 10 ? '\n>   - …and ' + (bad.length - 10) + ' more' : '')
+              );
+            }
+            const advisoryBlock = advisories.length
+              ? '\n' + advisories.map(a => '> Advisory (not gated): ' + a).join('\n')
+              : '';
 
             const marker = '<!-- pr-format-check -->';
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number: pr.number, per_page: 100,
             });
             const existing = comments.find(c => (c.body || '').includes(marker));
+            const upsert = async (text) => {
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: text });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: text });
+              }
+            };
 
             if (problems.length === 0) {
-              if (existing) {
-                await github.rest.issues.updateComment({
-                  owner, repo, comment_id: existing.id,
-                  body: marker + '\n✅ PR format check passed.',
-                });
+              if (advisories.length) {
+                await upsert(marker + '\n✅ PR format check passed.' + advisoryBlock);
+              } else if (existing) {
+                await upsert(marker + '\n✅ PR format check passed.');
               }
               core.info('PR format OK.');
               return;
@@ -78,7 +127,7 @@ jobs:
               '### ❌ PR format check',
               '',
               ...problems.map(p => '- ' + p),
-              advisory,
+              advisoryBlock,
               '',
               'Required shape (spec: `.claude/context/pr-format.md`):',
               '',
@@ -96,9 +145,5 @@ jobs:
               'Edit the PR description — this check reruns automatically.',
             ].join('\n');
 
-            if (existing) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: fixit });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: fixit });
-            }
+            await upsert(fixit);
             core.setFailed(problems.join(' | '));

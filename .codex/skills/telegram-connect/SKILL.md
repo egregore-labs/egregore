@@ -1,6 +1,6 @@
 ---
 name: telegram-connect
-description: 'Fallback Codex adapter for the Egregore telegram-connect workflow.'
+description: 'Set up Telegram as a notification center for your Egregore — creates the group, links the bot, and stores the chat ID. Use for /telegram-connect, ''connect telegram'', or ''set up telegram notifications''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

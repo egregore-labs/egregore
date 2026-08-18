@@ -1,6 +1,15 @@
+---
+name: onboarding
+description: "Use for /onboarding, or when a new member's onboarding is not yet complete — runs the deterministic VERIFY, ORIENT, INVITE, FIRST_HANDOFF welcome flow."
+---
+
 Welcome a new user to this Egregore.
 
 Deterministic state machine: VERIFY → ORIENT → INVITE → FIRST_HANDOFF. Orient first, invite early — show what Egregore is, then show it works best with others. Profile data collected progressively during real work.
+
+## When to invoke
+
+User says: "/onboarding", or is a new user whose `onboarding_complete` is false and needs to be verified, oriented, offered an invite, and walked through their first handoff.
 
 ## Output discipline — CRITICAL
 

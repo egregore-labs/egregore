@@ -1,3 +1,8 @@
+---
+name: archive
+description: "Capture an effective prompting technique or steering pattern as reusable knowledge. Use for /archive, or when a prompt worked especially well and is worth reusing — not insight about the work itself (/reflect)."
+---
+
 Capture effective prompt patterns and store them as reusable knowledge.
 
 Sequences of human steering interventions that produced good AI reasoning — stored in the shared knowledge base as reusable patterns.

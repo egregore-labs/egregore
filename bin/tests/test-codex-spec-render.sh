@@ -33,15 +33,20 @@ if printf '%s' "$block" | grep -q 'EnterWorktree\|AskUserQuestion\|ExitPlanMode\
   exit 1
 fi
 
-# 6. The Codex translations are present.
-printf '%s' "$block" | grep -q 'bin/agent.sh branch --topic'
-printf '%s' "$block" | grep -q 'git checkout -b dev/{author}/{slug} origin/{base}'
-printf '%s' "$block" | grep -q 'numbered'
-printf '%s' "$block" | grep -q '\.codex/hooks/branch-guard\.js'
-printf '%s' "$block" | grep -q '`\$save`'
-printf '%s' "$block" | grep -q 'Your stable project is protected'
-printf '%s' "$block" | grep -q '↳ Context restored:'
-printf '%s' "$block" | grep -q 'intent → safe workspace → relevant context → consequential assumptions → execution'
+# 6. The Codex translations are present. Grep a temp file, not a pipe:
+# `printf | grep -q` races — grep exits on first match, printf takes EPIPE,
+# and under pipefail that kills the test (reproduced on Linux runners only).
+block_file="$(mktemp)"
+trap 'rm -f "$block_file"' EXIT
+printf '%s' "$block" > "$block_file"
+grep -q 'bin/agent.sh branch --topic' "$block_file"
+grep -q 'git checkout -b dev/{author}/{slug} origin/{base}' "$block_file"
+grep -q 'numbered' "$block_file"
+grep -q '\.codex/hooks/branch-guard\.js' "$block_file"
+grep -q '`\$save`' "$block_file"
+grep -q 'Your stable project is protected' "$block_file"
+grep -q '↳ Context restored:' "$block_file"
+grep -q 'intent → safe workspace → relevant context → consequential assumptions → execution' "$block_file"
 
 # 7. The thin universal protocol stays above the generated block.
 head -1 "$AGENTS" | grep -q '^# Egregore Agent Protocol'

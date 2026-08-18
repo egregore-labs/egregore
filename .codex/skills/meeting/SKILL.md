@@ -1,6 +1,6 @@
 ---
 name: meeting
-description: 'Fallback Codex adapter for the Egregore meeting workflow.'
+description: 'Use for /meeting, /meeting sync, /meeting backfill, or a search term — adaptively analyzes a Granola meeting into decisions, findings, actions, and continuity in shared memory.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

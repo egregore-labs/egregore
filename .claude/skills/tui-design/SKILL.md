@@ -13,6 +13,11 @@ For product voice in command output prose: `product-voice` skill.
 For browser visual output: `dark-mode` skill.
 For ASCII diagrams in explanations: `visual-explain` skill.
 
+## When to invoke
+
+User says: "TUI", "terminal output", "box drawing", "command output formatting", "sigils", "section markers", or is designing/modifying any slash command's terminal output.
+Not this: browser rendering → `dark-mode` · external prose → `egregore-voice`
+
 ## 1. Brand Elements
 
 ### Command Headers

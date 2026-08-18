@@ -1,4 +1,14 @@
+---
+name: tutorial
+description: "Interactive walkthrough of Egregore's core loop — /activity, /reflect, and /quest or /add — with adaptive questions and real artifacts. Use for /tutorial or 'walk me through Egregore'."
+---
+
 Interactive walkthrough of Egregore's core loop.
+
+## When to invoke
+
+User says: "/tutorial", "walk me through Egregore", "show me how this works", "teach me the core loop", or is a new user ready to try the `/activity` → `/reflect` → `/quest`/`/add` loop hands-on.
+Not this: first-time identity/org setup → `/onboarding`
 
 Arguments: $ARGUMENTS
 

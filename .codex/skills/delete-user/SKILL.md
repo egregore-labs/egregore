@@ -1,6 +1,6 @@
 ---
 name: delete-user
-description: 'Fallback Codex adapter for the Egregore delete-user workflow.'
+description: 'Remove a member from this Egregore, revoking access across GitHub, Supabase, and Neo4j. Use for /delete-user, removing or kicking someone — not inviting (/invite) or viewing members (/dashboard).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

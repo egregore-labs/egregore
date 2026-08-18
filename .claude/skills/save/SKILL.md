@@ -1,3 +1,8 @@
+---
+name: save
+description: "Use when the user says 'push my work', 'save everything', or 'commit and push' — pushes the working branch and opens a PR to develop. Not when the user is leaving/done (/handoff, which auto-saves)."
+---
+
 Save your contributions to Egregore. Pushes working branch, creates PR to develop.
 
 **Worktree note:** Git operations (commit, push, `gh pr create`) work normally from within a worktree — no special handling needed. After save completes, work continues in the worktree. Worktree cleanup happens automatically when the session ends (WorktreeRemove hook), never during an active session.
@@ -105,6 +110,8 @@ If the remote branch is gone:
    - Create missing nodes automatically
    - Report: "Synced 2 sessions, 1 artifact to graph"
 
+**`$COMMIT_MESSAGE` (all repos):** compose per `.claude/context/commit-format.md` — subject `type(scope): imperative summary`, type/scope derived from the work itself (a loom feature is `feat(loom): …`, never `chore(save): …`; memory-repo saves use the matching workflow scope, e.g. `chore(handoff): record <topic>`). Agent commits end with the trailer block: `Egregore-Session: <id from .egregore-session-id>` + the harness `Co-Authored-By` line.
+
 2. **For memory repo** (artifacts, quests, handoffs):
    - Push directly to main (no PRs — memory is markdown-only, always safe to merge)
    - Pull-rebase-push with retry to handle concurrent pushes from other users
@@ -134,7 +141,7 @@ If the remote branch is gone:
      git fetch origin develop --quiet
      git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
      ```
-   - Commit all changes to working branch
+   - Commit all changes to working branch with `$COMMIT_MESSAGE` (see definition above)
    - **Rebase onto latest develop before pushing** (prevents stale overwrites):
      ```bash
      git fetch origin develop --quiet
@@ -169,7 +176,7 @@ If the remote branch is gone:
        ```bash
        gh pr create --base develop --title "..." --body "..."
        ```
-       Title and body follow `.claude/context/pr-format.md`: title `type(scope): imperative summary`; body `## What` (1–4 bullets) + `## Why` (1–3 sentences), plus `## Verification` when the diff touches non-markdown files (how it was checked — honest "Not verified" beats silence). Never `--fill`, never an empty body — the `pr-format` CI check gates every PR.
+       Title and body follow `.claude/context/pr-format.md`: title `type(scope): imperative summary` (a single-commit PR reuses its commit subject verbatim); body `## What` (1–4 bullets) + `## Why` (1–3 sentences), plus `## Verification` when the diff touches non-markdown files (how it was checked — honest "Not verified" beats silence). Never `--fill`, never an empty body — the `pr-format` CI check gates every PR.
    - **If PR creation fails**: stop here. The branch was pushed, so tell the user:
      > PR creation failed, but your branch `{BRANCH}` was pushed.
      > Your commits are safe. Try again with `/save` or create the PR manually.
@@ -407,7 +414,7 @@ Saving to Egregore...
     handoffs/index.md (modified)
 
   Pushing to main...
-    git commit -m "Add: handoff for infra fix"
+    git commit -m "chore(handoff): record infra fix"
     git pull --rebase origin main
     git push origin main
 
@@ -416,7 +423,7 @@ Saving to Egregore...
 [egregore]
   On branch: dev/alice/2026-02-07-session
   Changes:
-    .claude/commands/save.md (modified)
+    .claude/skills/save/SKILL.md (modified)
     bin/session-start.sh (new)
 
   Pushing and creating PR...

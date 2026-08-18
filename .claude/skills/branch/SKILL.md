@@ -1,4 +1,13 @@
+---
+name: branch
+description: "Create a working branch from what you are about to work on. Use for /branch, or any request to start a new branch before making changes."
+---
+
 Create a working branch from what you're working on.
+
+## When to invoke
+
+User says: "/branch", "create a branch", "start a new branch", or any request to begin a working branch for what they're about to do
 
 Description: $ARGUMENTS
 

@@ -1,3 +1,8 @@
+---
+name: ingest-corpus
+description: "Turn a large folder of documents into a Connect-only knowledge base that answers questions with sources. Say 'build a knowledge base'. Not a few files (/ingest) or a meeting/Notion/Google source."
+---
+
 Turn a folder of documents into a knowledge base that answers questions with its sources.
 
 ## When to invoke
@@ -130,6 +135,40 @@ regardless of how good the answers look.
 Report the citation hit rate as **unavailable** unless someone who knows the subject has
 confirmed which documents should answer each question. A hit rate computed from unconfirmed
 expectations measures agreement with whoever wrote the fixture, not with the domain.
+
+## Step 7 — Build the map, then spend only on demand
+
+Intake made the documents retrievable. Do **not** run statement extraction over
+the corpus wholesale — most passages are never retrieved, and extracting them
+buys nothing. Build the map instead:
+
+```bash
+python3 bin/corpus_map.py build --source <id> --map-dir memory/corpora/<name>
+```
+
+One card per document — publisher, tier, zone, genre, the author's own abstract
+verbatim — at **zero model cost**, in the memory repo where every agent can read
+it. `index.md` is the whole corpus in one read; `map.jsonl` is the same thing
+for grep and jq. Never re-ingest to find a document; read the map.
+
+From then on the corpus runs a demand loop, and every step writes `ledger.md`:
+
+```bash
+python3 bin/corpus_map.py retrieve --source <id> --question "…" --zone <zone>   # BM25, zone-bounded
+python3 bin/corpus_map.py touch <doc> --source <id> --question "…"              # usage = curation signal
+python3 bin/corpus_map.py promote <doc> --source <id> --reason "<the question>" # THIS document only
+python3 bin/corpus_map.py validate <doc> --source <id>                          # claims checked against source
+python3 bin/corpus_map.py answer --source <id> --question "…" --zone <zone>     # invariants enforced
+```
+
+Promotion is judgment applied to what a question needs, never to the corpus at
+large. The deterministic path records the source's own sentences verbatim and
+cannot misquote; a refined claim (slots file) is validated against the sentence
+it came from. A refused answer is recorded in `gaps.md` — that file is the
+curator's acquisition queue, not an apology. The ledger records the exact local
+scan performed and its trigger. `corpus_map.py` makes no model call; any later
+model or expert refinement must record its own actual cost rather than treating
+promoted text as model input.
 
 ## What to tell the user at the end
 

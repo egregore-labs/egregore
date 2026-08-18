@@ -1,6 +1,6 @@
 ---
 name: teams-connect
-description: 'Fallback Codex adapter for the Egregore teams-connect workflow.'
+description: 'Set up Microsoft Teams as a notification channel for your Egregore — registers an Azure bot, uploads the app, and binds a channel. Use for /teams-connect, ''connect teams'', or ''set up teams notifications''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

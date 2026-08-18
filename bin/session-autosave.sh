@@ -29,6 +29,12 @@
 
 set -uo pipefail
 
+# shellcheck source=bin/lib/git-message.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib/git-message.sh" 2>/dev/null || true
+type egregore_commit >/dev/null 2>&1 || egregore_commit() {
+  local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
+}
+
 DIR=""
 AUTHOR=""
 DEBOUNCE=0
@@ -118,7 +124,7 @@ fi
 if git -C "$DIR/memory" rev-parse --git-dir >/dev/null 2>&1; then
   if [ -n "$(git -C "$DIR/memory" status --porcelain 2>/dev/null)" ]; then
     git -C "$DIR/memory" add -A >/dev/null 2>&1 || true
-    git -C "$DIR/memory" commit -m "Auto-save: session content" --quiet 2>/dev/null || true
+    egregore_commit "$DIR/memory" "$DIR" "chore(autosave): save session work" --quiet 2>/dev/null || true
   fi
   if [ -n "$(git -C "$DIR/memory" log origin/main..HEAD --oneline 2>/dev/null)" ]; then
     for _try in 1 2 3; do

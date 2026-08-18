@@ -15,6 +15,11 @@ For prose content in rendered pages: `egregore-voice` skill.
 
 This skill is a behavioral constraint system for Egregore visual output. It exists to stop the most common failure mode before it happens: an otherwise correct dark palette being defeated by SSR-emitted inline styles.
 
+## When to invoke
+
+User says: "dark mode", "theme toggle", "color system", "card surface", "make this work in dark mode", or any request to generate or modify browser-rendered visual output (HTML, CSS, React SSR, Egregore artifacts, design tokens)
+Not this: TUI terminal output → `tui-design` · plain markdown files with no styled HTML
+
 ## The Bitter Lesson
 
 **If React SSR renders `style="color:#2A2A2A"`, dark mode loses.** CSS variable overrides only work when the rendered value is itself a variable reference. If a color must adapt across themes, emit `var(--token)` at the render site. Not in comments. Not in a later stylesheet. In the actual rendered style.

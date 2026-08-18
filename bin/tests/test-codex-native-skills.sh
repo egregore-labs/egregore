@@ -146,10 +146,19 @@ echo "$prompt" | grep -q '\$save'
 echo "$prompt" | grep -q '\$view'
 echo "$prompt" | grep -q '\$scroll'
 
-! grep -q 'UserPromptSubmit' "$ROOT/.codex/hooks.json" || {
-  echo "UserPromptSubmit hook must not be installed; it creates visible hook-completed transcript noise" >&2
+# UserPromptSubmit hooks create visible hook-completed transcript noise
+# (removed 2026-06-01, 74ea0ced). search-hint.js is the one sanctioned
+# exception — the recall-routing convention is structural (fe9cb848) and its
+# hook stays silent on non-matching prompts. Any OTHER prompt hook still fails.
+prompt_hooks="$(node -e '
+  const j = require("'"$ROOT"'/.codex/hooks.json");
+  for (const m of j.hooks.UserPromptSubmit || [])
+    for (const h of m.hooks || []) console.log(h.command);
+')"
+if echo "$prompt_hooks" | grep -v -e '^$' -e 'search-hint.js' | grep -q .; then
+  echo "unexpected UserPromptSubmit hook installed (only search-hint.js is sanctioned); prompt hooks create visible transcript noise" >&2
   exit 1
-}
+fi
 ! grep -q 'prompt-context.js' "$ROOT/.codex/hooks.json" || {
   echo "prompt-context hook must not be installed" >&2
   exit 1

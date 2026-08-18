@@ -1,8 +1,8 @@
 {
   "generatedBy": "bin/pi-render-spec.mjs",
   "source": "AGENTS.md generated Codex spec",
-  "sourceHash": "2de88d613b60",
-  "outputHash": "07088c327b85",
+  "sourceHash": "535e5e6f8cce",
+  "outputHash": "f76462a38e8d",
   "adaptations": [
     "Pi project trust and APPEND_SYSTEM delivery",
     "Pi tool_call branch gate",

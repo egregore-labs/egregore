@@ -1,3 +1,8 @@
+---
+name: reflect
+description: "Use when the user says 'we decided', 'I realized', or 'that's a pattern' — captures decisions, findings, or patterns in shared memory. Not a private half-baked thought (/note) or cross-referencing (/deep-reflect)."
+---
+
 Capture insights from your work — decisions, patterns, and realizations worth keeping.
 
 The system uses graph context to surface what's worth reflecting on, asks Socratic follow-ups, and auto-classifies what emerges.

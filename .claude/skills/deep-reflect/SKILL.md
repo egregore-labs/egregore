@@ -1,3 +1,8 @@
+---
+name: deep-reflect
+description: "Run deep, multi-hop research over org memory to answer a question or cross-reference an insight, with a cited synthesis. Use for /deep-reflect — not one-shot recall (/search) or capturing an insight (/reflect)."
+---
+
 Deep research over org memory — ask a question, get a verified, cited synthesis of what the org collectively knows, including what it doesn't.
 
 Multi-hop, multi-agent research over `memory/` (plus the graph, when connected). Waves of parallel readers hop a lead ledger until saturation; a skeptic pass kills every claim it cannot re-find in the cited file. `/reflect` captures user thought; `/deep-reflect` researches what the org already knows.

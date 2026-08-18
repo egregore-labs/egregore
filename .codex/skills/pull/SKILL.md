@@ -1,6 +1,6 @@
 ---
 name: pull
-description: 'Fallback Codex adapter for the Egregore pull workflow.'
+description: 'Use for /pull when you need to sync the current branch and shared memory without also viewing activity (/activity auto-syncs already).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

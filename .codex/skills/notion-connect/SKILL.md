@@ -1,6 +1,6 @@
 ---
 name: notion-connect
-description: 'Fallback Codex adapter for the Egregore notion-connect workflow.'
+description: 'Use for ''connect notion'', ''notion status'', or ''disconnect notion'' — connects the current agent runtime directly to Notion''s official hosted MCP for search and fetch, or checks/revokes that connection.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

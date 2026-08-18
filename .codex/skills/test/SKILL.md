@@ -1,6 +1,6 @@
 ---
 name: test
-description: 'Fallback Codex adapter for the Egregore test workflow.'
+description: 'Validate changes before /save — static analysis plus live Cypher validation against the graph, rendered as a pass/fail gate. Use for /test or ''test my changes''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

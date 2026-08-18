@@ -36,7 +36,7 @@
       "section": "After Greeting — BRANCH ON FIRST RESPONSE",
       "action": "replace",
       "sourceHash": "b13b81aea8f3",
-      "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout kept verbatim (pure git)."
+      "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout bash kept verbatim (pure git); surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained."
     },
     {
       "section": "Config Files",
@@ -89,7 +89,7 @@
     {
       "section": "Git Workflow",
       "action": "keep",
-      "sourceHash": "fe3d9dabd03d",
+      "sourceHash": "23df84b5fe80",
       "note": "Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence)."
     },
     {

@@ -1,3 +1,8 @@
+---
+name: quest
+description: "Use when the user says 'let's explore', 'start a quest', or 'what quests are open' — manages open-ended explorations anyone can contribute to. Not a personal task (/todo) or something broken (/issue)."
+---
+
 Manage quests — open-ended explorations that anyone can contribute to.
 
 ## When to invoke

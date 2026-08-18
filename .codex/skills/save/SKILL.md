@@ -81,7 +81,9 @@ Where should {name} live?
    twice.
 5. Synthesize:
    - a short topic from the work,
-   - a clear commit message,
+   - a commit message per `.claude/context/commit-format.md` — subject
+     `type(scope): imperative summary`, type/scope derived from the work
+     itself (never `chore(save):` for real work),
    - a one-line user-facing scope summary,
    - a PR description following `.claude/context/pr-format.md`:
      `## What` (1–4 bullets), `## Why` (1–3 sentences), and

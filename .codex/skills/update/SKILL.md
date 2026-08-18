@@ -1,6 +1,6 @@
 ---
 name: update
-description: 'Fallback Codex adapter for the Egregore update workflow.'
+description: 'Update local Egregore environment — sync the framework from upstream, run post-update migrations, and pull repos. Use for /update or when framework behavior seems broken or missing.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

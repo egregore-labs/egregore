@@ -1,3 +1,8 @@
+---
+name: announce
+description: "Send an announcement to the Telegram group with a draft-then-approve flow. Use for /announce, telling the team something, or notifying everyone at once — not messaging one person or a structured handoff."
+---
+
 Send an announcement to the Telegram group. Drafts a message, shows a preview for approval, then sends.
 
 ## When to invoke

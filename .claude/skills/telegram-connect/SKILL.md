@@ -1,3 +1,8 @@
+---
+name: telegram-connect
+description: "Set up Telegram as a notification center for your Egregore — creates the group, links the bot, and stores the chat ID. Use for /telegram-connect, 'connect telegram', or 'set up telegram notifications'."
+---
+
 Set up Telegram as a notification center for your Egregore.
 
 Arguments: $ARGUMENTS (none expected)

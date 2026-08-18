@@ -88,6 +88,9 @@ jobs:
       - name: Harvest question palette contract
         run: bash tests/test-harvest-question-palette.sh
 
+      - name: Convention parity (commit/PR format paragraphs)
+        run: bash tests/test-convention-parity.sh
+
   worktree-tests:
     runs-on: ubuntu-latest
     steps:

@@ -1,6 +1,6 @@
 ---
 name: pr
-description: 'Fallback Codex adapter for the Egregore pr workflow.'
+description: 'Use for /pr, or ''create a PR'' / ''open a pull request'' — creates a pull request for the current branch against the repo''s base branch with a formatted title and body. Not for reviewing an existing PR (review-pr).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

@@ -317,6 +317,10 @@ main ← stable (/release)
 
 Every PR body follows `.claude/context/pr-format.md`, enforced by the `pr-format` CI check regardless of which harness opened it: `## What` (1–4 bullets) + `## Why` (1–3 sentences) always; `## Verification` when the diff touches non-markdown files (how it was checked, or an honest `Not verified — <reason>`); `## Risk`/`## Links` when real; title `type(scope): imperative summary` (advisory). **Never create a PR with an empty body or `--fill`** — write the body and pass it explicitly (`gh pr create --body`, or `bin/agent.sh save --pr-body` for shell agents; the bridge auto-generates a compliant skeleton only as a last resort).
 
+### Commit format (all harnesses)
+
+Every commit follows `.claude/context/commit-format.md`: subject `type(scope): imperative summary` (≤ 72 chars, aim ≤ 50, lowercase, same grammar and type set as PR titles), body wrapped at 72 explaining what and why — never how, and git trailers on agent-authored commits (`Egregore-Session: <id>` from `.egregore-session-id`, plus the harness `Co-Authored-By` line). Background scripts commit as `chore(<subsystem>): …`, but a commit carrying real work derives its type/scope from the diff — the transport never masks the work. Git-generated messages (merges, reverts, autosquash fixups) keep their native form. Wording for commits and PRs follows `.claude/context/git-language.md`.
+
 ### Managed Repos
 
 Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Each entry can be a string or `{"name": "...", "description": "..."}`. Match user intent to the right repo using `description`. Same branching strategy. Use `git -C` with absolute paths — never `cd` into repos. `/save` scans all managed repos for uncommitted changes.

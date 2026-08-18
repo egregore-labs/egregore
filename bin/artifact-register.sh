@@ -133,7 +133,7 @@ REL="artifacts/$(basename "$FILE")"
   cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 0
   git add -- "$REL" >/dev/null 2>&1 || exit 0
   git diff --cached --quiet -- "$REL" 2>/dev/null && exit 0
-  git commit -m "artifact: register ${TITLE}" -- "$REL" >/dev/null 2>&1 || exit 0
+  git commit -m "chore(artifacts): register ${TITLE}" -- "$REL" >/dev/null 2>&1 || exit 0
   for _ in 1 2 3; do
     git pull --rebase --no-edit >/dev/null 2>&1 && git push >/dev/null 2>&1 && break
     sleep 1
