@@ -1,6 +1,6 @@
 ---
 name: telemetry
-description: 'Fallback Codex adapter for the Egregore telemetry workflow.'
+description: 'Manage your own telemetry settings — check status, opt in/out, view or clear the buffered events. Use for /telemetry, ''turn off telemetry'', or ''what data do you collect''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

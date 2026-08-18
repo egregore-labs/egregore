@@ -1,6 +1,6 @@
 ---
 name: note
-description: 'Fallback Codex adapter for the Egregore note workflow.'
+description: 'Use when the user says ''jot this down'', ''note to self'', ''just thinking out loud'', or ''park this thought'' — saves a private personal note, never shared or pushed until explicitly promoted.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

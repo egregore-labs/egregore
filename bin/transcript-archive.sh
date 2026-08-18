@@ -221,7 +221,7 @@ gzip -c "$TRANSCRIPT_PATH" > "$TMP_FILE" 2>/dev/null || exit 0
 
       cd "$TRANSCRIPTS_DIR"
       git add "transcripts/$SLUG/$MONTH/${SESSION_ID}.jsonl.gz" 2>/dev/null || true
-      git commit -m "Archive session $SESSION_ID" \
+      git commit -m "chore(transcripts): archive session $SESSION_ID" \
         --author="${AUTHOR:-egregore} <${AUTHOR:-egregore}@users.noreply.github.com>" \
         2>/dev/null || true
       git push origin main 2>/dev/null || {

@@ -1,3 +1,8 @@
+---
+name: wrap
+description: "Close your session with a personal summary — enriches the auto-captured Session node with topic, summary, and connections. Auto-saves. Use for /wrap or 'I'm done for now'."
+---
+
 Close your session with a personal summary. Saves everything.
 
 Enriches the auto-captured Session node with topic, summary, and connections.

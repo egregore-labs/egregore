@@ -13,6 +13,12 @@ The Spiral is a game-like epistemic process. It takes a core claim and spirals o
 
 ---
 
+## When to invoke
+
+User says: "let's think through", "help me articulate", "pressure test this", "develop this thesis", "spiral", "deep exploration", "Socratic", or any request to go from a raw intuition to rigorous, communicable output — fundraising materials, book proposals, product strategy, research agendas, organizational philosophy, policy design, pitch decks, memos, strategy docs.
+
+---
+
 ## Setup
 
 When the skill triggers, initialize the game:

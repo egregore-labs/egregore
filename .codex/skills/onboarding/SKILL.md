@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: 'Fallback Codex adapter for the Egregore onboarding workflow.'
+description: 'Use for /onboarding, or when a new member''s onboarding is not yet complete — runs the deterministic VERIFY, ORIENT, INVITE, FIRST_HANDOFF welcome flow.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

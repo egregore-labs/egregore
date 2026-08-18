@@ -1,6 +1,6 @@
 ---
 name: slack-connect
-description: 'Fallback Codex adapter for the Egregore slack-connect workflow.'
+description: 'Set up Slack as a notification channel for your Egregore — creates the workspace app, invites the bot, and binds a channel. Use for /slack-connect, ''connect slack'', or ''set up slack notifications''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

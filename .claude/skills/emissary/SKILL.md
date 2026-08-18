@@ -1,4 +1,5 @@
 ---
+name: emissary
 description: Compose, send, or run an Egregore emissary — portable handoff v1 artifacts with server-rendered HTML at egregore.xyz. Use for `/emissary`, "make/send/run an emissary", or when a user pastes an `egregore.xyz/emissary/e/<id>` link.
 ---
 

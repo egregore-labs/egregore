@@ -1,4 +1,14 @@
+---
+name: pr
+description: "Use for /pr, or 'create a PR' / 'open a pull request' — creates a pull request for the current branch against the repo's base branch with a formatted title and body. Not for reviewing an existing PR (review-pr)."
+---
+
 Create a pull request for current branch targeting the repo's base branch.
+
+## When to invoke
+
+User says: "/pr", "create a PR", "open a pull request", "push this up for review", or the current branch is ready to be reviewed against the base branch.
+Not this: reviewing an existing PR → `/review-pr`.
 
 ## Loom routing
 
@@ -38,11 +48,15 @@ Create a pull request for current branch targeting the repo's base branch.
      ```
 3. Summarize branch changes vs base branch
 4. Draft title and body per `.claude/context/pr-format.md`:
-   - Title: `type(scope): imperative summary` (≤ 72 chars)
+   - Title: `type(scope): imperative summary` (≤ 72 chars) — the same
+     grammar as commit subjects (`.claude/context/commit-format.md`).
+     A single-commit PR reuses its commit subject verbatim when it
+     describes the whole PR.
    - Body: `## What` (1–4 bullets) · `## Why` (1–3 sentences) ·
      `## Verification` (how it was checked — required when the diff touches
      non-markdown files; be honest if unverified) · `## Risk` / `## Links`
-     when real · harness attribution footer
+     when real · attribution footer of the harness that authored the body
+     (final non-blank line, e.g. `🤖 Generated with [Claude Code](https://claude.com/claude-code)`)
    - Show the draft to the user; apply their edits before creating
 5. Create PR via GitHub CLI: `gh pr create --base "$BASE_BRANCH" --title "$TITLE" --body "$BODY"` — never `--fill`, never an empty body (the `pr-format` CI check fails bare PRs)
 6. Track PR in graph (fire-and-forget):
@@ -69,7 +83,7 @@ Base: main
 Commits: 3 commits ahead of main
 Changes: +78 lines, -5 lines, 3 files
 
-Title: Add MCP authentication with API key validation
+Title: feat(mcp): add API key authentication
        (from your last commit — edit? y/n)
 > n
 

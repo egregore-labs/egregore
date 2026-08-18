@@ -1,3 +1,8 @@
+---
+name: handoff
+description: "Address the current session context to a teammate or future you — pure capture, auto-saved. Say 'leave a handoff', 'pass this to <name>'. Not personal closure (/wrap), pending triage (/activity), or plain push (/save)."
+---
+
 Address the current session context to a teammate or future you. `/handoff` is
 pure capture; pending-work triage belongs to `/activity`.
 

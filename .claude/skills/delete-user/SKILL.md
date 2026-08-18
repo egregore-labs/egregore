@@ -1,3 +1,8 @@
+---
+name: delete-user
+description: "Remove a member from this Egregore, revoking access across GitHub, Supabase, and Neo4j. Use for /delete-user, removing or kicking someone — not inviting (/invite) or viewing members (/dashboard)."
+---
+
 Remove a member from this Egregore. Revokes access across GitHub, Supabase, and Neo4j.
 
 ## When to invoke

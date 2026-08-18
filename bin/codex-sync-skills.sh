@@ -101,7 +101,12 @@ skill_description() {
     in_fm && $0 == "---" { exit }
     in_fm && /^description:/ {
       sub(/^description:[[:space:]]*/, "")
-      gsub(/^"|"$/, "")
+      # Block scalars (description: >) keep the text on continuation lines we
+      # do not read. Emit nothing so the caller falls back, which the skill-v1
+      # contract check reports, rather than publishing the indicator itself.
+      if ($0 ~ /^[>|][-+]?[[:space:]]*$/) { exit }
+      if ($0 ~ /^".*"$/) { gsub(/^"|"$/, "") }
+      else if ($0 ~ /^\047.*\047$/) { gsub(/^\047|\047$/, ""); gsub(/\047\047/, "\047") }
       print
       exit
     }

@@ -1,3 +1,8 @@
+---
+name: ingest-user-interview
+description: "Analyze user interview transcripts (Granola, pasted text, or a file) through a 3-analyst-agent plus Opus-synthesis pipeline. Say 'process the interview', 'onboarding interview', 'research call'."
+---
+
 Analyze user interview transcripts. Uses a multi-dimensional analysis pipeline with 3 analyst agents + Opus synthesis to extract rich, structured insights from user research sessions.
 
 Arguments: $ARGUMENTS (Optional: search term, file path, or "synthesis" for cross-interview patterns)

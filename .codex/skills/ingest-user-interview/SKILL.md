@@ -1,6 +1,6 @@
 ---
 name: ingest-user-interview
-description: 'Fallback Codex adapter for the Egregore ingest-user-interview workflow.'
+description: 'Analyze user interview transcripts (Granola, pasted text, or a file) through a 3-analyst-agent plus Opus-synthesis pipeline. Say ''process the interview'', ''onboarding interview'', ''research call''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

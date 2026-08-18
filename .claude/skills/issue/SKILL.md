@@ -1,3 +1,8 @@
+---
+name: issue
+description: "Report an issue — captures context and routes it to the right place. Say 'this is broken', 'bug in', 'file an issue', 'report a problem'. Not a personal task (/todo) or team exploration (/quest)."
+---
+
 Report an issue. Captures context and routes to the right place.
 
 ## When to invoke

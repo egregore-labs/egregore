@@ -1,3 +1,8 @@
+---
+name: activity
+description: "See what is happening across the team — recent sessions, handoffs, quests, and open PRs. Use for /activity, catching up after time away, or checking team-wide status at a glance."
+---
+
 See what's happening across the team — recent sessions, handoffs, and open work.
 
 Display it immediately — no preamble, no narration, no reasoning text. The rendered box must be the FINAL text of the turn — never follow it with AskUserQuestion in the same turn. The harness hides text that precedes a tool call, so a box rendered before AskUserQuestion is never seen by the user.

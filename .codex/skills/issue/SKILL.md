@@ -1,6 +1,6 @@
 ---
 name: issue
-description: 'Fallback Codex adapter for the Egregore issue workflow.'
+description: 'Report an issue — captures context and routes it to the right place. Say ''this is broken'', ''bug in'', ''file an issue'', ''report a problem''. Not a personal task (/todo) or team exploration (/quest).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

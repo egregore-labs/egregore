@@ -92,7 +92,7 @@ case "$dirty_branch" in
   *) bad "dirty main moves to a handoff topic branch — got '$dirty_branch'" ;;
 esac
 check "dirty main work is committed" \
-  "Handoff: main-only save" "$(git -C "$dirty_repo" log -1 --format=%s)"
+  "chore(handoff): record main-only save" "$(git -C "$dirty_repo" log -1 --format=%s)"
 check "dirty main worktree is clean" \
   "" "$(git -C "$dirty_repo" status --porcelain)"
 check "dirty main branch is pushed" \

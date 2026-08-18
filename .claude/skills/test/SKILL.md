@@ -1,4 +1,14 @@
+---
+name: test
+description: "Validate changes before /save — static analysis plus live Cypher validation against the graph, rendered as a pass/fail gate. Use for /test or 'test my changes'."
+---
+
 Validate changes before /save.
+
+## When to invoke
+
+User says: "/test", "test my changes", "run tests before I save", "validate this before /save"
+Not this: broad end-to-end responsibility for shipping a change safely → `/qa`
 
 Topic: $ARGUMENTS
 

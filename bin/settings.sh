@@ -232,7 +232,7 @@ _people_file() {
     rm -f "$f"
   fi
   ( cd "$SCRIPT_DIR/memory" 2>/dev/null && git add -A people/ 2>/dev/null \
-      && git commit -q -m "settings: people $op $user" 2>/dev/null \
+      && git commit -q -m "chore(settings): $op $user in people" 2>/dev/null \
       && git push -q 2>/dev/null ) || true
 }
 

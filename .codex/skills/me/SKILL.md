@@ -1,6 +1,6 @@
 ---
 name: me
-description: 'Fallback Codex adapter for the Egregore me workflow.'
+description: 'View or change your member identity — display name, email — shared across Claude Code, Codex, and Pi. Say ''who am I'', ''call me <name>'', ''change my name to X'', or run ''/me''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

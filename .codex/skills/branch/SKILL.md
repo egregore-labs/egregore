@@ -1,6 +1,6 @@
 ---
 name: branch
-description: 'Fallback Codex adapter for the Egregore branch workflow.'
+description: 'Create a working branch from what you are about to work on. Use for /branch, or any request to start a new branch before making changes.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

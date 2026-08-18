@@ -1,3 +1,8 @@
+---
+name: notion-connect
+description: "Use for 'connect notion', 'notion status', or 'disconnect notion' — connects the current agent runtime directly to Notion's official hosted MCP for search and fetch, or checks/revokes that connection."
+---
+
 Connect the current agent runtime directly to Notion's official hosted MCP.
 
 Arguments: $ARGUMENTS (Optional: `status` or `revoke`)

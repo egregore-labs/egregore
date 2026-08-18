@@ -1,3 +1,8 @@
+---
+name: checkup
+description: "Run diagnostics on your Egregore environment and render a health report, auto-fixing what it can. Use for /checkup, a health check, or when something is broken and the root cause is unclear."
+---
+
 Run diagnostics on your Egregore environment.
 
 Check every service and dependency, render a TUI diagnostic box, and auto-fix what you can.

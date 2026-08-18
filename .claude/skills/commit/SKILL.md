@@ -1,4 +1,14 @@
+---
+name: commit
+description: "Stage changes and create a commit with a properly formatted message. Use for /commit, or saving work locally — not sharing it (/push) or opening a pull request (/pr)."
+---
+
 Stage changes and commit with a message.
+
+## When to invoke
+
+User says: "/commit", "commit this", "stage and commit", "save this change locally"
+Not this: sharing your commit with others → `/push` · opening a pull request → `/pr`
 
 Message (optional): $ARGUMENTS
 
@@ -37,8 +47,34 @@ Resolve `BASE_BRANCH` through `bin/lib/config.sh` → `_get_base_branch` (pass t
 
 1. Show modified and untracked files
 2. Stage relevant files (ignore build artifacts)
-3. Prompt for or suggest commit message
+3. Compose the message per the convention below — suggest one derived
+   from the diff, or take the user's and align it to the convention
 4. Create the commit
+
+## Message convention
+
+Full spec: `.claude/context/commit-format.md`. Wording:
+`.claude/context/git-language.md`. The short form:
+
+- Subject `type(scope): imperative summary` — ≤ 72 chars (aim ≤ 50),
+  lowercase, no trailing period. Same grammar and type set as PR
+  titles. It completes "if applied, this commit will ___".
+- Body (when the diff cannot explain its own motivation): blank line
+  after the subject, wrapped at 72, what and why — never how.
+- Agent-authored commits end with a trailer block as the final
+  paragraph:
+
+  ```bash
+  SID=$(cat .egregore-session-id 2>/dev/null)
+  git commit -m "feat(mcp): add API key authentication" -m "Egregore-Session: $SID
+  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+  ```
+
+  Omit the `Egregore-Session` line when the file is absent; use your
+  harness's own identity line. Humans committing by hand skip
+  trailers.
+- One logical change per commit — split when the parts are
+  independently revertable.
 
 ## Example
 
@@ -59,9 +95,9 @@ Staging modified files...
   git add src/mcp/auth.py src/mcp/server.py tests/test_auth.py
 
 Enter commit message (or I can suggest one):
-> Add MCP authentication with API key validation
+> feat(mcp): add API key authentication
 
-  git commit -m "Add MCP authentication with API key validation"
+  git commit -m "feat(mcp): add API key authentication"  # + trailer block
   ✓ Committed (abc1234)
 
 Changes committed locally. Run /push to share, or /pr when ready for review.
@@ -70,11 +106,11 @@ Changes committed locally. Run /push to share, or /pr when ready for review.
 ## With message argument
 
 ```
-> /commit fix typo in readme
+> /commit docs(readme): fix typo
 
 Staging and committing...
   git add -A
-  git commit -m "fix typo in readme"
+  git commit -m "docs(readme): fix typo"
   ✓ Committed (def5678)
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: ingest-corpus
-description: 'Fallback Codex adapter for the Egregore ingest-corpus workflow.'
+description: 'Turn a large folder of documents into a Connect-only knowledge base that answers questions with sources. Say ''build a knowledge base''. Not a few files (/ingest) or a meeting/Notion/Google source.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

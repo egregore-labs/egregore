@@ -1,3 +1,8 @@
+---
+name: note
+description: "Use when the user says 'jot this down', 'note to self', 'just thinking out loud', or 'park this thought' — saves a private personal note, never shared or pushed until explicitly promoted."
+---
+
 Save a personal note. Private by default — never shared, never pushed. You choose what to share later.
 
 ## When to invoke

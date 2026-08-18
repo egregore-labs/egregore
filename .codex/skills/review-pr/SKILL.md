@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: 'Fallback Codex adapter for the Egregore review-pr workflow.'
+description: 'Use when the user says ''review PR'', ''is this PR safe to merge'', or ''audit PR'' — runs a CTO-level 10-point review checklist on one or more pull requests. Not creating a PR (/pr) or validating local changes (/test).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

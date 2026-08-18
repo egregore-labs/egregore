@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: 'Fallback Codex adapter for the Egregore reflect workflow.'
+description: 'Use when the user says ''we decided'', ''I realized'', or ''that''s a pattern'' — captures decisions, findings, or patterns in shared memory. Not a private half-baked thought (/note) or cross-referencing (/deep-reflect).'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

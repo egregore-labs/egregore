@@ -9,6 +9,10 @@ builds a compliant body when the caller supplies none), a web-UI template
 for humans, and a CI gate (`.github/workflows/pr-format.yml`) that fails
 non-compliant PRs with a fix-it comment.
 
+Sibling spec: `.claude/context/commit-format.md` (commit subjects share
+this spec's title grammar). Wording rules for both:
+`.claude/context/git-language.md`.
+
 ## Title
 
 `type(scope): imperative summary` — ≤ 72 chars, no trailing period.
@@ -24,12 +28,19 @@ Three sections are gated, two are optional. In this order:
 |---|---|---|
 | `## What` | always | 1–4 bullets, the change itself, most important first. A reader should know what merged from this section alone. |
 | `## Why` | always | 1–3 sentences. The motivation or problem — context the diff cannot show. Link the decision/quest/issue that spawned it. |
-| `## Verification` | when the diff touches non-markdown files | How this was checked: test command + result, manual steps, or an honest `Not verified — <reason>`. Never omit; never fake. |
+| `## Verification` | when the diff touches non-markdown files | How this was checked: test command + result, manual steps, or an honest `Not verified — <reason>`. Never omit; never fake. The gate accepts `## Testing` as a legacy alias — write `## Verification` in new PRs. |
 | `## Risk` | when real | Breaking changes, blast radius (does merging publish or deploy?), rollback note. |
 | `## Links` | when they exist | Issues, quests, handoffs, superseded PRs. |
 
-Footer: the generating harness's attribution line (e.g. `🤖 Generated with
-[Claude Code](https://claude.com/claude-code)`). Humans skip it.
+Footer: the attribution line of the harness that authored the body —
+one line, the final non-blank line, preceded by a blank line, shaped
+`🤖 <verb> with/via <harness>`. Canonical forms:
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)`,
+`🤖 Generated with Codex`. The transport form (`🤖 Saved via
+bin/agent.sh`) appears only when the bridge generated the skeleton
+body itself. Humans skip the footer. Commit-level attribution is
+separate and lives in git trailers — see
+`.claude/context/commit-format.md` § Trailers.
 
 ## Rules of thumb
 

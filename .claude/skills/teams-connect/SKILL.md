@@ -1,3 +1,8 @@
+---
+name: teams-connect
+description: "Set up Microsoft Teams as a notification channel for your Egregore — registers an Azure bot, uploads the app, and binds a channel. Use for /teams-connect, 'connect teams', or 'set up teams notifications'."
+---
+
 Set up Microsoft Teams as a notification channel for your Egregore.
 
 Arguments: $ARGUMENTS (none expected)

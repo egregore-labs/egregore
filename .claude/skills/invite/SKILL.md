@@ -1,4 +1,14 @@
+---
+name: invite
+description: "Invite someone to this Egregore — GitHub org invitation plus setup link. Say '/invite <username>' or 'invite <username> to the org'. Not removing a member (/delete-user)."
+---
+
 Invite someone to this Egregore. Handles GitHub org invitation + Egregore setup link.
+
+## When to invoke
+
+User says: "/invite <username>", "invite <username>", "add <username> to the org", or any request to invite a new person to this Egregore.
+Not this: removing a member → `/delete-user`.
 
 Arguments: $ARGUMENTS (Required: GitHub username of the person to invite)
 

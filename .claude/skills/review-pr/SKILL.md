@@ -1,3 +1,8 @@
+---
+name: review-pr
+description: "Use when the user says 'review PR', 'is this PR safe to merge', or 'audit PR' — runs a CTO-level 10-point review checklist on one or more pull requests. Not creating a PR (/pr) or validating local changes (/test)."
+---
+
 Review a pull request with CTO-level scrutiny. Designed for vibe-coded PRs.
 
 Arguments: $ARGUMENTS

@@ -1,4 +1,13 @@
+---
+name: sync-repos
+description: "Smart sync of all Egregore repos (memory + managed repos + current repo) — fetches first, only pulls if behind. Use for /sync-repos or 'sync all repos'."
+---
+
 Smart sync of all Egregore repos. Fetches first, only pulls if behind.
+
+## When to invoke
+
+User says: "/sync-repos", "sync all repos", "sync everything", "get every repo up to date"
 
 ## Loom routing
 

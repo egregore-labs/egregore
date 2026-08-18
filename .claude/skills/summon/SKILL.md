@@ -1,3 +1,8 @@
+---
+name: summon
+description: "Design and launch a persistent agent (a spirit) that runs on a schedule or watches for conditions, via adaptive questioning that produces a reviewable spec before launch."
+---
+
 # /summon — Design and Launch a Persistent Agent Process
 
 Summon a spirit — a persistent agent that runs on a schedule or watches for conditions. Unlike `/loop` (dumb scheduler), `/summon` designs the process through adaptive questioning, produces a reviewable spec, then launches it.

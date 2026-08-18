@@ -1,3 +1,8 @@
+---
+name: me
+description: "View or change your member identity — display name, email — shared across Claude Code, Codex, and Pi. Say 'who am I', 'call me <name>', 'change my name to X', or run '/me'."
+---
+
 # /me — View or reconcile your identity
 
 Show the current member identity or change how the member wants to be called.

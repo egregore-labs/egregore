@@ -1,3 +1,8 @@
+---
+name: view
+description: "Generate a branded HTML artifact from Egregore data (quest, handoff, activity, board, network, or any document) and open it in the browser. Use for /view, 'render this', or 'show me visually'."
+---
+
 Generate a branded HTML artifact from Egregore data and open it in the browser.
 
 Works in both connected and local mode — resolves data from memory files, not the graph.

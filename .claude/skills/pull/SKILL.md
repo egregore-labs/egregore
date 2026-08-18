@@ -1,6 +1,16 @@
+---
+name: pull
+description: "Use for /pull when you need to sync the current branch and shared memory without also viewing activity (/activity auto-syncs already)."
+---
+
 Pull latest for current repo and shared memory.
 
 **Note:** `/activity` auto-syncs. Use `/pull` only when you need to sync without viewing activity.
+
+## When to invoke
+
+User says: "/pull", "pull latest", "sync my branch", "get the latest changes", "update memory", or needs to sync without also viewing activity.
+Not this: also want to see recent activity → `/activity` (auto-syncs already).
 
 ## Loom routing
 

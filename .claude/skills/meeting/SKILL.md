@@ -1,4 +1,13 @@
+---
+name: meeting
+description: "Use for /meeting, /meeting sync, /meeting backfill, or a search term — adaptively analyzes a Granola meeting into decisions, findings, actions, and continuity in shared memory."
+---
+
 Analyze meetings from Granola. Adaptive approach — the agent reads the material, asks what matters, and decides how to analyze.
+
+## When to invoke
+
+User says: "/meeting" (list unprocessed meetings), "/meeting sync" (process all), "/meeting [search]" (find and process a specific meeting), "/meeting backfill" (re-process historical meetings with richer extraction).
 
 Arguments: $ARGUMENTS (Optional: "sync" for batch mode, "backfill" to re-process historical meetings, or search term to find a specific meeting)
 

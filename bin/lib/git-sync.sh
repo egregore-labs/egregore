@@ -185,7 +185,7 @@ _apply_framework_update() {
     FRAMEWORK_UPDATED_COUNT=$(printf '%s\n' "$_changed" | grep -c . || echo 0)
     FRAMEWORK_UPDATED_FILES=$(printf '%s\n' "$_changed" | awk '{print $NF}' | head -3 | tr '\n' ' ')
     git add bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null
-    EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Auto-update Egregore framework" --quiet 2>/dev/null || true
+    EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "chore(sync): update framework from upstream" --quiet 2>/dev/null || true
     FRAMEWORK_UPDATED="true"
   fi
 }
@@ -214,6 +214,14 @@ fi
 # Named setup_develop for continuity; it operates on $BASE_BRANCH, which is
 # "develop" by default and whatever egregore.json's base_branch says otherwise.
 setup_develop() {
+  # Detached HEAD (CI merge-ref checkouts, bisects): never create or switch
+  # branches here — `git checkout -b $BASE_BRANCH origin/$BASE_BRANCH` would
+  # silently replace the checked-out tree with the base branch. This is how
+  # CI jobs that invoke session-start machinery ended up testing develop
+  # instead of the PR under test. Syncing means updating the base-branch ref,
+  # not claiming HEAD; on a detached HEAD there is nothing safe to do.
+  [ -n "$(git branch --show-current 2>/dev/null)" ] || return 0
+
   # Ensure the base branch exists locally
   if ! git show-ref --verify --quiet "refs/heads/$BASE_BRANCH" 2>/dev/null; then
     if git show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" 2>/dev/null; then
@@ -267,7 +275,7 @@ setup_develop() {
       # Save uncommitted work so nothing is lost (guarded: never auto-commit
       # stray submodule pointers from sibling repos in the checkout)
       git_add_guarded
-      git commit -m "Auto-save: uncommitted work from $CURRENT_BRANCH" --quiet 2>/dev/null || true
+      git commit -m "chore(autosave): save uncommitted work from $CURRENT_BRANCH" --quiet 2>/dev/null || true
       SAVED_BRANCH="$CURRENT_BRANCH"
     fi
 

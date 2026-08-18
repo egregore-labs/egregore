@@ -11,6 +11,14 @@ on:
       - 'bin/**/*.sh'
       - '.claude/hooks/**/*.sh'
       - 'packages/create-egregore/**'
+      # Skill and spec-surface edits must rebuild the committed runtime
+      # bundles and keep Codex parity green — previously these paths triggered
+      # no bundle/parity check at all and the generated surfaces went stale.
+      - '.claude/skills/**'
+      - '.codex/skills/**'
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - 'capability-distribution.json'
 
 # A new commit supersedes the run already in flight. Without this, pushing a
 # fixup leaves the previous run going to completion with nobody reading it.
@@ -43,3 +51,21 @@ jobs:
       - name: Verify packaged runtime portability
         working-directory: packages/create-egregore
         run: npm test
+
+  codex-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Codex native-skill and adapter parity
+        run: bash bin/tests/test-codex-native-skills.sh
+
+      - name: Codex spec render freshness and 32 KiB budget
+        run: bash bin/tests/test-codex-spec-render.sh
+
+      - name: Skill contract (skill-v1, strict)
+        run: node bin/capability-distribution.mjs skill-contract --strict-contract

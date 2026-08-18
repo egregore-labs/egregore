@@ -1,6 +1,6 @@
 ---
 name: checkup
-description: 'Fallback Codex adapter for the Egregore checkup workflow.'
+description: 'Run diagnostics on your Egregore environment and render a health report, auto-fixing what it can. Use for /checkup, a health check, or when something is broken and the root cause is unclear.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

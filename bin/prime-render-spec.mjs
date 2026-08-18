@@ -41,24 +41,55 @@ function replaceSection(markdown, heading, body) {
   return `${markdown.slice(0, start)}${marker}\n\n${body}${markdown.slice(end)}`;
 }
 
+// Keep an inherited section and put runtime-specific framing in front of it.
+// Command Awareness is the case that matters: the canonical category rows and
+// disambiguation map live in CLAUDE.md, and a full replace here silently
+// shipped a truncated copy that drifted for months. The Codex spec opens the
+// section with its own skills-not-slash-commands paragraph, which is wrong for
+// a runtime that does have slash commands, so that one paragraph is dropped.
+function prependToSection(markdown, heading, body, dropLeadParagraphStartingWith) {
+  const marker = `## ${heading}`;
+  const start = markdown.indexOf(marker);
+  if (start < 0) throw new Error(`missing section in AGENTS.md: ${heading}`);
+  const rest = markdown.slice(start + marker.length);
+  const boundary = rest.search(/\n\n---\n\n## /);
+  const end = boundary < 0 ? markdown.length : start + marker.length + boundary;
+  let inherited = markdown.slice(start + marker.length, end).trim();
+  if (dropLeadParagraphStartingWith) {
+    if (!inherited.startsWith(dropLeadParagraphStartingWith)) {
+      throw new Error(`prime-render-spec: "${heading}" no longer opens with "${dropLeadParagraphStartingWith}" — the Codex wording moved; update this adaptation`);
+    }
+    inherited = inherited.slice(inherited.indexOf("\n\n") + 2).trim();
+  }
+  return replaceSection(markdown, heading, `${body}\n\n${inherited}`);
+}
+
+const CODEX_COMMAND_LEAD = "Codex reserves leading";
+
 function adapt(sourceSpec) {
-  let text = sourceSpec
-    .replaceAll("Egregore on Codex", "Egregore on Prime Agent")
-    .replaceAll("Codex-native", "Prime-native")
-    .replaceAll("Codex sessions", "Prime Agent sessions")
-    .replaceAll("On Codex", "On Prime Agent")
-    .replaceAll("from Codex", "from Prime Agent")
-    .replaceAll("inside Codex", "inside Prime Agent")
-    .replaceAll("Codex has no", "Prime Agent has no built-in")
-    .replaceAll("normal sandboxed Codex shell", "the IPython kernel's shell access")
-    .replaceAll("Codex graph network access", "Prime Agent graph network access")
-    .replaceAll("structured Codex question tooling", "Prime Agent UI question tooling")
-    .replaceAll("structured Codex", "structured Prime Agent")
-    .replaceAll("bin/codex-session-start.sh", "bin/prime-session-start.sh")
-    .replaceAll(".codex/hooks/branch-guard.js", ".prime/agent/extensions/egregore.ts")
-    .replaceAll("PreToolUse hook (enabled by the launcher via `--enable hooks`)", "`tool_call` gate (loaded from the project-local extension)")
-    .replaceAll("If this Codex build does not support hooks", "If Prime Agent project extensions are disabled")
-    .replaceAll("change permissions in `.claude/settings.json` anytime", "review or disable project resources in `.prime/agent/` anytime")
+  // Anchored replacements: every `from` string MUST exist in the generated
+  // Codex spec — a missing anchor no-ops silently and drops Prime-specific
+  // wording (see the tool_call gate incident). Fail the render loudly instead.
+  const ANCHORED = [
+    ["Egregore on Codex", "Egregore on Prime Agent"],
+    ["Codex-native", "Prime-native"],
+    ["Codex sessions", "Prime Agent sessions"],
+    ["On Codex", "On Prime Agent"],
+    ["Codex has no", "Prime Agent has no built-in"],
+    ["bin/codex-session-start.sh", "bin/prime-session-start.sh"],
+    [".codex/hooks/branch-guard.js", ".prime/agent/extensions/egregore.ts"],
+    ["PreToolUse hook (launcher `--enable hooks`)", "`tool_call` gate (loaded from the project-local extension)"],
+    ["If this Codex build does not support hooks", "If Prime Agent project extensions are disabled"],
+    ["change permissions in `.claude/settings.json` anytime", "review or disable project resources in `.prime/agent/` anytime"],
+  ];
+  let text = sourceSpec;
+  for (const [from, to] of ANCHORED) {
+    if (!text.includes(from)) {
+      throw new Error(`prime-render-spec: anchor not found in generated Codex spec: "${from}" — the Codex wording moved; update this replacement`);
+    }
+    text = text.replaceAll(from, to);
+  }
+  text = text
     .replace(/`\$([a-z][a-z0-9-]*)/g, "`/$1")
     .replace(/\$([a-z][a-z0-9-]*)/g, "/$1");
 
@@ -70,22 +101,15 @@ Your subagent mechanism (\`rlm(...)\`) spawns Prime Agent child sessions, not Eg
 
   text = replaceSection(text, "On Launch — MANDATORY FIRST ACTION", `The project-local Prime Agent extension renders the Egregore startup card (identity, handoffs, team activity) inside the session via \`bin/prime-session-start.sh\`. This works for direct \`prime-agent\` launches and launcher-managed sessions. Do not rerun startup checks and do not narrate startup. The card ends with **"What are you working on?"** — that question is already on screen; treat the user's first message as the answer to it. To re-show the card outside Prime Agent, run \`bash bin/prime-session-start.sh --card\`.`);
 
-  text = replaceSection(text, "Command Awareness", `Egregore workflows are available as Prime Agent slash commands such as \`/activity\`, \`/handoff\`, \`/save\`, and \`/view\`. They are registered from the shared skill inventory by \`.prime/agent/extensions/egregore.ts\`; the duplicate \`/skill:name\` listings are disabled so each workflow appears once. Natural-language requests work normally — and are the route for any workflow whose name collides with a Prime Agent built-in: **say "update egregore" rather than typing \`/update\`**, which is Prime Agent's own self-updater. \`/save\` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
+  text = prependToSection(text, "Command Awareness", `Egregore workflows are available as Prime Agent slash commands such as \`/activity\`, \`/handoff\`, \`/save\`, and \`/view\`. They are registered from the shared skill inventory by \`.prime/agent/extensions/egregore.ts\`; the duplicate \`/skill:name\` listings are disabled so each workflow appears once. Natural-language requests work normally — and are the route for any workflow whose name collides with a Prime Agent built-in: **say "update egregore" rather than typing \`/update\`**, which is Prime Agent's own self-updater. \`/save\` is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory — never make users manage the git workflow by hand.
 
-Invoke commands from user intent — don't wait for the slash. Read the selected skill's \`SKILL.md\` completely before acting. Codex wording inside the shared portable skills means the shell-capable runtime adapter; in Prime Agent, run referenced \`bin/\` scripts through the IPython kernel (or the bash tool when active), use ordinary shell/network access, ignore Codex approval-channel wording, and render compact numbered questions when no UI question surface is available.
+Read the selected skill's \`SKILL.md\` completely before acting. Codex wording inside the shared portable skills means the shell-capable runtime adapter; in Prime Agent, run referenced \`bin/\` scripts through the IPython kernel (or the bash tool when active), use ordinary shell/network access, ignore Codex approval-channel wording, and render compact numbered questions when no UI question surface is available.
 
 The \`egregore\` Python-backed skill exposes the mechanics as kernel functions — \`import egregore\`, then \`egregore.search(query)\`, \`egregore.activity()\`, \`egregore.handoff(to, topic, body)\`, \`egregore.save(message, topic)\`, \`egregore.branch(topic)\`, \`egregore.notify_plan(recipient, message)\`. Prefer these over re-deriving \`bin/\` CLI usage by reading scripts. \`notify_plan\` is proposal-only: approval and dispatch always pass through the explicit human Send / Edit / Cancel checkpoint.
 
 "Get the latest changes" inside a session means \`/reload\` — it re-reads instructions, context files, skills, and extensions from disk. Never \`git pull\`, \`git reset\`, or \`git checkout\` the working branch to pick up updates. When pivoting topics inside a worktree that carries unmerged branch work, create the new branch from the current HEAD, not \`origin/develop\` — branching from origin/develop in such a worktree removes the unmerged files from disk.
 
-Kernel shell escapes can be time-capped by the harness. Egregore \`bin/\` scripts that sync git state or query the connected graph legitimately run 10–120 seconds: run them with a generous timeout (a \`%%bash\` cell, or the longest limit the harness exposes). If a command dies suspiciously fast (~5s) with partial output, treat it as a timeout — rerun once with a longer limit or render the workflow's designed one-line fallback. Never debug data plumbing inside a product workflow. Connected mode works normally here: graph reads and \`bin/search.sh\` enrichment use the instance's configured credentials, and when graph data is degraded say so in one plain line rather than narrating connectivity theories.
-
-**Core loop** — \`/activity\` \`/dashboard\` \`/handoff\` \`/wrap\` \`/save\` \`/reflect\` \`/todo\`
-**Knowledge** — \`/search\` \`/deep-reflect\` \`/archive\` \`/note\` \`/add\` \`/meeting\` \`/ingest\` \`/scroll\`
-**Identity** — \`/me\`
-**Coordination** — \`/ask\` \`/quest\` \`/issue\` \`/invite\` \`/delete-user\` \`/announce\`
-**Git** — \`/branch\` \`/commit\` \`/push\` \`/pr\` \`/save\` \`/review-pr\` \`/contribute\`
-**Infra** — \`/setup\` \`/update\` \`/pull\` \`/env\` \`/infra\` \`/sync-repos\` \`/release\` \`/checkup\``);
+Kernel shell escapes can be time-capped by the harness. Egregore \`bin/\` scripts that sync git state or query the connected graph legitimately run 10–120 seconds: run them with a generous timeout (a \`%%bash\` cell, or the longest limit the harness exposes). If a command dies suspiciously fast (~5s) with partial output, treat it as a timeout — rerun once with a longer limit or render the workflow's designed one-line fallback. Never debug data plumbing inside a product workflow. Connected mode works normally here: graph reads and \`bin/search.sh\` enrichment use the instance's configured credentials, and when graph data is degraded say so in one plain line rather than narrating connectivity theories.`, CODEX_COMMAND_LEAD);
 
   return `# Egregore on Prime Agent\n\nThis file is generated by \`bin/prime-render-spec.mjs\`; do not edit it by hand.\n\n${text}\n`;
 }

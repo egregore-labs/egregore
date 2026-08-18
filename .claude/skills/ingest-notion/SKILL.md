@@ -1,3 +1,8 @@
+---
+name: ingest-notion
+description: "Bring selected Notion pages into shared Egregore memory via Notion's official MCP. Routed from /ingest when the source is Notion — say '/ingest notion'. Selected pages only, not a full-workspace sync."
+---
+
 Bring selected Notion pages into shared Egregore memory through Notion's official MCP.
 
 Arguments: $ARGUMENTS (Optional: a page URL/ID, a topic or title to search, or `--auto`)

@@ -1,6 +1,6 @@
 ---
 name: ingest
-description: 'Fallback Codex adapter for the Egregore ingest workflow.'
+description: 'Unified ingestion entry point — brings files, meetings, Google Workspace, Notion, or bulk corpora into intake, then promotes useful material into curated memory. Say ''ingest'', ''bring this into Egregore''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
