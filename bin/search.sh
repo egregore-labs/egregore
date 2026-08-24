@@ -29,6 +29,48 @@ SLUG=$(jq -r '.slug // "egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || ec
 COLLECTION="${SLUG}-memory"
 MEM_PATH="$(readlink -f "$SCRIPT_DIR/memory" 2>/dev/null || true)"
 
+# qmd 2.5.x may render --full-path results as absolute `**file:**` paths,
+# while older output uses qmd:// URIs. Normalize both to the canonical
+# memory/... form users can open from an Egregore checkout, and parse both
+# forms when counting hits or attaching graph state.
+_normalize_file_paths() {
+  local line absolute_prefix uri_prefix
+  absolute_prefix="**file:** \`$MEM_PATH/"
+  uri_prefix="**file:** \`qmd://${COLLECTION}/"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" == "$absolute_prefix"* ]]; then
+      printf '**file:** `memory/%s\n' "${line#"$absolute_prefix"}"
+    elif [[ "$line" == "$uri_prefix"* ]]; then
+      printf '**file:** `memory/%s\n' "${line#"$uri_prefix"}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+_result_paths() {
+  local line path canonical_prefix absolute_prefix uri_prefix
+  canonical_prefix="**file:** \`memory/"
+  absolute_prefix="**file:** \`$MEM_PATH/"
+  uri_prefix="**file:** \`qmd://${COLLECTION}/"
+  while IFS= read -r line || [ -n "$line" ]; do
+    path=""
+    if [[ "$line" == "$canonical_prefix"* ]]; then
+      path="${line#"$canonical_prefix"}"
+    elif [[ "$line" == "$absolute_prefix"* ]]; then
+      path="${line#"$absolute_prefix"}"
+    elif [[ "$line" == "$uri_prefix"* ]]; then
+      path="${line#"$uri_prefix"}"
+    elif [[ "$line" == *"qmd://${COLLECTION}/"* ]]; then
+      path="${line#*"qmd://${COLLECTION}/"}"
+    fi
+    path="${path%%\`*}"
+    case "$path" in
+      *.md*) printf '%s\n' "${path%%.md*}.md" ;;
+    esac
+  done | sort -u
+}
+
 QMD_VERSION="2.5.3"  # pinned — bump deliberately, never float @latest
 
 _qmd() {
@@ -104,7 +146,7 @@ _enrich() {
   local results paths params out
   results=$(cat)
   echo "$results"
-  paths=$(echo "$results" | grep -o "qmd://${COLLECTION}/[^: ]*\.md" | sed "s|qmd://${COLLECTION}/||" | sort -u)
+  paths=$(printf '%s\n' "$results" | _result_paths)
   [ -z "$paths" ] && return 0
   params=$(printf '%s\n' "$paths" | jq -R . | jq -sc '{paths: .}')
   out=$(bash "$SCRIPT_DIR/bin/graph.sh" query "UNWIND \$paths AS fp
@@ -167,7 +209,7 @@ cmd_query() {
   local t0 out label
   t0=$(date +%s)
   if [ "$mode" != "search" ]; then
-    out=$(_qmd "$mode" "$q" -c "$COLLECTION" -n "$n" --format md --full-path "${all[@]}" 2>/dev/null | _clean)
+    out=$(_qmd "$mode" "$q" -c "$COLLECTION" -n "$n" --format md --full-path "${all[@]}" 2>/dev/null | _clean | _normalize_file_paths)
     if [ -n "$out" ] && [ "$out" != "No results found." ]; then
       [ "$mode" = "query" ] && label="hybrid" || label="semantic"
       _banner_and_emit "$label" "$t0" "$emit" "$q" "$out"
@@ -176,7 +218,7 @@ cmd_query() {
     echo "_(hybrid/semantic returned nothing — showing keyword results. If this persists, run: bash bin/search.sh reindex --embed)_"
     echo ""
   fi
-  out=$(_qmd search "$q" -c "$COLLECTION" -n "$n" --format md --full-path "${all[@]}" | _clean)
+  out=$(_qmd search "$q" -c "$COLLECTION" -n "$n" --format md --full-path "${all[@]}" | _clean | _normalize_file_paths)
   _banner_and_emit "keyword" "$t0" "$emit" "$q" "$out"
 }
 
@@ -189,7 +231,7 @@ cmd_query() {
 _banner_and_emit() {
   local label="$1" t0="$2" emit="$3" q="$4" out="$5"
   local hits dur modef product surface plural=""
-  hits=$(printf '%s\n' "$out" | grep -c '^qmd://' 2>/dev/null | tr -d ' ')
+  hits=$(printf '%s\n' "$out" | _result_paths | wc -l | tr -d ' ')
   dur=$(( $(date +%s) - t0 ))
   modef="$label"
   product="Egregore"
