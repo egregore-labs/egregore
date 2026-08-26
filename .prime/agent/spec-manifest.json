@@ -1,8 +1,8 @@
 {
   "generatedBy": "bin/prime-render-spec.mjs",
   "source": "AGENTS.md generated Codex spec",
-  "sourceHash": "535e5e6f8cce",
-  "outputHash": "d8f7b2f7d798",
+  "sourceHash": "cf4c67a3b510",
+  "outputHash": "d3ecf89e4b51",
   "adaptations": [
     "Prime Agent APPEND_SYSTEM delivery from .prime/agent/",
     "Prime Agent tool_call branch gate incl. ipython classification",

@@ -24,23 +24,22 @@ Parse `$ARGUMENTS`:
 
 ## Step 0: Gate check
 
+Resolve the contribution target through the shared executable guard. This is
+mandatory for every mode, including `status`, and replaces any hand-written
+interpretation of `upstream_url`:
+
 ```bash
-UPSTREAM_URL=$(jq -r '.upstream_url // empty' egregore.json 2>/dev/null)
+UPSTREAM_REPO=$(bash bin/contribute-guard.sh) || exit $?
 ```
 
-**If `"none"`**: This is the upstream repo itself. Tell the user:
+If the guard refuses because `upstream_url` is `"none"`, tell the user:
 
-> This is the upstream repo. Use `/save` to push changes to develop.
+> This is the framework source repository. Use `/save` to push changes to its configured integration branch.
 
 Stop.
 
-**If empty**: Default to `egregore-labs/egregore`.
-
-Extract upstream org/repo:
-```bash
-[ -z "$UPSTREAM_URL" ] && UPSTREAM_URL="https://github.com/egregore-labs/egregore.git"
-UPSTREAM_REPO=$(echo "$UPSTREAM_URL" | sed 's|.*github.com/||; s|\.git$||')
-```
+For malformed configuration, unsupported URLs, or any other guard failure,
+show its error and stop. Never substitute a public target after a guard error.
 
 ## Step 1: Check auth + get username
 
@@ -81,6 +80,10 @@ If freeform or "Something else" → ask the user to describe the change.
 All three steps in one bash call:
 
 ```bash
+# Revalidate immediately before the first external mutation. A target change
+# or source-repository config stops the entire command block.
+bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
+
 # 3a: Fork upstream (idempotent — no-ops if fork exists)
 gh repo fork "$UPSTREAM_REPO" --clone=false 2>/dev/null || true
 
@@ -233,6 +236,7 @@ If "Fix first" → Stop.
 ### Step 10: Push to fork
 
 ```bash
+bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
 git push contribute "$CONTRIBUTE_BRANCH" -u --quiet 2>&1
 ```
 
@@ -241,6 +245,7 @@ If push fails: "Push failed. Your changes are saved locally. Check your network 
 ### Step 11: Create cross-fork PR
 
 ```bash
+bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
 PR_URL=$(gh pr create \
   --repo "$UPSTREAM_REPO" \
   --head "${GH_USER}:${CONTRIBUTE_BRANCH}" \
@@ -325,8 +330,9 @@ If no contribute branches: "No contributions in progress. Run `/contribute` to s
 
 | Scenario | Handling |
 |----------|----------|
-| `upstream_url` is `"none"` | Gate: redirect to `/save` |
-| `upstream_url` is empty | Default to `egregore-labs/egregore` |
+| `upstream_url` is `"none"` | Executable guard refuses all contribution operations and redirects to `/save` |
+| `upstream_url` is empty | Executable guard selects `egregore-labs/egregore` |
+| Config is invalid or target changes | Executable guard fails closed before fork, push, or PR |
 | Fork already exists | `gh repo fork` is idempotent |
 | `contribute` remote exists | Skip adding |
 | No framework changes | "Make changes first, then `/contribute submit`" |

@@ -11,7 +11,7 @@
     {
       "section": "Identity & Upstream",
       "action": "keep",
-      "sourceHash": "ddcbc0083aff",
+      "sourceHash": "86a2c62ce498",
       "note": "Kept; /update, /contribute, /save tokens rendered as $skill tokens."
     },
     {
@@ -89,7 +89,7 @@
     {
       "section": "Git Workflow",
       "action": "keep",
-      "sourceHash": "23df84b5fe80",
+      "sourceHash": "40735c0c09ff",
       "note": "Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence)."
     },
     {

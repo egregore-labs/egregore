@@ -85,7 +85,12 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 DIR_HASH=$( { md5sum <<<"$DIR" 2>/dev/null || md5 -q -s "$DIR" 2>/dev/null || echo default; } | cut -c1-8 )
 STAMP="/tmp/.egregore-autosave-${DIR_HASH}"
 if [ "$DEBOUNCE" -gt 0 ] && [ -f "$STAMP" ]; then
-  LAST=$(stat -f %m "$STAMP" 2>/dev/null || stat -c %Y "$STAMP" 2>/dev/null || echo 0)
+  if stat -c %Y "$STAMP" >/dev/null 2>&1; then
+    LAST=$(stat -c %Y "$STAMP")
+  else
+    LAST=$(stat -f %m "$STAMP" 2>/dev/null || echo 0)
+  fi
+  case "$LAST" in ""|*[!0-9]*) LAST=0 ;; esac
   [ $(( $(date +%s) - LAST )) -lt "$DEBOUNCE" ] && exit 0
 fi
 touch "$STAMP" 2>/dev/null || true

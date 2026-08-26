@@ -59,6 +59,7 @@ data/*.db
 __pycache__/
 node_modules/
 packages/emissary-plugin/dist/
+.claude/node-compile-cache/
 
 # Playwright MCP
 .playwright-mcp/
