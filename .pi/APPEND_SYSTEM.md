@@ -12,11 +12,20 @@ This appendix is generated from the reviewed shell-runtime translation of `CLAUD
 
 ## Identity & Upstream
 
-This is an Egregore instance — a downstream fork of the upstream framework at `egregore-labs/egregore`. The framework (`bin/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `loom/`, `CLAUDE.md`, `skills/`) is synced from upstream on every session start and via `/update`. It is not authored in this repo.
+Framework direction comes only from `egregore.json.upstream_url`:
+
+- **Source** — literal `"none"`: framework changes are authored here.
+  `/update` and `/contribute` stop; use `/save`. Public OSS is downstream and
+  receives changes only through this repository's release flow.
+- **Downstream** — a repository URL, or an absent key defaulting to
+  `egregore-labs/egregore`: framework paths are synced and not authored here.
+
+Never infer direction from a repository name or Git remote.
 
 **Where changes belong:**
-- **Framework is outdated or a skill is missing:** run `/update` first. It pulls the latest from upstream.
-- **Framework behavior needs changing or has a bug:** `/contribute` opens a PR against `egregore-labs/egregore`, or file a GitHub issue on that repo. Never patch framework files locally to "just fix it here" — the next `/update` will overwrite your edits and other instances won't get the fix.
+- **Downstream framework is stale:** run `/update`.
+- **Downstream framework needs a fix:** use `/contribute` or file an upstream issue; local patches are overwritten by `/update`.
+- **Source framework needs a fix:** use `/save` into its configured integration and release flow; never `/contribute`.
 - **Org-level work** (memory, org-specific knowledge, managed repos, `egregore.json`): `/save` to this repo.
 
 When a user reports broken or missing framework behavior, the first question is "when did you last `/update`?"
@@ -275,11 +284,14 @@ branch; `base_branch: "main"` is single-branch mode. Users never interact with
 git directly.
 
 ```
-main ← stable (/release)
-  develop ← integration (PRs land here)
-    dev/{author}/{topic-slug} | feature/{slug} | bugfix/{slug}
+main ← selected `/release` candidates
+develop ← CL integration (available internally)
+  dev/{author}/{topic-slug} | feature/{slug} | bugfix/{slug}
 ```
 
+- **Develop is not release**: merged PRs stay inside CL.
+- **`/release` is selective**: the Release Desk queues exact PR SHAs into a candidate from main. Never merge all of develop.
+- **OSS is separate**: `/sync-public` reviews delivery after private main.
 - **On launch**: syncs the configured base branch + memory. Does NOT create a branch.
 - **Branch creation**: MANDATORY on first work-related message (see above).
 - **Resuming**: rebase onto the configured base branch and continue.

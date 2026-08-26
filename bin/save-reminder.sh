@@ -20,7 +20,12 @@ COOLDOWN_SECONDS=600  # 10 minutes
 
 # Check cooldown — don't nag
 if [ -f "$COOLDOWN_FILE" ]; then
-  LAST=$(stat -f %m "$COOLDOWN_FILE" 2>/dev/null || stat -c %Y "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+  if stat -c %Y "$COOLDOWN_FILE" >/dev/null 2>&1; then
+    LAST=$(stat -c %Y "$COOLDOWN_FILE")
+  else
+    LAST=$(stat -f %m "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+  fi
+  case "$LAST" in ""|*[!0-9]*) LAST=0 ;; esac
   NOW=$(date +%s)
   if [ $((NOW - LAST)) -lt $COOLDOWN_SECONDS ]; then
     exit 0
