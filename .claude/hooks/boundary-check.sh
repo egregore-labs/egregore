@@ -181,6 +181,66 @@ is_consented() {
   return 1
 }
 
+# --- Helper: blank remote-machine spans in a Bash command (soft tier only) ---
+# Paths inside an ssh remote command (`ssh host 'cat /Users/alice/x'`) or a
+# host:/path remote spec (scp/rsync) refer to another machine's filesystem,
+# not local access — they must not trigger boundary prompts. Local paths in
+# the same command line (redirection targets like `ssh host 'bash -s' < /x`,
+# local scp operands, commands after `&&`/`|`/`;`) stay checked. Best-effort:
+# over-blanking degrades to "no prompt" (the soft tier's documented failure
+# mode), never to a hard-tier breach — the hard tier scans the raw command.
+scrub_remote_contexts() {
+  awk '
+    BEGIN { SQ = sprintf("%c", 39) }
+    { line = line $0 "\n" }
+    function flushtok(   keep) {
+      if (tok == "" && !had) return
+      keep = 1
+      # Arguments after an ssh destination run on the remote host
+      if (sshcmd && dest && !keepnext) keep = 0
+      # host:/path or user@host:path remote spec (scp/rsync); a local
+      # absolute path starts with "/", "~", or "$", so this never blanks one
+      if (tok ~ /^[A-Za-z0-9._@-]+:/) keep = 0
+      if (keepnext) { keep = 1; keepnext = 0 }
+      else if (cmdstart && tok ~ /^[A-Za-z_][A-Za-z0-9_]*=/) newstart = 1  # env prefix
+      else if (cmdstart && tok == "ssh") sshcmd = 1
+      else if (sshcmd && !dest) {
+        if (optarg) optarg = 0
+        else if (tok ~ /^-/) { if (tok ~ /^-[bcDEeFIiJLlmOopQRSWw]$/) optarg = 1 }
+        else dest = 1
+      }
+      if (keep && tok != "") out = out tok "\n"
+      tok = ""; had = 0; cmdstart = newstart; newstart = 0
+    }
+    END {
+      n = length(line); cmdstart = 1
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (esc)  { tok = tok c; esc = 0; continue }
+        if (insq) { if (c == SQ) insq = 0; else tok = tok c; continue }
+        if (indq) {
+          if (c == "\\") { esc = 1; continue }
+          if (c == "\"") indq = 0; else tok = tok c
+          continue
+        }
+        if (c == "\\") { esc = 1; had = 1; continue }
+        if (c == SQ)   { insq = 1; had = 1; continue }
+        if (c == "\"") { indq = 1; had = 1; continue }
+        if (c == " " || c == "\t") { flushtok(); continue }
+        if (c == "\n" || c == ";" || c == "|" || c == "&" || c == "(" || c == ")" || c == "`") {
+          flushtok()
+          cmdstart = 1; sshcmd = 0; dest = 0; optarg = 0; keepnext = 0
+          continue
+        }
+        if (c == "<" || c == ">") { flushtok(); keepnext = 1; continue }
+        tok = tok c; had = 1
+      }
+      flushtok()
+      printf "%s", out
+    }
+  ' 2>/dev/null
+}
+
 # --- Block messages ---
 block_hard() {
   local resolved="$1"
@@ -256,7 +316,11 @@ case "$TOOL_NAME" in
     [ "$POSTURE" = "open" ] && exit 0
     [ "$RELAXED" = "true" ] && exit 0
 
-    CANDIDATES=$(echo "$COMMAND" | grep -oE '(~|\$HOME|/Users/[A-Za-z0-9._-]+)/[A-Za-z0-9._/-]+' 2>/dev/null | sort -u | head -20) || true
+    # Blank remote-machine spans (ssh remote commands, host:/path specs)
+    # before extracting candidates — those paths live on another machine.
+    # If the scrubber fails, fall back to scanning the raw command.
+    SCRUBBED=$(printf '%s\n' "$COMMAND" | scrub_remote_contexts) || SCRUBBED="$COMMAND"
+    CANDIDATES=$(printf '%s\n' "$SCRUBBED" | grep -oE '(~|\$HOME|/Users/[A-Za-z0-9._-]+)/[A-Za-z0-9._/-]+' 2>/dev/null | sort -u | head -20) || true
     for c in $CANDIDATES; do
       RESOLVED=$(resolve_path "$c")
       is_denied "$RESOLVED" && block_hard "$RESOLVED"
