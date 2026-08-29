@@ -173,18 +173,25 @@ _apply_framework_update() {
   git merge --ff-only "origin/$BASE_BRANCH" --quiet 2>/dev/null || return 0
   # Apply upstream changes — checkout is idempotent, skip diff check
   # (git diff with variable path lists breaks in zsh — no word-splitting)
-  for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ loom/ CLAUDE.md skills/; do
+  #
+  # This list must match the one /update uses (.claude/skills/update/SKILL.md)
+  # — bin/tests/test-framework-sync-paths.sh pins the two together. A path
+  # present in one and not the other is a silent downgrade: .pi/ and
+  # .claude/rules/ were missing here, so every instance that only ever booted
+  # (never ran /update) ran without the Pi adapter and without the
+  # always-loaded voice rules CLAUDE.md promises.
+  for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .claude/rules/ .pi/ loom/ CLAUDE.md skills/; do
     git checkout upstream/main -- "$_p" 2>/dev/null || true
   done
   # Only commit if there are actual changes. Record WHAT changed before
   # committing — an overwrite of local edits is the one outcome the user has
   # to be able to see afterwards, and the commit is the only other record.
   local _changed
-  _changed=$(git status --porcelain bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null)
+  _changed=$(git status --porcelain bin/ .claude/ .pi/ loom/ CLAUDE.md skills/ 2>/dev/null)
   if [ -n "$_changed" ]; then
     FRAMEWORK_UPDATED_COUNT=$(printf '%s\n' "$_changed" | grep -c . || echo 0)
     FRAMEWORK_UPDATED_FILES=$(printf '%s\n' "$_changed" | awk '{print $NF}' | head -3 | tr '\n' ' ')
-    git add bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null
+    git add bin/ .claude/ .pi/ loom/ CLAUDE.md skills/ 2>/dev/null
     EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "chore(sync): update framework from upstream" --quiet 2>/dev/null || true
     FRAMEWORK_UPDATED="true"
   fi

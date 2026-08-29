@@ -138,6 +138,9 @@ jobs:
       - name: Test runtime mode status
         run: bash bin/tests/test-runtime-mode-status.sh
 
+      - name: Test framework sync path parity
+        run: bash bin/tests/test-framework-sync-paths.sh
+
       - name: Test packaged runtime parity
         working-directory: packages/create-egregore
         run: npm test

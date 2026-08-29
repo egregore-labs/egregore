@@ -79,7 +79,7 @@ fi
 ```bash
 if [ "$IN_WORKTREE" = "true" ]; then
   # Sync framework in main repo (on base branch)
-  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .pi/ loom/ CLAUDE.md skills/; do
+  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .claude/rules/ .pi/ loom/ CLAUDE.md skills/; do
     git -C "$MAIN_DIR" checkout upstream/main -- "$p" 2>/dev/null || true
   done
 
@@ -141,7 +141,7 @@ if [ "$IN_WORKTREE" = "false" ]; then
   fi
 
   # Sync ALL framework paths
-  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .pi/ loom/ CLAUDE.md skills/; do
+  for p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .claude/rules/ .pi/ loom/ CLAUDE.md skills/; do
     git checkout upstream/main -- "$p" 2>/dev/null || true
   done
 
