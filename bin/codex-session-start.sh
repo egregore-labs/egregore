@@ -71,9 +71,9 @@ source "$SCRIPT_DIR/bin/lib/git-sync.sh" >/dev/null 2>/dev/null
 # Warm-state parity with the Claude SessionStart path: hand context.sh the
 # pre-baked snapshot and route greeting reads through the warm graph cache.
 # The attendant daemon is deliberately NOT started from the Codex/Pi path —
-# its dead-session detection reads Claude transcripts only, so a live Codex
-# or Pi session with 12 quiet minutes would look dead and could have its
-# unfinished work ripcorded/auto-pushed. Codex sessions still benefit from
+# its session-liveness check reads Claude transcripts only, so a live Codex
+# or Pi session with 12 quiet minutes would look idle and its sweep would
+# run mid-work. Codex sessions still benefit from
 # any snapshot a Claude session's attendant maintains; runtime-neutral
 # liveness tracking is the prerequisite for starting the daemon here.
 if [ -n "${_ATT_KEY:-}" ]; then

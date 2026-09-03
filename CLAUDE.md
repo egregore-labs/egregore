@@ -71,7 +71,7 @@ The WorktreeCreate hook handles everything automatically: creates `dev/{author}/
 
    `Workspace: dev/{author}/{slug} (worktree).`
 
-**Fallback:** If `EnterWorktree` fails, resolve `{base}` with `_get_base_branch`, then use `git checkout -b dev/{author}/{slug} origin/{base}`.
+**Fallback:** If `EnterWorktree` fails, resolve `{base}` with `_get_base_branch`, then use `git checkout --no-track -b dev/{author}/{slug} origin/{base}`. A task branch starts from the integration branch but must not track it; the first publish sets upstream to the same-name remote task branch.
 
 4. Update graph (fire-and-forget): `bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &`
 
@@ -150,7 +150,14 @@ If `repoState` is absent or empty (old handoff format), skip auto-checkout silen
 - User says `/branch` (doing it themselves)
 - Already on a working branch AND the user's intent continues the current branch's topic
 
-**Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic. Create a new branch in the current worktree: `git checkout -b dev/{author}/{new-slug} origin/{base}`. **Exception — worktree carrying unmerged work:** when the current branch has commits not yet merged to `{base}` (the normal state of a task worktree), branch from the current HEAD instead (`git checkout -b dev/{author}/{new-slug}`); switching a worktree to `origin/{base}` removes the unmerged files from disk under the live session. Do NOT mix unrelated work on one branch — this is what Egregore's branching model is designed to prevent.
+**Topic pivot while on a working branch:** If the user describes work **unrelated** to the current branch's topic, treat it as a new topic. Create a new branch in the current worktree: `git checkout --no-track -b dev/{author}/{new-slug} origin/{base}`. **Exception — worktree carrying unmerged work:** when the current branch has commits not yet merged to `{base}` (the normal state of a task worktree), branch from the current HEAD instead (`git checkout -b dev/{author}/{new-slug}`); switching a worktree to `origin/{base}` removes the unmerged files from disk under the live session. Do NOT mix unrelated work on one branch — this is what Egregore's branching model is designed to prevent.
+
+### Task-branch history hygiene
+
+- A task branch may start from `origin/{base}` and later rebase or merge the configured base into itself. Do not merge, cherry-pick, or rebase an open PR or another person's task branch into it merely to inspect or read that work.
+- Inspect related work without importing its commits: prefer `gh pr view`, `gh pr diff`, `git show origin/<branch>:<path>`, or a separate temporary worktree.
+- Integrate another task branch only when the user explicitly requests it or the implementation truly depends on unpublished code. State that dependency before changing history.
+- File deletion means removal from the proposed final tree; it does not require rewriting ordinary task-branch history. When the user asks to push or save, proceed through the normal same-name task branch and PR flow unless they explicitly ask to purge sensitive material from Git history.
 
 If on the configured base branch after two messages, create a branch immediately from whatever context you have.
 

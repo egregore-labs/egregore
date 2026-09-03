@@ -71,6 +71,9 @@ EOF
   git -C "$core" add bin egregore.json .gitignore
   git -C "$core" commit -m "Init portable agent runtime" --quiet
   git -C "$core" branch -M main
+  git init --bare --initial-branch=main --quiet "$base/origin.git"
+  git -C "$core" remote add origin "$base/origin.git"
+  git -C "$core" push --quiet -u origin main
 
   git clone --quiet "$TMP/memory.git" "$memory"
   git -C "$memory" config user.name "$person"
@@ -125,12 +128,19 @@ echo "$RAW_SYNC" | grep -q "synced:"
 [ -L "$RAW_WT/memory" ]
 [ -L "$RAW_WT/.egregore-state.json" ]
 
+# Reproduce the legacy bug: task branches created from the configured base used to
+# inherit it as their upstream. Reusing the branch must repair that state.
+git -C "$A" branch dev/codex/codex-branch-smoke origin/main --quiet
 BRANCH_OUT="$(bash "$A/bin/agent.sh" branch --topic "codex branch smoke")"
 echo "$BRANCH_OUT" | grep -q "branch: dev/codex/codex-branch-smoke"
 BRANCH_WT="$(echo "$BRANCH_OUT" | sed -n 's/^worktree: //p' | head -1)"
 [ -d "$BRANCH_WT" ]
 [ -L "$BRANCH_WT/memory" ]
 [ "$(git -C "$BRANCH_WT" branch --show-current)" = "dev/codex/codex-branch-smoke" ]
+if git -C "$BRANCH_WT" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+  echo "task branch unexpectedly tracks the integration branch" >&2
+  exit 1
+fi
 
 printf 'portable save smoke\n' > "$BRANCH_WT/save-smoke.txt"
 SAVE_OUT="$(bash "$BRANCH_WT/bin/agent.sh" save --message "Save: codex branch smoke" --topic "codex branch smoke" --no-pr)"

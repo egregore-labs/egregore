@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# The attendant — Egregore's ambient listener. A per-instance daemon that
-# watches for work Claude Code sessions leave behind when they die without
-# ceremony (terminal closed, laptop shut) and captures it:
+# The attendant — Egregore's per-instance background daemon. It pre-pays the
+# launch path and keeps projections fresh. It never writes on a user's behalf:
 #
-#   ripcord    dead session + no handoff → deterministic auto-handoff to
-#              memory/handoffs/ (kind: ripcord), assembled from the session
-#              transcript + git state. No model, no API calls.
-#   auto-push  dirty/unpushed dev|feature|bugfix branches in this repo's
-#              worktrees, once no session is active → commit + push the
-#              branch. Never merges, never touches develop/main.
+#   warm       fetch refs, replay the graph cache, bake the context seed every
+#              few minutes so session start finds everything hot.
+#   lifecycle  run the handoff lifecycle job (Connected) on its own cadence.
+#   weaver     trigger the Thread projection once no session is active.
 #
-# In-harness hooks (SessionEnd, PreCompact) die with the process; the
-# attendant lives outside it. The signal is Claude Code's own transcript
-# files (~/.claude/projects/<key>/*.jsonl), written continuously regardless
-# of how a session ends: transcript gone stale + work on disk = pull the cord.
+# Ambient capture — ripcord notes and branch auto-push — was removed on
+# 2026-09-03: a session that ends without /handoff or /wrap leaves nothing
+# behind. Claude Code's transcript files (~/.claude/projects/<key>/*.jsonl)
+# are read only to tell whether a session is still active.
 #
 # Usage:
 #   bash bin/attendant.sh ensure   # spawn daemon if not running (fire-and-forget from session-start)
@@ -23,7 +20,7 @@
 #   bash bin/attendant.sh stop     # kill the daemon
 #
 # Env overrides (mainly for tests):
-#   ATTENDANT_STALE_MIN   minutes of transcript silence = dead session (default 12)
+#   ATTENDANT_STALE_MIN   minutes of transcript silence = no active session (default 12)
 #   ATTENDANT_DRY_RUN=1   log actions, mutate nothing
 #   ATTENDANT_HOME        state dir (default ~/.egregore/attendant)
 #   CLAUDE_PROJECTS_DIR   transcript root (default ~/.claude/projects)
@@ -41,8 +38,6 @@ fi
 CONFIG="$MAIN_DIR/egregore.json"
 MEMORY_DIR="${EGREGORE_MEMORY_DIR:-$MAIN_DIR/memory}"
 STALE_MIN="${ATTENDANT_STALE_MIN:-12}"
-MAX_AGE_MIN=1440                 # ignore transcripts older than 24h
-RIPCORD_MIN_BYTES=20000          # skip trivial sessions
 DRY_RUN="${ATTENDANT_DRY_RUN:-0}"
 CLAUDE_PROJECTS="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 
@@ -52,7 +47,6 @@ STATE_DIR="${ATTENDANT_HOME:-$HOME/.egregore/attendant}"
 PIDFILE="$STATE_DIR/$KEY.pid"
 VERSIONFILE="$STATE_DIR/$KEY.version"
 LOGFILE="$STATE_DIR/$KEY.log"
-JOURNAL="$STATE_DIR/$KEY.journal"
 mkdir -p "$STATE_DIR"
 
 # Munged project key, same rule Claude Code uses for ~/.claude/projects dirs.
@@ -86,9 +80,8 @@ _trigger_auto_thread() {
   [ -f "$runner" ] || return 0
   [ "$DRY_RUN" = "1" ] && dry_arg="--dry-run"
 
-  # Projection is downstream of capture. Run it detached so a slow or broken
-  # renderer can never delay ripcord persistence or branch auto-save. The
-  # runner's atomic lock coalesces ripcord + end-of-sweep triggers.
+  # Run the projection detached so a slow or broken renderer can never delay
+  # the sweep. The runner's atomic lock coalesces overlapping triggers.
   (
     if ! bash "$runner" \
       --repo-dir "$MAIN_DIR" \
@@ -97,23 +90,6 @@ _trigger_auto_thread() {
       log "auto-thread failed ($reason)"
     fi
   ) >> "$LOGFILE" 2>&1 &
-}
-
-# Personal off switch for ambient capture. ripcord_enabled=false disables BOTH
-# ripcord notes and auto-push of dirty worktrees — a user who opts out of
-# ambient capture must not find silent commits either. The attendant's other
-# duties (graph cache, context seed, handoff lifecycle) are unaffected.
-# NOTE: jq's `//` treats false as empty (the auto_update:false gotcha), so the
-# test compares the raw value, never `.key // true`.
-_capture_enabled() {
-  [ "$(jq -r '.ripcord_enabled' "$MAIN_DIR/.egregore-state.json" 2>/dev/null)" != "false" ]
-}
-
-_author() {
-  local a
-  a=$(jq -r '.github_username // empty' "$MAIN_DIR/.egregore-state.json" 2>/dev/null)
-  [ -z "$a" ] && a=$(git -C "$MAIN_DIR" config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
-  echo "${a:-unknown}"
 }
 
 # --- Session liveness ------------------------------------------------------
@@ -130,264 +106,6 @@ _active_session() {
     fi
   done
   return 1
-}
-
-_stale_transcripts() {
-  local d
-  for d in $(_transcript_dirs); do
-    find "$d" -maxdepth 1 -name '*.jsonl' -mmin "+$STALE_MIN" -mmin "-$MAX_AGE_MIN" -size "+${RIPCORD_MIN_BYTES}c" 2>/dev/null
-  done
-}
-
-# --- Ripcord ---------------------------------------------------------------
-
-_last_prompts() {
-  # Last few human prompts from a transcript, cleaned of harness noise.
-  jq -r 'select(.type=="user") | .message.content
-         | if type=="string" then .
-           else ([.[]? | select(.type?=="text") | .text] | join(" ")) end' "$1" 2>/dev/null \
-    | grep -v -e '^\s*$' -e 'system-reminder' -e '<command-' -e 'tool_use_error' -e '^Caveat:' -e '<task-notification' \
-              -e '<local-command-caveat' -e '</local-command-caveat>' -e '<bash-input>' -e '<bash-stdout>' -e '<bash-stderr>' \
-    | tail -5 | cut -c1-300
-}
-
-_slugify() {
-  printf '%s' "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed 's/<[^>]*>/ /g; s/[`*_#|:;,.!?()[\]{}"'"'"']/ /g; s/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' \
-    | cut -c1-72 \
-    | sed 's/-$//'
-}
-
-_prompt_topic_slug() {
-  local prompts="$1"
-  local line clean lower slug score best_score=0 best_slug=""
-
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    lower=$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')
-    case "$lower" in
-      start|*request\ interrupted*|*system-reminder*|*local-command-caveat*|*bash-input*|*bash-stdout*|*bash-stderr*|*tool_use_error*)
-        continue
-        ;;
-    esac
-
-    clean=$(printf '%s' "$line" | sed 's/^>[[:space:]]*//; s/<[^>]*>/ /g; s/[|`*_#]/ /g')
-    slug=$(_slugify "$clean")
-    [ -z "$slug" ] && continue
-    [ "${#slug}" -lt 8 ] && continue
-
-    score=${#slug}
-    case "$slug" in
-      *handoff*|*emissary*|*harvest*|*ssh*|*pr*|*review*|*egregore*|*invite*|*deploy*|*release*)
-        score=$((score + 20))
-        ;;
-    esac
-
-    if [ "$score" -gt "$best_score" ]; then
-      best_score="$score"
-      best_slug="$slug"
-    fi
-  done <<EOF
-$prompts
-EOF
-
-  printf '%s\n' "$best_slug"
-}
-
-_branch_topic_slug() {
-  local gitsum="$1"
-  local author="$2"
-  local branch rest score best_score=0 best_slug=""
-
-  while IFS= read -r branch; do
-    [ -z "$branch" ] && continue
-    case "$branch" in
-      develop|main|master) continue ;;
-      dev/"$author"/*) rest="${branch#dev/$author/}"; score=90 ;;
-      feature/*|bugfix/*|hotfix/*) rest="${branch#*/}"; score=80 ;;
-      dev/*/*) rest="${branch#dev/}"; rest="${rest#*/}"; score=60 ;;
-      */*) rest="${branch#*/}"; score=50 ;;
-      *) rest="$branch"; score=40 ;;
-    esac
-
-    rest=$(_slugify "$rest")
-    [ -z "$rest" ] && continue
-    if [ "$score" -gt "$best_score" ]; then
-      best_score="$score"
-      best_slug="$rest"
-    fi
-  done <<EOF
-$(printf '%s\n' "$gitsum" | awk -F'`' '/^- `/{print $2}')
-EOF
-
-  printf '%s\n' "$best_slug"
-}
-
-_ripcord_topic_slug() {
-  local prompts="$1"
-  local gitsum="$2"
-  local author="$3"
-  local slug
-
-  slug=$(_prompt_topic_slug "$prompts")
-  [ -z "$slug" ] && slug=$(_branch_topic_slug "$gitsum" "$author")
-  [ -z "$slug" ] && slug="session"
-  printf '%s\n' "$slug"
-}
-
-_topic_from_slug() {
-  printf '%s\n' "$1" | tr '-' ' '
-}
-
-_git_summary() {
-  # Branch + dirty/unpushed state for the main checkout and every worktree.
-  local wt branch dirty ahead
-  git -C "$MAIN_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | while read -r wt; do
-    branch=$(git -C "$wt" branch --show-current 2>/dev/null)
-    [ -z "$branch" ] && continue
-    dirty=$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-    ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null || echo "?")
-    if [ "$dirty" != "0" ] || { [ "$ahead" != "0" ] && [ "$ahead" != "?" ]; }; then
-      echo "- \`$branch\` — $dirty uncommitted, $ahead unpushed ($(basename "$wt"))"
-      git -C "$wt" status --porcelain 2>/dev/null | head -8 | sed 's/^/    /'
-    fi
-  done
-}
-
-_ripcord() {
-  local transcript="$1" base author date_ym date_d slug topic file prompts gitsum
-  base=$(basename "$transcript" .jsonl)
-
-  _capture_enabled || return 0
-
-  grep -q "$base" "$JOURNAL" 2>/dev/null && return 0
-  # Session already ended with ceremony? Then the attendant has no business
-  # here. Scan only the tail — a session that merely *read* the /handoff or
-  # /save skill text mid-way would otherwise false-positive.
-  if tail -c 300000 "$transcript" 2>/dev/null | grep -q -e 'handoff-run.sh' -e 'wraps/'; then
-    echo "ripcord-skip $base (explicit handoff/wrap)" >> "$JOURNAL"
-    return 0
-  fi
-
-  author=$(_author)
-  prompts=$(_last_prompts "$transcript")
-  gitsum=$(_git_summary)
-
-  # Nothing on disk and nothing said — not worth a handoff.
-  if [ -z "$gitsum" ] && [ -z "$prompts" ]; then
-    echo "ripcord-skip $base (no work found)" >> "$JOURNAL"
-    return 0
-  fi
-
-  slug=$(_ripcord_topic_slug "$prompts" "$gitsum" "$author")
-  topic=$(_topic_from_slug "$slug")
-
-  date_ym=$(date '+%Y-%m'); date_d=$(date '+%d')
-  file="$MEMORY_DIR/handoffs/$date_ym/${date_d}-${author}-ripcord-${slug}.md"
-
-  if [ "$DRY_RUN" = "1" ]; then
-    log "DRY ripcord → $file"
-    _trigger_auto_thread "ripcord"
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$file")"
-  {
-    echo "---"
-    echo "date: $(date '+%Y-%m-%d')"
-    echo "author: $author"
-    echo "to: $author"
-    echo "kind: ripcord"
-    echo "status: draft"
-    echo "topic: $topic"
-    echo "---"
-    echo ""
-    echo "# Ripcord: $topic"
-    echo ""
-    echo "Automatic capture — this session ended without an explicit handoff."
-    echo "Assembled by the attendant from the flight recorder (transcript + git state)."
-    echo ""
-    if [ -n "$gitsum" ]; then
-      echo "## Where the work lives"
-      echo ""
-      echo "$gitsum"
-      echo ""
-    fi
-    if [ -n "$prompts" ]; then
-      echo "## Last things the user asked for"
-      echo ""
-      echo "$prompts" | sed 's/^/> /'
-      echo ""
-    fi
-    echo "## Pick it up"
-    echo ""
-    echo "Check out the branch above and run \`/activity\` for surrounding context."
-    echo "Session transcript id: \`$base\` ($(date -r "$transcript" '+%Y-%m-%d %H:%M' 2>/dev/null))"
-  } > "$file"
-
-  # Commit + push memory (retry for concurrent pushers; tolerate no remote).
-  local rel="${file#"$MEMORY_DIR"/}"
-  git -C "$MEMORY_DIR" add "$rel" 2>/dev/null
-  git -C "$MEMORY_DIR" commit -q -m "Ripcord: auto-handoff for $author ($slug)" 2>/dev/null
-  if git -C "$MEMORY_DIR" remote get-url origin >/dev/null 2>&1; then
-    local i
-    for i in 1 2 3; do
-      git -C "$MEMORY_DIR" pull --rebase origin main --quiet 2>/dev/null && \
-        git -C "$MEMORY_DIR" push origin main --quiet 2>/dev/null && break
-      sleep 2
-    done
-  fi
-  bash "$MAIN_DIR/bin/index-handoff.sh" "$rel" >/dev/null 2>&1 || true
-
-  echo "ripcord $base $rel" >> "$JOURNAL"
-  log "ripcord → memory/$rel"
-  _trigger_auto_thread "ripcord"
-}
-
-# --- Auto-push -------------------------------------------------------------
-
-_auto_push() {
-  _capture_enabled || return 0
-  local wt branch dirty ahead upstream
-  git -C "$MAIN_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | while read -r wt; do
-    branch=$(git -C "$wt" branch --show-current 2>/dev/null)
-    case "$branch" in dev/*|feature/*|bugfix/*) ;; *) continue ;; esac
-    # Mid-rebase/merge — never touch.
-    local gd; gd=$(git -C "$wt" rev-parse --git-dir 2>/dev/null)
-    { [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ] || [ -f "$gd/MERGE_HEAD" ]; } && continue
-
-    dirty=$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-    # Only act on work that has itself gone quiet (nothing modified recently).
-    if [ "$dirty" != "0" ]; then
-      local fresh
-      fresh=$(git -C "$wt" status --porcelain 2>/dev/null | sed 's/^...//' | head -50 | while read -r f; do
-        find "$wt/$f" -mmin "-$STALE_MIN" 2>/dev/null | head -1
-      done | head -1)
-      [ -n "$fresh" ] && continue
-      if [ "$DRY_RUN" = "1" ]; then log "DRY auto-commit $branch ($dirty files, $wt)"; else
-        git -C "$wt" add -A 2>/dev/null
-        git -C "$wt" commit -q -m "chore(attendant): ripcord auto-save
-
-Uncommitted work captured after the session went quiet.
-
-Co-Authored-By: Egregore Attendant <noreply@egregore.xyz>" 2>/dev/null
-        log "auto-commit $branch ($dirty files)"
-      fi
-    fi
-
-    upstream=$(git -C "$wt" rev-parse --abbrev-ref '@{u}' 2>/dev/null || true)
-    if [ -z "$upstream" ]; then
-      ahead=$(git -C "$wt" rev-list --count origin/develop..HEAD 2>/dev/null || echo 0)
-    else
-      ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
-    fi
-    if [ "${ahead:-0}" != "0" ]; then
-      if [ "$DRY_RUN" = "1" ]; then log "DRY auto-push $branch ($ahead commits)"; else
-        git -C "$wt" push -u origin "$branch" --quiet 2>/dev/null && log "auto-push $branch ($ahead commits)"
-      fi
-    fi
-  done
 }
 
 # --- Warm: pre-pay the launch path -------------------------------------------
@@ -594,11 +312,6 @@ cmd_sweep() {
     log "sweep: session active — standing by"
     return 0
   fi
-  local t
-  for t in $(_stale_transcripts); do
-    _ripcord "$t"
-  done
-  _auto_push
   _trigger_auto_thread "sweep"
 }
 
@@ -632,7 +345,7 @@ cmd_ensure() {
   fi
   # Atomic spawn gate: the pidfile check above is check-then-spawn, so two
   # concurrent cold starts could both reach here and launch two daemons that
-  # overlap for a full cycle (lifecycle jobs, ripcord, auto-push). mkdir is
+  # overlap for a full cycle (lifecycle jobs, warm, projection). mkdir is
   # the portable atomic primitive; a crashed spawner's stale lock breaks
   # after 5 minutes. Losing the race means someone else is spawning — done.
   local _spawn_lock="$STATE_DIR/$KEY.spawn-lock"

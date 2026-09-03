@@ -48,7 +48,10 @@ git -C "$REPO_ROOT" fetch origin "$BASE_BRANCH" --quiet 2>/dev/null || true
 
 # --- Create branch (idempotent — skip if exists) ---
 if ! git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$BRANCH" 2>/dev/null; then
-  git -C "$REPO_ROOT" branch "$BRANCH" "origin/$BASE_BRANCH" >/dev/null 2>&1 || {
+  # A task branch starts at the integration branch but must never track it.
+  # Otherwise `git push` can target origin/$BASE_BRANCH (especially when the
+  # user's push.default is `upstream`) before the first explicit task push.
+  git -C "$REPO_ROOT" branch --no-track "$BRANCH" "origin/$BASE_BRANCH" >/dev/null 2>&1 || {
     echo "Error: failed to create branch $BRANCH" >&2
     exit 1
   }

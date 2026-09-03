@@ -135,7 +135,7 @@ if [ -z "$CURRENT_BRANCH" ] || [ "$CURRENT_BRANCH" = "$BASE_BRANCH" ] \
   # hash from the autosave sweep) — same-name pushes wedge on non-FF.
   NEW_BRANCH="dev/${AUTHOR}/${KIND}-${SLUG_DATE}${BRANCH_SUFFIX:+-$BRANCH_SUFFIX}"
   git fetch origin "$BASE_BRANCH" --quiet 2>/dev/null || true
-  git checkout -b "$NEW_BRANCH" "$BASE_REF" --quiet 2>/dev/null || \
+  git checkout --no-track -b "$NEW_BRANCH" "$BASE_REF" --quiet 2>/dev/null || \
     git checkout "$NEW_BRANCH" --quiet 2>/dev/null || exit 0
   CURRENT_BRANCH="$NEW_BRANCH"
 fi

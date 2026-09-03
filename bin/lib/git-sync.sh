@@ -32,6 +32,22 @@ if [ -z "${BASE_BRANCH:-}" ]; then
   fi
 fi
 
+# Migrate task branches created by older Egregore versions. `git branch
+# <task> origin/<base>` implicitly made the task branch track the protected
+# integration branch, so a bare push could target it when push.default was
+# `upstream`. Task branches remain unpublished until the explicit save/push
+# flow creates their same-name remote and sets that as upstream.
+_CURRENT_TASK_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+case "$_CURRENT_TASK_BRANCH" in
+  dev/*|feature/*|bugfix/*)
+    _CURRENT_TASK_UPSTREAM="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+    if [ "$_CURRENT_TASK_UPSTREAM" = "origin/$BASE_BRANCH" ]; then
+      git branch --unset-upstream "$_CURRENT_TASK_BRANCH" >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+unset _CURRENT_TASK_BRANCH _CURRENT_TASK_UPSTREAM
+
 # --- Ensure pull.rebase is set (prevents "divergent branches" errors) ---
 git config pull.rebase true 2>/dev/null || true
 

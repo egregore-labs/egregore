@@ -13,7 +13,7 @@
 #   - Telemetry emit
 #   - First session welcome
 #
-# Inputs:  SCRIPT_DIR, STATE_FILE, CONFIG, CTX_DIR, BRANCH, COMMITS_AHEAD,
+# Inputs:  SCRIPT_DIR, STATE_FILE, CONFIG, CTX_DIR, BRANCH, BASE_BRANCH, COMMITS_AHEAD,
 #          AUTHOR, LOCAL_MODE, MEMORY_SYNCED, SAVED_BRANCH,
 #          HEALTH_*, FRAMEWORK_VERSION, TIME_OF_DAY, EGREGORE_SESSION_ID,
 #          FIRST_SESSION, DISPLAY_NAME_STATE, DASHBOARD_URL
@@ -515,5 +515,5 @@ else
   echo ""
   echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
   echo ""
-  echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin develop --quiet && git checkout -b dev/{author}/{topic-slug} origin/develop. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
+  echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin $BASE_BRANCH --quiet && git checkout --no-track -b dev/{author}/{topic-slug} origin/$BASE_BRANCH. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
 fi

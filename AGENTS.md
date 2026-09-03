@@ -148,7 +148,7 @@ The integration branch is `develop` unless top-level `egregore.json.base_branch`
 
 **Fallback:** If `bin/agent.sh branch` fails, resolve `{base}` with
 `_get_base_branch`, then use
-`git checkout -b dev/{author}/{slug} origin/{base}`.
+`git checkout --no-track -b dev/{author}/{slug} origin/{base}`.
 
 4. Update graph (fire-and-forget): `bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &`
 
@@ -214,9 +214,11 @@ The `.codex/hooks/branch-guard.js` PreToolUse hook (launcher `--enable hooks`) p
   Wait for the reply, then branch.
 - **The user explicitly requested the protected branch** → that request is consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. Never create the marker merely to silence the hook.
 
-Memory, managed-repo, and runtime-state writes bypass the project guard — if one triggers it, correct the target/context instead of asking for consent.
+If this Codex build does not support hooks, keep the same rule.
 
-If this Codex build does not support hooks, follow the same discipline as a standing instruction: never write or commit on the configured base, develop, main, or master.
+**History:** Do not merge, cherry-pick, or rebase another task merely to read
+it; use `gh pr view/diff`, `git show`, or a temporary worktree. Integrate
+only for dependencies. Deletion needs no rewrite unless purging secrets.
 
 ### Onboarding exception
 

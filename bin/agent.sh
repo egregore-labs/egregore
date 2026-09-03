@@ -187,6 +187,15 @@ base_ref() {
   fi
 }
 
+clear_base_upstream() {
+  local repo="$1" branch="$2" base="$3" upstream=""
+  case "$branch" in dev/*|feature/*|bugfix/*) ;; *) return 0 ;; esac
+  upstream="$(git -C "$repo" rev-parse --abbrev-ref "${branch}@{upstream}" 2>/dev/null || true)"
+  if [ "$upstream" = "$base" ]; then
+    git -C "$repo" branch --unset-upstream "$branch" >/dev/null 2>&1 || true
+  fi
+}
+
 cmd_protocol() {
   cat <<'EOF'
 Egregore portable agent protocol
@@ -306,8 +315,9 @@ cmd_branch() {
     if git -C "$SCRIPT_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
       git -C "$SCRIPT_DIR" checkout "$branch" --quiet
     else
-      git -C "$SCRIPT_DIR" checkout -b "$branch" "$base" --quiet
+      git -C "$SCRIPT_DIR" checkout --no-track -b "$branch" "$base" --quiet
     fi
+    clear_base_upstream "$SCRIPT_DIR" "$branch" "$base"
     egregore_link_shared_state "$SCRIPT_DIR" "$MAIN_PROJECT_DIR" >/dev/null 2>/dev/null || true
     echo "branch: $branch"
     echo "worktree: $SCRIPT_DIR"
@@ -323,8 +333,9 @@ cmd_branch() {
   fi
 
   if ! git -C "$MAIN_PROJECT_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    git -C "$MAIN_PROJECT_DIR" branch "$branch" "$base" >/dev/null 2>&1 || die "failed to create branch $branch"
+    git -C "$MAIN_PROJECT_DIR" branch --no-track "$branch" "$base" >/dev/null 2>&1 || die "failed to create branch $branch"
   fi
+  clear_base_upstream "$MAIN_PROJECT_DIR" "$branch" "$base"
 
   wt_path="$MAIN_PROJECT_DIR/.claude/worktrees/$slug"
   if [ -e "$wt_path" ]; then
@@ -356,8 +367,9 @@ ensure_working_branch() {
   if git -C "$SCRIPT_DIR" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
     git -C "$SCRIPT_DIR" checkout "$branch" --quiet || die "failed to checkout $branch"
   else
-    git -C "$SCRIPT_DIR" checkout -b "$branch" "$base" --quiet || die "failed to create $branch"
+    git -C "$SCRIPT_DIR" checkout --no-track -b "$branch" "$base" --quiet || die "failed to create $branch"
   fi
+  clear_base_upstream "$SCRIPT_DIR" "$branch" "$base"
   echo "$branch"
 }
 

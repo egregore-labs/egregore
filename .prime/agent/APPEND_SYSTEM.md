@@ -70,7 +70,7 @@ The integration branch is `develop` unless top-level `egregore.json.base_branch`
 
 **Fallback:** If `bin/agent.sh branch` fails, resolve `{base}` with
 `_get_base_branch`, then use
-`git checkout -b dev/{author}/{slug} origin/{base}`.
+`git checkout --no-track -b dev/{author}/{slug} origin/{base}`.
 
 4. Update graph (fire-and-forget): `bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &`
 
@@ -136,9 +136,11 @@ The `.prime/agent/extensions/egregore.ts` `tool_call` gate (loaded from the proj
   Wait for the reply, then branch.
 - **The user explicitly requested the protected branch** → that request is consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. Never create the marker merely to silence the hook.
 
-Memory, managed-repo, and runtime-state writes bypass the project guard — if one triggers it, correct the target/context instead of asking for consent.
+If Prime Agent project extensions are disabled, keep the same rule.
 
-If Prime Agent project extensions are disabled, follow the same discipline as a standing instruction: never write or commit on the configured base, develop, main, or master.
+**History:** Do not merge, cherry-pick, or rebase another task merely to read
+it; use `gh pr view/diff`, `git show`, or a temporary worktree. Integrate
+only for dependencies. Deletion needs no rewrite unless purging secrets.
 
 ### Onboarding exception
 
@@ -332,7 +334,7 @@ Read the selected skill's `SKILL.md` completely before acting. Codex wording ins
 
 The `egregore` Python-backed skill exposes the mechanics as kernel functions — `import egregore`, then `egregore.search(query)`, `egregore.activity()`, `egregore.handoff(to, topic, body)`, `egregore.save(message, topic)`, `egregore.branch(topic)`, `egregore.notify_plan(recipient, message)`. Prefer these over re-deriving `bin/` CLI usage by reading scripts. `notify_plan` is proposal-only: approval and dispatch always pass through the explicit human Send / Edit / Cancel checkpoint.
 
-"Get the latest changes" inside a session means `/reload` — it re-reads instructions, context files, skills, and extensions from disk. Never `git pull`, `git reset`, or `git checkout` the working branch to pick up updates. When pivoting topics inside a worktree that carries unmerged branch work, create the new branch from the current HEAD, not `origin/develop` — branching from origin/develop in such a worktree removes the unmerged files from disk.
+"Get the latest changes" inside a session means `/reload` — it re-reads instructions, context files, skills, and extensions from disk. Never `git pull`, `git reset`, or `git checkout` the working branch to pick up updates. When pivoting topics inside a worktree that carries unmerged branch work, create the new branch from the current HEAD, not `origin/{base}` — branching from the configured base in such a worktree removes the unmerged files from disk.
 
 Kernel shell escapes can be time-capped by the harness. Egregore `bin/` scripts that sync git state or query the connected graph legitimately run 10–120 seconds: run them with a generous timeout (a `%%bash` cell, or the longest limit the harness exposes). If a command dies suspiciously fast (~5s) with partial output, treat it as a timeout — rerun once with a longer limit or render the workflow's designed one-line fallback. Never debug data plumbing inside a product workflow. Connected mode works normally here: graph reads and `bin/search.sh` enrichment use the instance's configured credentials, and when graph data is degraded say so in one plain line rather than narrating connectivity theories.
 
