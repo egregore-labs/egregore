@@ -28,17 +28,6 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STATE_FILE="$SCRIPT_DIR/.egregore-state.json"
 
-# The attendant runs against the MAIN checkout and reads its state file, so
-# ambient-capture settings must be written there — a worktree keeps its own
-# copy, and writing the flag into it would silently do nothing.
-MAIN_STATE_DIR="$SCRIPT_DIR"
-if [ -f "$SCRIPT_DIR/.git" ]; then
-  _WT_GITDIR=$(sed 's/^gitdir: //' "$SCRIPT_DIR/.git" 2>/dev/null || true)
-  [ -n "$_WT_GITDIR" ] && MAIN_STATE_DIR=$(cd "$_WT_GITDIR/../../.." 2>/dev/null && pwd || echo "$SCRIPT_DIR")
-fi
-MAIN_STATE_FILE="$MAIN_STATE_DIR/.egregore-state.json"
-[ -f "$MAIN_STATE_FILE" ] || MAIN_STATE_FILE="$STATE_FILE"
-
 [ -f "$STATE_FILE" ] || echo '{}' > "$STATE_FILE"
 
 # NB: jq's `//` swallows false — status would show "on" for enabled:false.
@@ -53,11 +42,6 @@ set_key() { # key value(json-encoded)
   jq ".$1 = $2" "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
-_set_main() { # key value(json-encoded) — writes where the attendant reads
-  jq ".$1 = $2" "$MAIN_STATE_FILE" > "$MAIN_STATE_FILE.tmp" \
-    && mv "$MAIN_STATE_FILE.tmp" "$MAIN_STATE_FILE"
-}
-
 status() {
   local enabled scope publish
   enabled=$(get '.autosave_enabled' 'false')
@@ -66,7 +50,6 @@ status() {
   echo "autosave: $([ "$enabled" = "true" ] && echo on || echo "off (opt-in — 'autosave on' to join the experiment)")"
   echo "scope:    $scope  (all = handoffs + artifacts + docs · handoffs = memory repo only)"
   echo "publish:  $publish  (gate = PRs wait for your merge · auto = merge to develop automatically)"
-  echo "ripcord:  $(jq -r 'if (.ripcord_enabled != null) then (.ripcord_enabled|tostring) else "true" end' "$MAIN_STATE_FILE" 2>/dev/null || echo true)  (crash-recovery notes + branch auto-push when a session dies without /wrap)"
 }
 
 case "${1:-status}" in
@@ -77,15 +60,6 @@ case "${1:-status}" in
     case "${2:-}" in
       all|handoffs) set_key autosave_scope "\"$2\"" && echo "scope: $2" ;;
       *) echo "usage: autosave.sh scope all|handoffs" >&2; exit 2 ;;
-    esac ;;
-  ripcord)
-    # Ambient crash-recovery capture (the attendant): ripcord notes AND
-    # auto-push of dirty task branches. Separate from the autosave
-    # experiment above — this one defaults ON.
-    case "${2:-}" in
-      on)  _set_main ripcord_enabled true  && echo "ripcord: on — dead sessions leave a recovery note" ;;
-      off) _set_main ripcord_enabled false && echo "ripcord: off — no ambient notes, no branch auto-push" ;;
-      *) echo "usage: autosave.sh ripcord on|off" >&2; exit 2 ;;
     esac ;;
   publish)
     case "${2:-}" in
@@ -108,5 +82,5 @@ case "${1:-status}" in
         echo "✗ PR #$n did not merge (conflict with develop?) — it stays open"
       fi
     done ;;
-  *) echo "usage: autosave.sh [status|on|off|scope all|handoffs|publish gate|auto|merge|ripcord on|off]" >&2; exit 2 ;;
+  *) echo "usage: autosave.sh [status|on|off|scope all|handoffs|publish gate|auto|merge]" >&2; exit 2 ;;
 esac

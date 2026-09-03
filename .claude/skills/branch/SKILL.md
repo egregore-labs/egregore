@@ -28,7 +28,11 @@ BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/b
 
 The WorktreeCreate hook handles everything: fetches the configured base branch, creates the branch, creates the worktree, sets up symlinks.
 
-**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout -b {branch-name} "origin/$BASE_BRANCH"`
+**Fallback:** If `EnterWorktree` fails, fall back to: `git checkout --no-track -b {branch-name} "origin/$BASE_BRANCH"`
+
+The task branch must not inherit `origin/$BASE_BRANCH` as its upstream. Its
+first push uses `git push -u origin "$BRANCH"`, which creates and tracks the
+same-name remote task branch.
 
 ## Deriving the topic slug
 
@@ -62,7 +66,7 @@ If already in a worktree and the user needs a new branch (e.g., after their PR w
 2. Create the new branch and checkout within the existing worktree:
    ```bash
    git fetch origin "$BASE_BRANCH" --quiet
-   git checkout -b dev/$AUTHOR/$NEW_SLUG "origin/$BASE_BRANCH"
+   git checkout --no-track -b dev/$AUTHOR/$NEW_SLUG "origin/$BASE_BRANCH"
    ```
 3. The worktree directory stays the same — only the branch changes
 4. Confirm: `Switched to dev/$AUTHOR/$NEW_SLUG (same worktree).`
@@ -121,7 +125,7 @@ BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/b
   { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
 REPO_DIR="$(cd .. && pwd)/$REPO"
 git -C "$REPO_DIR" fetch origin "$BASE_BRANCH" --quiet
-git -C "$REPO_DIR" checkout -b dev/$AUTHOR/$TOPIC_SLUG "origin/$BASE_BRANCH"
+git -C "$REPO_DIR" checkout --no-track -b dev/$AUTHOR/$TOPIC_SLUG "origin/$BASE_BRANCH"
 ```
 
 Use `git -C` with absolute paths — never `cd` into the repo.
@@ -132,7 +136,7 @@ Use `git -C` with absolute paths — never `cd` into the repo.
 Creating branch in frontend...
 
   git -C ../frontend fetch origin main --quiet
-  git -C ../frontend checkout -b dev/alice/auth-flow origin/main
+  git -C ../frontend checkout --no-track -b dev/alice/auth-flow origin/main
   ✓ Created dev/alice/auth-flow in frontend (from main)
 
 Ready to work. /save when done.

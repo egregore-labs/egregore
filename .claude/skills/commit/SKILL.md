@@ -39,7 +39,7 @@ Message (optional): $ARGUMENTS
 
 Resolve `BASE_BRANCH` through `bin/lib/config.sh` → `_get_base_branch` (pass the managed repo name when applicable). Check `git branch --show-current`. If on a protected branch (`$BASE_BRANCH`, `develop`, `main`, or `master`):
   → Use the resolved base branch (default `"develop"`)
-  → Create a working branch: `git fetch origin $BASE_BRANCH --quiet && git checkout -b dev/{author}/{topic-slug} origin/$BASE_BRANCH`
+  → Create a working branch: `git fetch origin $BASE_BRANCH --quiet && git checkout --no-track -b dev/{author}/{topic-slug} origin/$BASE_BRANCH`
   → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
   → Then proceed with the commit.
 

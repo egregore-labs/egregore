@@ -82,7 +82,7 @@ CURRENT_BRANCH=$(git branch --show-current)
 
 **Case A: On a protected branch (develop/main)** — the user should not be here. Create a working branch:
 1. Derive a topic slug from conversation context or recent commits
-2. `git fetch origin develop --quiet && git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop`
+2. `git fetch origin develop --quiet && git checkout --no-track -b dev/$AUTHOR/$TOPIC_SLUG origin/develop`
 3. Continue with save
 
 **Case B: Remote branch gone (PR was merged)** — detect with:
@@ -139,7 +139,7 @@ If the remote branch is gone:
      - If no clear topic, fall back to date: `dev/$AUTHOR/$(date +%Y-%m-%d)`
      ```bash
      git fetch origin develop --quiet
-     git checkout -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
+     git checkout --no-track -b dev/$AUTHOR/$TOPIC_SLUG origin/develop
      ```
    - Commit all changes to working branch with `$COMMIT_MESSAGE` (see definition above)
    - **Rebase onto latest develop before pushing** (prevents stale overwrites):

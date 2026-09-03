@@ -3,14 +3,16 @@ set -euo pipefail
 
 # settings.sh — deterministic config verbs for an Egregore instance.
 #
-# Edits egregore.json atomically. No agent, no network, no session. Idempotent:
-# re-adding an existing item is a no-op success; removing a missing one is too.
+# Edits egregore.json atomically. No agent, no session. Idempotent: re-adding
+# an existing item is a no-op success; removing a missing one is too. Switching
+# to staged releases is the one networked verb: it creates origin/develop first.
 # This is the deterministic core the launcher settings screen (and slash
 # commands) call — the reliability lives here, the surfaces are thin callers.
 #
 # Usage:
 #   settings.sh hosting status|on|off
 #   settings.sh relay status|on|off
+#   settings.sh workflow status|simple|staged
 #   settings.sh repo list | add <name> [description] | remove <name>
 #   settings.sh admin list | add <github-handle> | remove <github-handle>
 #   settings.sh dump                 # full settings snapshot as JSON (for the launcher)
@@ -53,6 +55,7 @@ settings.sh — Egregore instance settings
 
   settings.sh hosting status|on|off
   settings.sh relay  status|on|off
+  settings.sh workflow status|simple|staged
   settings.sh repo   list | add <name> [description] | remove <name>
   settings.sh admin  list | add <github-handle> | remove <github-handle>
   settings.sh people list | add <github-handle> | remove <github-handle>
@@ -111,6 +114,54 @@ cmd_relay() {
       _save '.features.public_relay = false'
       echo "Public share relay: OFF — without an org API key, nothing uploads anywhere" ;;
     *) _die "usage: settings.sh relay status|on|off" 1 ;;
+  esac
+}
+
+cmd_workflow() {
+  local action="${1:-status}"
+  local base
+  base="$(jq -r 'if has("base_branch") then .base_branch else "develop" end' "$CONFIG" 2>/dev/null)"
+  case "$action" in
+    status)
+      local workflow="custom"
+      [ "$base" = "main" ] && workflow="simple"
+      [ "$base" = "develop" ] && workflow="staged"
+      if [ "$JSON" = 1 ]; then
+        jq -n --arg workflow "$workflow" --arg base_branch "$base" \
+          '{domain:"workflow", workflow:$workflow, base_branch:$base_branch}'
+      elif [ "$workflow" = "simple" ]; then
+        echo "Git workflow: SIMPLE — pull requests target main"
+      elif [ "$workflow" = "staged" ]; then
+        echo "Git workflow: STAGED — pull requests target develop; releases promote to main"
+      else
+        echo "Git workflow: CUSTOM — pull requests target $base"
+      fi
+      ;;
+    simple)
+      if [ "$base" != "main" ]; then
+        git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1 \
+          || _die "cannot switch workflow: $SCRIPT_DIR is not a Git repository" 1
+        git -C "$SCRIPT_DIR" ls-remote --exit-code --heads origin main >/dev/null 2>&1 \
+          || _die "cannot switch workflow: origin/main does not exist or could not be reached" 1
+        _save '.base_branch = "main"'
+      fi
+      echo "Git workflow: SIMPLE — pull requests now target main"
+      ;;
+    staged)
+      if [ "$base" != "develop" ]; then
+        git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1 \
+          || _die "cannot switch workflow: $SCRIPT_DIR is not a Git repository" 1
+        bash "$SCRIPT_DIR/bin/lib/ensure-develop.sh" "$SCRIPT_DIR" >/dev/null \
+          || _die "could not create develop; workflow is unchanged" 1
+        git -C "$SCRIPT_DIR" ls-remote --exit-code --heads origin develop >/dev/null 2>&1 \
+          || _die "could not verify origin/develop; workflow is unchanged" 1
+        _save '.base_branch = "develop"'
+      elif ! jq -e 'has("base_branch")' "$CONFIG" >/dev/null 2>&1; then
+        _save '.base_branch = "develop"'
+      fi
+      echo "Git workflow: STAGED — pull requests now target develop; releases promote to main"
+      ;;
+    *) _die "usage: settings.sh workflow status|simple|staged" 1 ;;
   esac
 }
 
@@ -273,6 +324,13 @@ cmd_dump() {
     slug: .slug,
     hosting: (.features.publishing != false),
     public_relay: (.features.public_relay == true),
+    workflow: (
+      if ((if has("base_branch") then .base_branch else "develop" end) == "main") then "simple"
+      elif ((if has("base_branch") then .base_branch else "develop" end) == "develop") then "staged"
+      else "custom"
+      end
+    ),
+    base_branch: (if has("base_branch") then .base_branch else "develop" end),
     repos: [.repos[]? | if type=="object" then . else {name:.} end],
     admins: (.admins // []),
     people: $people
@@ -295,10 +353,11 @@ DOMAIN="${1:-}"; shift || true
 case "$DOMAIN" in
   hosting) cmd_hosting "$@" ;;
   relay)   cmd_relay "$@" ;;
+  workflow) cmd_workflow "$@" ;;
   repo)    cmd_repo "$@" ;;
   admin)   cmd_admin "$@" ;;
   people)  cmd_people "$@" ;;
   dump)    cmd_dump ;;
   ""|-h|--help|help) usage 0 ;;
-  *) _die "unknown settings domain: '$DOMAIN' (try: hosting, relay, repo, admin, people, dump)" 1 ;;
+  *) _die "unknown settings domain: '$DOMAIN' (try: hosting, relay, workflow, repo, admin, people, dump)" 1 ;;
 esac

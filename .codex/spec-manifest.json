@@ -35,7 +35,7 @@
     {
       "section": "After Greeting — BRANCH ON FIRST RESPONSE",
       "action": "replace",
-      "sourceHash": "b13b81aea8f3",
+      "sourceHash": "3bac01c0a00a",
       "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout bash kept verbatim (pure git); surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained."
     },
     {

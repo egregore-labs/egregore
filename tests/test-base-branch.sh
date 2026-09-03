@@ -163,10 +163,17 @@ else
   bad "agent bridge still assumes develop"
 fi
 
-if grep -q 'origin/\$BASE_BRANCH' "$ROOT/bin/worktree-create.sh"; then
-  ok "worktree creator branches from the configured base"
+if grep -q 'branch --no-track.*origin/\$BASE_BRANCH' "$ROOT/bin/worktree-create.sh"; then
+  ok "worktree creator branches from the configured base without tracking it"
 else
-  bad "worktree creator still assumes origin/develop"
+  bad "worktree creator does not safely detach task branches from the configured base"
+fi
+
+if grep -q 'fetch origin \$BASE_BRANCH' "$ROOT/bin/lib/greeting.sh" &&
+   ! grep -q 'fetch origin develop' "$ROOT/bin/lib/greeting.sh"; then
+  ok "first-session branch guidance uses the configured base"
+else
+  bad "first-session branch guidance still assumes develop"
 fi
 
 if grep -q 'configuredBaseBranch' "$ROOT/.codex/hooks/branch-guard.js" &&

@@ -68,7 +68,7 @@ The integration branch is `develop` unless top-level `egregore.json.base_branch`
 
 **Fallback:** If `bin/agent.sh branch` fails, resolve `{base}` with
 `_get_base_branch`, then use
-`git checkout -b dev/{author}/{slug} origin/{base}`.
+`git checkout --no-track -b dev/{author}/{slug} origin/{base}`.
 
 4. Update graph (fire-and-forget): `bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &`
 
@@ -134,9 +134,11 @@ The `.pi/extensions/egregore.ts` `tool_call` gate (loaded after Pi project trust
   Wait for the reply, then branch.
 - **The user explicitly requested the protected branch** → that request is consent. Record it with `echo '{branch}' > .egregore-branch-consent`, then retry. Never create the marker merely to silence the hook.
 
-Memory, managed-repo, and runtime-state writes bypass the project guard — if one triggers it, correct the target/context instead of asking for consent.
+If Pi project resources are disabled, keep the same rule.
 
-If Pi project resources are disabled, follow the same discipline as a standing instruction: never write or commit on the configured base, develop, main, or master.
+**History:** Do not merge, cherry-pick, or rebase another task merely to read
+it; use `gh pr view/diff`, `git show`, or a temporary worktree. Integrate
+only for dependencies. Deletion needs no rewrite unless purging secrets.
 
 ### Onboarding exception
 

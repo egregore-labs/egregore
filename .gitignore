@@ -83,7 +83,7 @@ supabase/.temp/
 dashboards/
 
 # Scratch space — sessions stage working files here (eval renders, screenshots,
-# living-paper artifacts). Never commit: attendant ripcord auto-saves sweep
+# living-paper artifacts). Never commit: ambient auto-saves sweep
 # untracked files into PRs (see #1080's 2.7MB loom-phase2-evals sweep).
 # Three pre-existing tracked files under tmp/ are unaffected (gitignore
 # doesn't untrack) — evals/handoff-fidelity-v2/DESIGN.md references one.
@@ -94,7 +94,7 @@ tmp/
 test-results/
 
 # Local build artifacts (rendered surfaces, mocks) — never committed.
-# The ripcord auto-save otherwise sweeps them into unrelated PRs.
+# An ambient auto-save would otherwise sweep them into unrelated PRs.
 .build/
 .egregore/activity-data.json
 .egregore/*.log

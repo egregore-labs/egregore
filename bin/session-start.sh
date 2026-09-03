@@ -536,10 +536,10 @@ jq -n \
   > "$BASELINE_FILE" 2>/dev/null || true
 
 # ============================================================
-# 7c. Attendant — ambient capture daemon (fire-and-forget)
+# 7c. Attendant — background daemon (fire-and-forget)
 # ============================================================
-# Watches for sessions that die without ceremony (terminal closed) and
-# pulls the ripcord: auto-handoff + auto-push of stranded dev branches.
+# Keeps the launch path warm (refs, graph cache, context seed), runs the
+# handoff lifecycle job, and triggers the Thread projection when idle.
 # `ensure` is a pidfile check (~ms); the daemon itself runs detached.
 ( bash "$SCRIPT_DIR/bin/attendant.sh" ensure >/dev/null 2>&1 & ) 2>/dev/null
 
