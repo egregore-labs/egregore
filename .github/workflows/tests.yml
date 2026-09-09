@@ -7,6 +7,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  notification-tls-regression:
+    name: Notification TLS regression (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep shell files in LF on Windows
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify jq is available
+        run: jq --version
+      - name: Run local regression fixtures
+        env:
+          BASH_BIN: ${{ runner.os == 'Windows' && 'C:/Program Files/Git/bin/bash.exe' || 'bash' }}
+        run: node --test tests/test-notify-tls.mjs
+
   oss-validation:
     runs-on: ubuntu-latest
     steps:

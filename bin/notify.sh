@@ -45,6 +45,15 @@ die() {
   exit 1
 }
 
+notify_curl() {
+  local status=0
+  curl "$@" || status=$?
+  if [ "$status" -eq 35 ]; then
+    echo "TLS handshake failed (curl 35). If curl --version lists Schannel, check the preceding error for certificate revocation failures; check system time, proxy settings, and access to the certificate's revocation service. This script added no TLS bypass or retry options." >&2
+  fi
+  return "$status"
+}
+
 hash_text() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 | awk '{print $1}'
@@ -199,7 +208,7 @@ plan_connected() {
     die "notification service is not connected"
 
   local response
-  response="$(curl -sS -X POST "${API_URL}/api/notify/plan" \
+  response="$(notify_curl -sS -X POST "${API_URL}/api/notify/plan" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \
@@ -328,7 +337,7 @@ dispatch_connected() {
     local recipient channel
     recipient="$(jq -r '.recipient' "$path")"
     channel="$(jq -r '.channels[0]' "$path")"
-    response="$(curl -sS -X POST "${API_URL}/api/notify/send" \
+    response="$(notify_curl -sS -X POST "${API_URL}/api/notify/send" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "$(jq -nc \
@@ -341,7 +350,7 @@ dispatch_connected() {
   else
     local channels
     channels="$(jq -c '.channels' "$path")"
-    response="$(curl -sS -X POST "${API_URL}/api/notify/group" \
+    response="$(notify_curl -sS -X POST "${API_URL}/api/notify/group" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "$(jq -nc \
@@ -375,7 +384,7 @@ dispatch_local_telegram() {
       group_link=""
       ;;
   esac
-  curl -sS -X POST "${RELAY_URL}/api/notify/relay" \
+  notify_curl -sS -X POST "${RELAY_URL}/api/notify/relay" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \
       --arg chat_id "$chat_id" \
@@ -397,7 +406,7 @@ dispatch_local_slack() {
     return 0
   fi
   local response
-  response="$(curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+  response="$(notify_curl -sS -X POST "https://slack.com/api/chat.postMessage" \
     -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
     -H "Content-Type: application/json; charset=utf-8" \
     -d "$(jq -nc \
@@ -553,7 +562,7 @@ test_connection() {
   if [ "$MODE" = "connected" ]; then
     [ -n "$API_URL" ] && [ -n "$API_KEY" ] ||
       die "notification service is not connected"
-    curl -sS -X GET "${API_URL}/api/notify/test" \
+    notify_curl -sS -X GET "${API_URL}/api/notify/test" \
       -H "Authorization: Bearer $API_KEY" \
       --max-time 10
   elif [ "$MODE" = "local" ]; then
