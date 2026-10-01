@@ -1,0 +1,39 @@
+{
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "publicUrl": "https://workshop-gateway.example/v1",
+    "registryPath": "../runtime/registry.json",
+    "auditLogPath": "../runtime/audit.jsonl",
+    "requestBodyBytes": 2097152
+  },
+  "workshop": {
+    "runtimeRoot": "../runtime/participants",
+    "exportRoot": "../exports",
+    "receiptsRoot": "../receipts",
+    "participantCount": 4,
+    "tokenLifetimeHours": 168,
+    "model": "replace-with-a-model-supported-by-both-providers",
+    "maxOutputTokensPerRequest": 1800,
+    "quotas": {
+      "requests": 120,
+      "inputTokens": 500000,
+      "outputTokens": 80000,
+      "concurrency": 2
+    }
+  },
+  "providers": [
+    {
+      "name": "primary",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "WORKSHOP_PRIMARY_API_KEY",
+      "timeoutMs": 120000
+    },
+    {
+      "name": "secondary",
+      "baseUrl": "https://your-secondary-openai-compatible-provider.example/v1",
+      "apiKeyEnv": "WORKSHOP_SECONDARY_API_KEY",
+      "timeoutMs": 120000
+    }
+  ]
+}

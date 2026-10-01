@@ -1,0 +1,6 @@
+.env
+runtime/
+exports/
+receipts/
+*.log
+config/workshop.json

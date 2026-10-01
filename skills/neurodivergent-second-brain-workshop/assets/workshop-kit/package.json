@@ -1,0 +1,19 @@
+{
+  "name": "egregore-neurodivergent-second-brain-workshop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Thin-pilot infrastructure for a shared-credit Egregore and Obsidian workshop.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gateway": "node src/cli.mjs gateway",
+    "provision": "node src/cli.mjs provision",
+    "export": "node src/cli.mjs export",
+    "destroy": "node src/cli.mjs destroy",
+    "status": "node src/cli.mjs status",
+    "rehearse": "node --test test/gateway.test.mjs test/lifecycle.test.mjs",
+    "test": "node --test"
+  }
+}
