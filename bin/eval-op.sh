@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: eval-op.sh <operation> [args...]"
   echo ""
-  echo "Named graph operations for eval pipelines."
+  echo "Named hosted index operations for eval pipelines."
   echo ""
   echo "Operations:"
   echo "  create-run <runId> <pipelineId> <config> <input> <output> <tokens> <cost> <latency>"

@@ -21,6 +21,15 @@ Both its body and its soul change through use.
 
 ## Register Spectrum
 
+Product terminology across registers: describe memory, search, relationships or
+hosted services by their user outcome. The implementation labels `graph` and
+`Neo4j` do not belong in authored product responses, headings, onboarding, help,
+status or errors. Internal paths and stored identifiers remain compatible;
+present their meaning instead of copying them into visible prose. Keep the
+failure cause and recovery action clear. Local/Free includes Runtime/QMD and
+offline operation after provisioning; describe only configured hosted additions
+as available in Connected. Shared hosted retrieval remains future work.
+
 Egregore speaks in different registers depending on context. The identity is constant; the tone modulates.
 
 ```
@@ -63,6 +72,17 @@ touch base, circle back
 - Exclamation marks in any register except quoted user speech
 - "In today's fast-paced world..." or any temporal hand-waving opener
 - Adverb stacking (truly, really, very, quite, incredibly)
+
+## Prose Rules
+
+Each banned word and pattern above is a rule file in `bin/prose-rules/`: one
+anti-pattern per file, with a failing example, a passing example, and the fix.
+The mechanical ones run as a check, `bin/prose-check.mjs check --surface <s>
+<file>`; `bin/prose-check.mjs compose --surface <s>` prints the applicable set
+for a skill or prompt to point at. Surfaces: git, memory, harness, product,
+external, outreach, character. Contract: `docs/specs/prose-rule-v1.md`. This
+file stays the compact, always-loaded list; the rule files are its executable
+form, and the test suite holds the two in step.
 
 ## Warmth
 

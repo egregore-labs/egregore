@@ -1,14 +1,14 @@
 ---
 name: me
-description: 'View or change your member identity — display name, email — shared across Claude Code, Codex, and Pi. Say ''who am I'', ''call me <name>'', ''change my name to X'', or run ''/me''.'
+description: 'View or change the current member''s Egregore profile across Claude Code, Codex, Pi, and Prime. Use for /me, ''who am I'', ''call me <name>'', or an explicit self email update.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore me Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `me`. Its one
+maintained body is `.claude/skills/me/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

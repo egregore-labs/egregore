@@ -13,8 +13,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: pulse.sh <session-id> <author-github> <branch> <obs-buffer> <transcript>"
   echo ""
   echo "Post-session synthesis spirit. Reads transcript + observation buffer"
-  echo "+ graph context, calls Sonnet for synthesis, writes CONTINUES/INVOLVES"
-  echo "edges and personal brief back to the graph."
+  echo "+ session context, calls Sonnet for synthesis, writes session relationships"
+  echo "and a personal brief to the optional hosted index."
   echo ""
   echo "Normally run in background by transcript-archive.sh at session exit."
   exit 0

@@ -151,7 +151,7 @@ if [ -z "$_DB_ID" ] && [ -f "$_DB_STATE" ]; then
   _DB_LOCK="$HOME/.egregore/dashboard-id-$(echo -n "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" | cksum | cut -d' ' -f1).lock"
   mkdir -p "$HOME/.egregore" 2>/dev/null
   if ! mkdir "$_DB_LOCK" 2>/dev/null; then
-    _DB_LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$_DB_LOCK" 2>/dev/null || stat -c %Y "$_DB_LOCK" 2>/dev/null || echo 0) ))
+    _DB_LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$_DB_LOCK" 2>/dev/null || stat -f %m "$_DB_LOCK" 2>/dev/null || echo 0) ))
     # Stale reap by atomic rename, never rmdir+mkdir: two reapers doing
     # remove-then-recreate can alternately delete each other's FRESH lock and
     # both proceed. Directory rename is atomic — exactly one reaper's mv

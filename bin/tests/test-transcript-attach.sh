@@ -83,9 +83,9 @@ EOF
 summary="$(TRANSCRIPT_ATTACH_REPO_ROOT="$SCRUB_REPO" "$SCRIPT" scrub "$SCRUB_OUT" "$SCRUB_INPUT")"
 SCRUBBED_FILE="$SCRUB_OUT/$(basename "$SCRUB_INPUT")"
 
-if printf '%s' "$summary" | grep -Fq '"files":1' \
-  && printf '%s' "$summary" | grep -Fq '"env_value":7' \
-  && printf '%s' "$summary" | grep -Fq '"token":21'; then
+if grep -Fq '"files":1' <<< "$summary" \
+  && grep -Fq '"env_value":7' <<< "$summary" \
+  && grep -Fq '"token":21' <<< "$summary"; then
   pass "scrub summary reports correct files and redaction counts"
 else
   fail "scrub summary reports correct files and redaction counts" "$summary"
@@ -149,8 +149,8 @@ printf '%s\n' '{"message":"token ghp_NOENV1234 only"}' > "$NOENV_INPUT"
 noenv_summary="$(TRANSCRIPT_ATTACH_REPO_ROOT="$NOENV_REPO" "$SCRIPT" scrub "$NOENV_OUT" "$NOENV_INPUT")"
 NOENV_SCRUBBED="$NOENV_OUT/$(basename "$NOENV_INPUT")"
 
-if printf '%s' "$noenv_summary" | grep -Fq '"env_value":0' \
-  && printf '%s' "$noenv_summary" | grep -Fq '"token":1'; then
+if grep -Fq '"env_value":0' <<< "$noenv_summary" \
+  && grep -Fq '"token":1' <<< "$noenv_summary"; then
   pass "scrub works without .env and reports token-only counts"
 else
   fail "scrub works without .env and reports token-only counts" "$noenv_summary"
@@ -300,22 +300,22 @@ first_locate_line="$(printf '%s\n' "$locate_output" | sed -n '1p')"
 second_locate_line="$(printf '%s\n' "$locate_output" | sed -n '2p')"
 third_locate_line="$(printf '%s\n' "$locate_output" | sed -n '3p')"
 
-if printf '%s' "$first_locate_line" | grep -Fq "$WORK_PROJECT/current.jsonl" \
-  && printf '%s' "$first_locate_line" | grep -Fq '"current":true'; then
+if grep -Fq "$WORK_PROJECT/current.jsonl" <<< "$first_locate_line" \
+  && grep -Fq '"current":true' <<< "$first_locate_line"; then
   pass "locate marks newest transcript as current"
 else
   fail "locate marks newest transcript as current" "$first_locate_line"
 fi
 
-if printf '%s' "$second_locate_line" | grep -Fq "$MAIN_PROJECT/main.jsonl" \
-  && printf '%s' "$second_locate_line" | grep -Fq '"current":false'; then
+if grep -Fq "$MAIN_PROJECT/main.jsonl" <<< "$second_locate_line" \
+  && grep -Fq '"current":false' <<< "$second_locate_line"; then
   pass "locate merges main-repo transcript directory for worktrees"
 else
   fail "locate merges main-repo transcript directory for worktrees" "$locate_output"
 fi
 
-if printf '%s' "$third_locate_line" | grep -Fq "$WORK_PROJECT/older.jsonl" \
-  && printf '%s' "$third_locate_line" | grep -Fq '"current":false'; then
+if grep -Fq "$WORK_PROJECT/older.jsonl" <<< "$third_locate_line" \
+  && grep -Fq '"current":false' <<< "$third_locate_line"; then
   pass "locate orders transcripts by mtime descending"
 else
   fail "locate orders transcripts by mtime descending" "$locate_output"

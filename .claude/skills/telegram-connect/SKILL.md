@@ -59,14 +59,14 @@ To set up Telegram notifications:
   5. Paste both below
 ```
 
-Then use AskUserQuestion to ask for the chat ID:
+Then ask for the chat ID with a structured question when available and permitted in this session; otherwise ask in plain text:
 ```
 Chat ID (from the bot's message in your group):
 ```
 
 Validate: must be a negative number (e.g., `-1001234567890`) — reject anything else with "That doesn't look like a Telegram chat ID. It should be a negative number like -1001234567890."
 
-Then use AskUserQuestion to ask for the group invite link:
+Then ask for the group invite link with a structured question when available and permitted in this session; otherwise ask in plain text:
 ```
 Group invite link:
 ```
@@ -83,7 +83,24 @@ Offer an optional test through the separate exact notification consent flow in
 `.claude/context/notification-consent.md`. Saving the Telegram configuration is
 not consent to send. Prepare without sending:
 ```bash
-PLAN_JSON=$(bash bin/notify.sh plan group "Telegram connected! 🎉")
+mkdir -p tmp
+```
+
+```bash
+bash bin/notify.sh plan group "Telegram connected! 🎉" > tmp/telegram-connect-plan.json
+```
+
+```bash
+jq -r '.plan_id, .digest' tmp/telegram-connect-plan.json
+```
+
+Use the printed values as `{plan_id}` and `{digest}`, respectively; quote
+placeholders in single quotes when you use them in a command, and write any
+single quote inside a value as `'\''`. Use them for the notification consent
+flow. Read the exact preview fields:
+
+```bash
+jq -r '.org, .recipient, .channels, .deliveries, .message' tmp/telegram-connect-plan.json
 ```
 
 Show the organization, group/channel, and exact message in a dedicated Send /

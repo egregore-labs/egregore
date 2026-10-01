@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 
 # Human-consented notification transport.
 #
@@ -11,7 +12,10 @@ set -euo pipefail
 # Legacy `send` / `group` commands only create a plan and exit 4. They never
 # dispatch. This makes the invariant fail closed for stale skills and jobs.
 
-SCRIPT_DIR="${EGREGORE_NOTIFY_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+NOTIFY_CHECKOUT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=/dev/null
+source "$NOTIFY_CHECKOUT/bin/lib/scratch.sh"
+SCRIPT_DIR="${EGREGORE_NOTIFY_PROJECT_DIR:-$NOTIFY_CHECKOUT}"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
 [ -f "$CONFIG" ] || {
@@ -199,7 +203,7 @@ plan_connected() {
     die "notification service is not connected"
 
   local response
-  response="$(curl -sS -X POST "${API_URL}/api/notify/plan" \
+  response="$(curl -q -sS -X POST "${API_URL}/api/notify/plan" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \
@@ -302,6 +306,56 @@ approve_plan() {
     '{status:"approved", plan_id:$id, approval_token:$token}'
 }
 
+approve_plan_to_file() (
+  local id="$1" digest="$2" confirmation="$3" out="$4"
+  local out_dir staging=''
+  cleanup_approval_file() {
+    local result=$?
+    [ -z "$staging" ] || rm -f -- "$staging"
+    if [ "$result" -ne 0 ]; then
+      rm -f -- "$out" 2>/dev/null || true
+    fi
+    return "$result"
+  }
+  trap cleanup_approval_file EXIT
+  trap 'exit 1' HUP INT TERM
+
+  out_dir="$(dirname -- "$out")"
+  if [ -z "$out" ] || [ -d "$out" ] || [[ "$out" == */ ]] \
+      || [ ! -d "$out_dir" ] || [ ! -w "$out_dir" ] || [ ! -x "$out_dir" ]; then
+    printf 'notify: cannot write --out %s\n' "$out" >&2
+    exit 1
+  fi
+  # Keep the credential private throughout publication, including replacement
+  # of an existing receipt. A failed approval never publishes its output.
+  staging="$(mktemp "$out_dir/.notify-approval.XXXXXX")"
+  chmod 600 "$staging"
+  approve_plan "$id" "$digest" "$confirmation" > "$staging"
+  mv -f -- "$staging" "$out"
+  jq -c '{status, plan_id}' "$out"
+)
+
+read_approval_token() {
+  local path="$1" mode token approval_json
+  if [ -f "$path" ] && [ -r "$path" ]; then
+    mode="$(stat -L -c %a "$path" 2>/dev/null)" ||
+      mode="$(stat -L -f %Lp "$path" 2>/dev/null)" || mode=''
+    # Check read bits too: privileged test runners can otherwise read mode 000.
+    if [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 0444) != 0 )) \
+        && approval_json="$(cat "$path" 2>/dev/null)"; then
+      scratch_consume "$path"
+      if token="$(printf '%s' "$approval_json" | jq -ser 'select(length == 1) | .[0]
+          | select(type == "object") | .approval_token
+          | select(type == "string" and length > 0)' 2>/dev/null)"; then
+        printf '%s\n' "$token"
+        return 0
+      fi
+    fi
+  fi
+  echo 'notify: approval file unreadable or has no approval_token' >&2
+  return 1
+}
+
 mark_plan() {
   local path="$1"
   local status="$2"
@@ -319,6 +373,7 @@ mark_plan() {
 
 dispatch_connected() {
   local path="$1"
+  local receipt="${2:-}"
   local kind message plan_token response
   kind="$(jq -r '.kind' "$path")"
   message="$(jq -r '.message' "$path")"
@@ -328,7 +383,7 @@ dispatch_connected() {
     local recipient channel
     recipient="$(jq -r '.recipient' "$path")"
     channel="$(jq -r '.channels[0]' "$path")"
-    response="$(curl -sS -X POST "${API_URL}/api/notify/send" \
+    response="$(curl -q -sS -X POST "${API_URL}/api/notify/send" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "$(jq -nc \
@@ -341,7 +396,7 @@ dispatch_connected() {
   else
     local channels
     channels="$(jq -c '.channels' "$path")"
-    response="$(curl -sS -X POST "${API_URL}/api/notify/group" \
+    response="$(curl -q -sS -X POST "${API_URL}/api/notify/group" \
       -H "Authorization: Bearer $API_KEY" \
       -H "Content-Type: application/json" \
       -d "$(jq -nc \
@@ -353,6 +408,14 @@ dispatch_connected() {
   fi
 
   printf '%s' "$response" | jq -e '.status == "sent"' >/dev/null 2>&1 || {
+    # Only the API's explicit plan-token rejection makes this receipt
+    # unusable. Transport failures and unrelated API errors are inconclusive.
+    if [ -n "$receipt" ] && printf '%s' "$response" | jq -e '
+      .detail | strings
+      | . == "invalid notification plan" or startswith("notification plan ")
+    ' >/dev/null 2>&1; then
+      rm -f -- "$receipt"
+    fi
     printf '%s\n' "$response"
     return 1
   }
@@ -375,7 +438,7 @@ dispatch_local_telegram() {
       group_link=""
       ;;
   esac
-  curl -sS -X POST "${RELAY_URL}/api/notify/relay" \
+  curl -q -sS -X POST "${RELAY_URL}/api/notify/relay" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \
       --arg chat_id "$chat_id" \
@@ -397,7 +460,7 @@ dispatch_local_slack() {
     return 0
   fi
   local response
-  response="$(curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+  response="$(curl -q -sS -X POST "https://slack.com/api/chat.postMessage" \
     -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
     -H "Content-Type: application/json; charset=utf-8" \
     -d "$(jq -nc \
@@ -415,6 +478,40 @@ dispatch_local_slack() {
       --arg detail "$(printf '%s' "$response" | jq -r '.error // "unknown"' 2>/dev/null || echo unknown)" \
       '{status:"error",detail:$detail}'
   fi
+}
+
+# The bearer header is written to curl's stdin, never to its argument vector,
+# so the workspace token stays out of the process table and any trace.
+slack_bearer_header() {
+  printf 'Authorization: Bearer %s\n' "${SLACK_BOT_TOKEN:-}"
+}
+
+# Credential probe for /slack-connect: proves the stored token and names the
+# workspace without sending a message. The token is read from .env by this
+# script; no caller and no model ever types it into a command.
+slack_auth_test() {
+  if [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+    echo "notify: SLACK_BOT_TOKEN is missing from .env" >&2
+    return 2
+  fi
+  local response detail
+  response="$(slack_bearer_header | curl -q -sS \
+    -H @- \
+    --max-time 10 \
+    "https://slack.com/api/auth.test")" || {
+    echo "notify: slack auth.test request failed" >&2
+    return 1
+  }
+  # Only the three identity fields are published; the rest of the response,
+  # which can echo request material, is never printed.
+  if printf '%s' "$response" | jq -e '.ok == true' >/dev/null 2>&1; then
+    printf '%s' "$response" | jq -c '{ok:true,team:(.team // ""),user:(.user // "")}'
+    return 0
+  fi
+  detail="$(printf '%s' "$response" | jq -r '.error // empty' 2>/dev/null || true)"
+  [ -n "$detail" ] || detail="unknown"
+  echo "notify: slack auth.test rejected the stored token: $detail" >&2
+  return 1
 }
 
 dispatch_local() {
@@ -467,6 +564,7 @@ dispatch_local() {
 dispatch_plan() {
   local id="$1"
   local approval_token="$2"
+  local receipt="${3:-}"
   local path status expected_hash actual_hash lock response
   path="$(read_plan "$id")"
   verify_live_plan "$path"
@@ -485,7 +583,7 @@ dispatch_plan() {
   # new plan rather than risking a duplicate external message.
   mark_plan "$path" "dispatching"
   if [ "$MODE" = "connected" ]; then
-    if ! response="$(dispatch_connected "$path")"; then
+    if ! response="$(dispatch_connected "$path" "$receipt")"; then
       mark_plan "$path" "failed" "dispatch failed; prepare and approve a new plan"
       die "notification dispatch failed; no fallback was attempted"
     fi
@@ -508,6 +606,12 @@ dispatch_plan() {
     --argjson result "$response" \
     '{status:"sent",plan_id:$id,result:$result}'
 }
+
+dispatch_approval_file() (
+  local id="$1" receipt="$2" approval_token
+  approval_token="$(read_approval_token "$receipt")" || exit 1
+  dispatch_plan "$id" "$approval_token" "$receipt"
+)
 
 show_plan() {
   local path
@@ -553,7 +657,7 @@ test_connection() {
   if [ "$MODE" = "connected" ]; then
     [ -n "$API_URL" ] && [ -n "$API_KEY" ] ||
       die "notification service is not connected"
-    curl -sS -X GET "${API_URL}/api/notify/test" \
+    curl -q -sS -X GET "${API_URL}/api/notify/test" \
       -H "Authorization: Bearer $API_KEY" \
       --max-time 10
   elif [ "$MODE" = "local" ]; then
@@ -586,12 +690,22 @@ case "${1:-help}" in
     esac
     ;;
   approve)
-    [ "$#" -eq 4 ] || die "Usage: notify.sh approve <plan-id> <digest> APPROVE_EXACT_NOTIFICATION"
-    approve_plan "$2" "$3" "$4"
+    if [ "$#" -eq 6 ] && [ "$5" = "--out" ]; then
+      approve_plan_to_file "$2" "$3" "$4" "$6"
+    elif [ "$#" -eq 4 ]; then
+      approve_plan "$2" "$3" "$4"
+    else
+      die "Usage: notify.sh approve <plan-id> <digest> APPROVE_EXACT_NOTIFICATION [--out <file>]"
+    fi
     ;;
   dispatch)
-    [ "$#" -eq 3 ] || die "Usage: notify.sh dispatch <plan-id> <approval-token>"
-    dispatch_plan "$2" "$3"
+    if [ "$#" -eq 4 ] && [ "$3" = "--approval-file" ]; then
+      dispatch_approval_file "$2" "$4"
+    elif [ "$#" -eq 3 ] && [ "$3" != "--approval-file" ]; then
+      dispatch_plan "$2" "$3"
+    else
+      die "Usage: notify.sh dispatch <plan-id> <approval-token>|--approval-file <file>"
+    fi
     ;;
   show)
     [ "$#" -eq 2 ] || die "Usage: notify.sh show <plan-id>"
@@ -619,18 +733,24 @@ case "${1:-help}" in
   test)
     test_connection
     ;;
+  slack-auth-test)
+    [ "$#" -eq 1 ] || die "Usage: notify.sh slack-auth-test"
+    slack_auth_test
+    ;;
   help|*)
     echo "Usage: notify.sh <command>"
     echo ""
     echo "Commands:"
     echo "  plan send <name> <message>  Resolve a DM without sending"
     echo "  plan group <message>        Resolve group channels without sending"
-    echo "  approve <id> <digest> APPROVE_EXACT_NOTIFICATION"
+    echo "  approve <id> <digest> APPROVE_EXACT_NOTIFICATION [--out <file>]"
     echo "                              Record one exact human approval"
-    echo "  dispatch <id> <token>       Consume approval and send stored content"
+    echo "  dispatch <id> <token>|--approval-file <file>"
+    echo "                              Consume approval and send stored content"
     echo "  show <id>                   Show exact pending content"
     echo "  cancel <id>                 Cancel a pending plan"
     echo "  pending                     List pending plans"
     echo "  test                        Test configuration without sending"
+    echo "  slack-auth-test             Prove the stored Slack token without sending"
     ;;
 esac

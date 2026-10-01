@@ -23,6 +23,7 @@ __all__ = [
     "branch",
     "handoff",
     "instance_root",
+    "investigate",
     "notify_plan",
     "run",
     "save",
@@ -70,9 +71,20 @@ def _run_script(args: list[str], timeout: int = _DEFAULT_TIMEOUT) -> str:
     return result.stdout.strip()
 
 
-def search(query: str, limit: int = 6) -> str:
+def investigate(request: dict, *, episode: str | None = None) -> str:
+    """Continue the shared Runtime investigation with a typed operation."""
+    args = ["bin/search.sh", "investigate", json.dumps(request)]
+    if episode:
+        args += ["--episode", episode]
+    return _run_script(args)
+
+
+def search(query: str, limit: int = 6, *, kind: str = "keyword", gap: str = "", episode: str | None = None) -> str:
     """Ranked shared-memory recall (decisions, handoffs, knowledge, meetings)."""
-    return _run_script(["bin/search.sh", "query", query, "-n", str(limit)])
+    args = ["bin/search.sh", "find", query, "--kind", kind, "-n", str(limit)]
+    if episode:
+        args += ["--episode", episode]
+    return _run_script(args)
 
 
 def activity(for_user: str | None = None) -> str:
@@ -92,11 +104,19 @@ def branch(topic: str) -> str:
     return _run_script(["bin/agent.sh", "branch", "--topic", topic])
 
 
-def save(message: str, topic: str, pr_body: str | None = None) -> str:
-    """Commit, push, and open/update the PR for the current working branch."""
+def save(
+    message: str, topic: str, pr_body: str | None = None, *, draft: bool | None = None,
+) -> str:
+    """Save through the shared bridge; new code PRs default to draft.
+
+    Set ``draft=True`` while work continues or ``draft=False`` after local
+    QA/review to mark ready. ``None`` preserves existing PR readiness.
+    """
     args = ["bin/agent.sh", "save", "--message", message, "--topic", topic]
     if pr_body:
         args += ["--pr-body", pr_body]
+    if draft is not None:
+        args += ["--draft" if draft else "--ready"]
     return _run_script(args, timeout=300)
 
 

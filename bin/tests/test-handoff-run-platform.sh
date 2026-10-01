@@ -20,6 +20,8 @@
 # Requires: curl, python3.
 
 set -euo pipefail
+# Live: publishes to the live relay. Opt in with EGREGORE_LIVE_INTEGRATION=1; otherwise report a skip.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then echo "SKIP: publishes to the live relay; set EGREGORE_LIVE_INTEGRATION=1 to run"; exit 0; fi
 
 RELAY="${RELAY:-https://egregore-production-55f2.up.railway.app}"
 NOW="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
@@ -135,12 +137,12 @@ d = json.load(sys.stdin)
 print(d.get("_receiver_hints",{}).get("instructions",""))
 ')
 
-  if ! echo "$instr" | grep -q "$must_contain"; then
+  if ! grep -q "$must_contain" <<< "$instr"; then
     fail "$platform: instructions missing tuned phrase ('$must_contain')"
     return
   fi
 
-  if ! echo "$instr" | grep -q "$audience_phrase"; then
+  if ! grep -q "$audience_phrase" <<< "$instr"; then
     fail "$platform: audience clause missing ('$audience_phrase')"
     return
   fi
@@ -172,20 +174,20 @@ print(d.get("_receiver_hints",{}).get("instructions",""))
   # (A/B-validated winner). Day 4.1/4.4 wording (verbatim, Quality bar,
   # Run it autonomously) was rewritten because it tied for last in the
   # A/B — must NOT be present.
-  if ! echo "$instr" | grep -q "Skip any introduction"; then
+  if ! grep -q "Skip any introduction" <<< "$instr"; then
     fail "$platform: missing Day-4.5 marker 'Skip any introduction'"
     return
   fi
-  if ! echo "$instr" | grep -q "first intake question, nothing else"; then
+  if ! grep -q "first intake question, nothing else" <<< "$instr"; then
     fail "$platform: missing 'first intake question, nothing else' guidance"
     return
   fi
-  if ! echo "$instr" | grep -q "implement them, don'''t recite them"; then
+  if ! grep -q "implement them, don'''t recite them" <<< "$instr"; then
     fail "$platform: missing 'implement them, don'''t recite them' clause"
     return
   fi
   for banned in "EXECUTE THE SPEC VERBATIM" "Run it autonomously" "Quality bar" "Posture:"; do
-    if echo "$instr" | grep -q "$banned"; then
+    if grep -q "$banned" <<< "$instr"; then
       fail "$platform: banned phrase '$banned' reintroduced — A/B-validated Day 4.5 wording is target"
       return
     fi

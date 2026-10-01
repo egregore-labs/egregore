@@ -43,7 +43,7 @@ echo "test-base-branch"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# shellcheck source=bin/lib/config.sh
+# shellcheck source=/dev/null
 SCRIPT_DIR="$ROOT" . "$ROOT/bin/lib/config.sh"
 
 resolve() { # resolve <json-body> [repo-name]
@@ -119,7 +119,7 @@ if HOME="$TMP/home" bash "$CHECKOUT/bin/agent.sh" branch --topic "must not branc
 else
   ok "agent bridge stops before branching when base resolution fails"
 fi
-if git -C "$CHECKOUT" for-each-ref --format='%(refname:short)' refs/heads/dev/ | grep -q .; then
+if git -C "$CHECKOUT" for-each-ref --format='%(refname:short)' refs/heads/dev/ | grep >/dev/null .; then
   bad "failed agent resolution created a working branch"
 else
   ok "failed agent resolution leaves working branches unchanged"
@@ -138,13 +138,15 @@ for f in bin/session-start.sh bin/lib/git-sync.sh; do
   fi
 done
 
+# The assertions below match literal shell source, not expanded branch names.
+# shellcheck disable=SC2016
 if grep -q 'origin/\${BASE_BRANCH}' "$ROOT/.claude/hooks/branch-guard.sh"; then
   ok "branch-guard tells the agent to branch from the configured base"
 else
   bad "branch-guard still hardcodes the branch point"
 fi
 
-if grep -q '_get_base_branch' "$ROOT/.claude/skills/save/SKILL.md"; then
+if grep -Fq 'bash bin/base-branch.sh' "$ROOT/.claude/skills/save/SKILL.md"; then
   ok "/save resolves the PR base instead of assuming develop"
 else
   bad "/save no longer resolves the PR base"
@@ -163,12 +165,14 @@ else
   bad "agent bridge still assumes develop"
 fi
 
+# shellcheck disable=SC2016
 if grep -q 'branch --no-track.*origin/\$BASE_BRANCH' "$ROOT/bin/worktree-create.sh"; then
   ok "worktree creator branches from the configured base without tracking it"
 else
   bad "worktree creator does not safely detach task branches from the configured base"
 fi
 
+# shellcheck disable=SC2016
 if grep -q 'fetch origin \$BASE_BRANCH' "$ROOT/bin/lib/greeting.sh" &&
    ! grep -q 'fetch origin develop' "$ROOT/bin/lib/greeting.sh"; then
   ok "first-session branch guidance uses the configured base"
@@ -176,8 +180,10 @@ else
   bad "first-session branch guidance still assumes develop"
 fi
 
-if grep -q 'configuredBaseBranch' "$ROOT/.codex/hooks/branch-guard.js" &&
-   grep -q '_get_base_branch' "$ROOT/.codex/skills/save/SKILL.md"; then
+if grep -q 'configuredBaseBranch' "$ROOT/bin/branch-guard.cjs" &&
+   grep -q 'bin/branch-guard.cjs' "$ROOT/.codex/hooks/branch-guard.js" &&
+   grep -Fq 'bash bin/base-branch.sh' "$ROOT/.claude/skills/save/SKILL.md" &&
+   grep -Fq 'maintained body is `.claude/skills/save/SKILL.md`' "$ROOT/.codex/skills/save/SKILL.md"; then
   ok "Codex guard and save workflow honor the configured base"
 else
   bad "Codex base-branch behavior is incomplete"
@@ -190,6 +196,7 @@ else
   bad "Pi base-branch behavior is incomplete"
 fi
 
+# shellcheck disable=SC2016
 if grep -q 'git status --porcelain' "$ROOT/bin/lib/git-sync.sh" &&
    grep -Fq '[ -z "$(git status --porcelain' "$ROOT/bin/lib/git-sync.sh"; then
   ok "base sync never hard-resets a dirty checkout"
@@ -198,12 +205,51 @@ else
 fi
 
 for skill in branch commit pr pull push; do
-  if grep -q '_get_base_branch' "$ROOT/.claude/skills/$skill/SKILL.md"; then
+  if grep -Fq 'bash bin/base-branch.sh' "$ROOT/.claude/skills/$skill/SKILL.md"; then
     ok "/$skill resolves the configured base"
   else
     bad "/$skill still assumes a fixed base"
   fi
 done
+
+GIT_SKILL_FILES=()
+for skill in branch commit pr pull push save; do
+  GIT_SKILL_FILES+=("$ROOT/.claude/skills/$skill/SKILL.md")
+  CODEX_SKILL="$ROOT/.codex/skills/$skill/SKILL.md"
+  if [ -f "$CODEX_SKILL" ] &&
+     ! grep -Fq 'generated-by: bin/codex-sync-skills.sh' "$CODEX_SKILL"; then
+    GIT_SKILL_FILES+=("$CODEX_SKILL")
+  fi
+done
+if grep -Eq "_get_base_branch|bash -c 'SCRIPT_DIR" "${GIT_SKILL_FILES[@]}"; then
+  bad "Git skills still carry inline base-branch resolver mechanics"
+else
+  ok "Git skills use the plain base-branch wrapper on every maintained surface"
+fi
+
+# --- Executable wrapper against the real integration config ------------------
+check "base-branch wrapper prints the real integration branch" develop \
+  "$(bash "$ROOT/bin/base-branch.sh")"
+check "base-branch wrapper resolves the real origin ref" origin/develop \
+  "$(bash "$ROOT/bin/base-branch.sh" --resolve)"
+printf '%s\n' '{"base_branch":"nowhere"}' > "$TMP/wrapper.json"
+WRAPPER_STATUS=0
+WRAPPER_OUTPUT=$(CONFIG="$TMP/wrapper.json" bash "$ROOT/bin/base-branch.sh" --resolve 2> "$TMP/wrapper.err") || WRAPPER_STATUS=$?
+if [ "$WRAPPER_STATUS" -eq 2 ] && [ -z "$WRAPPER_OUTPUT" ] \
+   && grep -Fxq 'base-branch: cannot resolve origin/nowhere or nowhere; fetch it or pass a ref explicitly' "$TMP/wrapper.err"; then
+  ok "base-branch wrapper fails loudly for an unresolved configured ref"
+else
+  bad "base-branch wrapper hid a missing comparison ref"
+fi
+printf '%s\n' '{"base_branch":42}' > "$TMP/wrapper.json"
+WRAPPER_STATUS=0
+WRAPPER_OUTPUT=$(CONFIG="$TMP/wrapper.json" bash "$ROOT/bin/base-branch.sh" 2> "$TMP/wrapper.err") || WRAPPER_STATUS=$?
+if [ "$WRAPPER_STATUS" -eq 1 ] && [ -z "$WRAPPER_OUTPUT" ] \
+   && grep -Fq 'config: base_branch must be a valid branch name' "$TMP/wrapper.err"; then
+  ok "base-branch wrapper propagates configuration failure with no stdout"
+else
+  bad "base-branch wrapper accepted an invalid configuration"
+fi
 
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

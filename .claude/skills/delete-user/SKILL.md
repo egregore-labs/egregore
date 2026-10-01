@@ -14,11 +14,9 @@ Arguments: $ARGUMENTS (Required: GitHub username of the person to remove)
 
 ## Execution rules
 
-**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All API calls MUST capture output in a variable and only show formatted status lines.
+**CRITICAL: Suppress raw output.** Save the API response to a file, read it with `jq`, and only show formatted status lines to the user.
 
-**CRITICAL: Never expose credentials in tool output.**
-- Never read tokens in a separate bash call — always inline.
-- All credential handling happens inside a single bash call that only outputs the formatted result.
+**CRITICAL: Never expose credentials in tool output.** All credential handling happens inside `bin/api-call.sh`; never read a token into the conversation or substitute it into a command.
 
 ## Step 1: Validate
 
@@ -35,14 +33,14 @@ Modes (you'll be asked):
 
 ## Step 2: Confirm
 
-Ask the user to confirm via AskUserQuestion:
+For confirmation, ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 
 ```
 question: "How should {username} be removed from this org?"
 header: "Remove mode"
 options:
   - label: "Revoke access"
-    description: "Remove GitHub + Supabase access. Keep their sessions, artifacts, and contributions in the knowledge graph."
+    description: "Remove repository and hosted membership access. Keep their sessions, artifacts, and contributions in shared memory."
   - label: "Full delete"
     description: "Revoke access AND erase their sessions, profile, todos, and telemetry. Artifacts and quests are kept but orphaned."
   - label: "Cancel"
@@ -53,58 +51,55 @@ If "Cancel", stop with: `Cancelled.`
 
 Map "Revoke access" → `mode=revoke`, "Full delete" → `mode=full`.
 
-## Step 3: Remove (single call — credentials stay hidden)
+## Step 3: Remove (credentials stay inside the helper)
 
-Run ONE bash call with description "Removing {username} from org":
+Read the non-secret configuration first:
 
 ```bash
-bash -c '
-USERNAME="$1"
-MODE="$2"
-TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
-API_URL=$(jq -r ".api_url" egregore.json)
-SLUG=$(jq -r ".slug // .org_name" egregore.json)
-
-if [ -z "$TOKEN" ]; then
-  echo "ERROR: No GitHub token found. Run: bash bin/github-auth.sh"
-  exit 1
-fi
-
-RESP=$(curl -s -X DELETE "$API_URL/api/org/$SLUG/members/$USERNAME?mode=$MODE" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN")
-
-echo "$RESP" | jq -c "{
-  ok: (if .status == \"removed\" then true else false end),
-  status: .status,
-  mode: .mode,
-  username: .username,
-  actions: .actions,
-  errors: .errors,
-  error: .detail
-}"
-' -- "$ARGUMENTS" "MODE"
+bash bin/config-get.sh slug
 ```
 
-Replace `MODE` with the actual mode value (`revoke` or `full`).
+Use the printed value as `{slug}`. If `slug` is unset or empty, read the fallback:
+
+```bash
+bash bin/config-get.sh org_name
+```
+
+Use that printed value as `{slug}` instead. Use the supplied GitHub username as `{username}` and the confirmed mode (`revoke` or `full`) as `{mode}`. Quote substituted values in single quotes, writing any embedded single quote as `'\''`.
+
+Run with description "Removing {username} from org":
+
+```bash
+bash bin/api-call.sh DELETE '/api/org/{slug}/members/{username}?mode={mode}' --auth github --out tmp/delete-user-response.json
+```
+
+The helper reads the configured API URL and GitHub token internally, falling back to `gh auth token` if the token is absent from `.env`. If it fails, report its error and stop; the helper leaves no response file after a failure.
+
+Read the response:
+
+```bash
+jq '.' tmp/delete-user-response.json
+```
+
+Treat `.status == "removed"` as success. Use `.mode`, `.username`, and `.actions` for the result, `.errors` for partial failures, and `.detail` for an API error.
 
 ## Step 4: Display result
 
-Parse the JSON output from Step 3. **Never show raw JSON to the user.**
+Interpret the response read in Step 3. **Never show raw JSON to the user.**
 
-**Success** (ok=true, mode=revoke):
+**Success** (status=removed, mode=revoke):
 ```
 Removing {username} from {org_name}...
 
   GitHub access:   revoked
   Membership:      deactivated
-  Knowledge graph: marked as removed
+  Member record:   marked as removed
 
 {username} can no longer access this Egregore.
-Their contributions are preserved in the graph.
+Their contributions are preserved in shared memory.
 ```
 
-**Success** (ok=true, mode=full):
+**Success** (status=removed, mode=full):
 ```
 Removing {username} from {org_name}...
 
@@ -112,7 +107,7 @@ Removing {username} from {org_name}...
   Membership:      deactivated
   Sessions:        deleted
   Contributions:   orphaned (artifacts kept)
-  Person node:     deleted
+  Member profile:  deleted
   Telemetry:       deleted
 
 {username} has been fully removed from this Egregore.
@@ -125,7 +120,7 @@ Partial failures (non-fatal):
   - {error2}
 ```
 
-**Auth error** (ok=false):
+**API error** (status is not removed):
 ```
 Cannot remove {username}: {error}
 ```

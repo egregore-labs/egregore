@@ -6,26 +6,17 @@ CLAUDE_DIR="$SCRIPT_DIR/.claude/skills"
 CODEX_DIR="$SCRIPT_DIR/.codex/skills"
 CHECK=0
 
-NATIVE_SKILLS=(
-  activity
-  handoff
-  wrap
-  announce
-  harvest
-  the-spiral
-  dashboard
-  deep-reflect
-  quest
-  invite
-  ask
-  save
-  search
-  view
-  scroll
-  plate
-)
+# Full source checkouts use the capability inventory. Public installs omit the
+# development manifest/engine, so inspect only their delivered file union and
+# never reconstruct an unknown missing implementation from a source file.
+NATIVE_SKILLS=()
+native_total=0
+OWNED_SKILLS=()
+INSTALLED_SUBSET=0
+LIST_NATIVE=0
 
 STRUCTURED_UX_SKILLS=(
+  handoff-staircase
   activity
   dashboard
   handoff
@@ -68,18 +59,69 @@ GENERATED_MARKER='generated-by: bin/codex-sync-skills.sh'
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1; shift ;;
+    --list-native) LIST_NATIVE=1; shift ;;
     --help|-h)
-      echo "usage: bin/codex-sync-skills.sh [--check]"
+      echo "usage: bin/codex-sync-skills.sh [--check|--list-native]"
       exit 0
       ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
+if [ -f "$SCRIPT_DIR/bin/capability-distribution.mjs" ] && [ -f "$SCRIPT_DIR/capability-distribution.json" ]; then
+  inventory="$(bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/bin/capability-distribution.mjs" skill-inventory --root "$SCRIPT_DIR")"
+else
+  INSTALLED_SUBSET=1
+  inventory="$(bash "$SCRIPT_DIR/bin/node-run.sh" - "$SCRIPT_DIR" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const config = path.join(root, 'egregore.json');
+const owned = new Set(fs.existsSync(config) ? JSON.parse(fs.readFileSync(config, 'utf8')).owned_skills || [] : []);
+const names = new Set();
+for (const runtime of ['.claude', '.codex']) {
+  const dir = path.join(root, runtime, 'skills');
+  if (!fs.existsSync(dir)) continue;
+  for (const entry of fs.readdirSync(dir, {withFileTypes: true})) {
+    if (entry.isDirectory() && fs.existsSync(path.join(dir, entry.name, 'SKILL.md'))) names.add(entry.name);
+  }
+}
+for (const name of [...names].sort()) {
+  const file = path.join(root, '.codex/skills', name, 'SKILL.md');
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const owner = owned.has(name) ? 'org' : 'framework';
+  const type = text.includes('generated-by: bin/codex-sync-skills.sh') ? 'generated'
+    : owner === 'org' && text.includes('org-owned skill adapter') ? 'pointer' : 'native';
+  process.stdout.write(`${name}\t${type}\t${owner}\n`);
+}
+NODE
+)"
+fi
+while IFS=$'\t' read -r name implementation owner; do
+  [ -n "$name" ] || continue
+  [ "$owner" != "org" ] || OWNED_SKILLS+=("$name")
+  if [ "$implementation" = "native" ]; then
+    NATIVE_SKILLS+=("$name")
+    native_total=$((native_total + 1))
+  fi
+done <<< "$inventory"
+if [ "$LIST_NATIVE" = "1" ]; then
+  for name in ${NATIVE_SKILLS[@]+"${NATIVE_SKILLS[@]}"}; do printf '%s\n' "$name"; done
+  exit 0
+fi
+
+is_owned() {
+  local owned
+  for owned in ${OWNED_SKILLS[@]+"${OWNED_SKILLS[@]}"}; do
+    [ "$1" = "$owned" ] && return 0
+  done
+  return 1
+}
+
 is_native() {
   local name="$1"
   local native
-  for native in "${NATIVE_SKILLS[@]}"; do
+  for native in ${NATIVE_SKILLS[@]+"${NATIVE_SKILLS[@]}"}; do
     [ "$name" = "$native" ] && return 0
   done
   return 1
@@ -136,8 +178,8 @@ description: ${description_yaml}
 
 # Egregore ${name} Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for \`${name}\`. Its one
+maintained body is \`${source}\`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -160,6 +202,10 @@ reading \`${source}\`, reproduce the same visible UX in Codex:
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a \`text\` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a \`text\` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 
@@ -185,21 +231,35 @@ EOF
 mkdir -p "$CODEX_DIR"
 
 changed=0
+missing=0
 native_present=0
 adapter_present=0
 
-for native in "${NATIVE_SKILLS[@]}"; do
+for native in ${NATIVE_SKILLS[@]+"${NATIVE_SKILLS[@]}"}; do
   if [ -f "$CODEX_DIR/$native/SKILL.md" ]; then
     native_present=$((native_present + 1))
   else
     echo "missing native Codex skill: $native" >&2
-    changed=1
+    missing=1
   fi
 done
+
+# Unknown missing files cannot safely be treated as generated adapters. A
+# runtime reinstall restores their recorded implementations. Ownership always
+# wins, including an owned file that still bears an old generated marker.
+while IFS=$'\t' read -r name implementation owner; do
+  [ -n "$name" ] || continue
+  if [ ! -f "$CLAUDE_DIR/$name/SKILL.md" ] || { [ ! -f "$CODEX_DIR/$name/SKILL.md" ] && { [ "$INSTALLED_SUBSET" = "1" ] || [ "$owner" = "org" ]; }; }; then
+    echo "missing skill counterpart: $name — restore the installed runtime or both org-owned files" >&2
+    missing=1
+  fi
+done <<< "$inventory"
+[ "$missing" = "0" ] || exit 1
 
 while IFS= read -r source_file; do
   name="$(basename "$(dirname "$source_file")")"
   is_native "$name" && continue
+  is_owned "$name" && continue
 
   target_dir="$CODEX_DIR/$name"
   target_file="$target_dir/SKILL.md"
@@ -230,8 +290,8 @@ done < <(find "$CLAUDE_DIR" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 adapter_present="$({ grep -rl "$GENERATED_MARKER" "$CODEX_DIR"/*/SKILL.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
 
 if [ "$CHECK" = "1" ] && [ "$changed" -ne 0 ]; then
-  echo "codex skills out of sync (native: $native_present/${#NATIVE_SKILLS[@]}, adapters: $adapter_present)" >&2
+  echo "codex skills out of sync (native: $native_present/$native_total, adapters: $adapter_present)" >&2
   exit 1
 fi
 
-echo "codex skills synced (native: $native_present/${#NATIVE_SKILLS[@]}, adapters: $adapter_present)"
+echo "codex skills synced (native: $native_present/$native_total, adapters: $adapter_present)"

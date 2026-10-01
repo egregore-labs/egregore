@@ -18,19 +18,19 @@ git -C "$TMP" commit -qm "fixture"
 
 printf '{"mode":"local"}\n' > "$TMP/egregore.json"
 local_status="$(cd "$TMP" && bash statusline.sh)"
-echo "$local_status" | grep -q '^◇ LOCAL · ⎇ '
-! echo "$local_status" | grep -q 'CONNECTED'
+grep -q '^◇ LOCAL · ⎇ ' <<< "$local_status"
+! grep -q 'CONNECTED' <<< "$local_status"
 
 printf '{"mode":"connected"}\n' > "$TMP/egregore.json"
 incomplete_status="$(cd "$TMP" && bash statusline.sh)"
-echo "$incomplete_status" | grep -q '^◇ LOCAL · ⎇ '
+grep -q '^◇ LOCAL · ⎇ ' <<< "$incomplete_status"
 
 printf '{"mode":"connected","api_url":"https://api.egregore.example"}\n' > "$TMP/egregore.json"
 connected_status="$(cd "$TMP" && bash statusline.sh)"
-echo "$connected_status" | grep -q '^◆ CONNECTED · ⎇ '
+grep -q '^◆ CONNECTED · ⎇ ' <<< "$connected_status"
 
 printf 'changed\n' >> "$TMP/tracked.txt"
 dirty_status="$(cd "$TMP" && bash statusline.sh)"
-echo "$dirty_status" | grep -q '· 1 unsaved$'
+grep -q '· 1 unsaved$' <<< "$dirty_status"
 
 echo "runtime mode status ok"

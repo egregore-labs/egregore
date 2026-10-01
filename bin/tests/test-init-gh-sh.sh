@@ -23,8 +23,8 @@ echo
 [ -f "$INIT" ] && pass "init-gh.sh exists" || fail "init-gh.sh missing"
 [ -f "$DOC" ] && pass "INSTALL-GH.md exists" || fail "INSTALL-GH.md missing"
 
-head -1 "$INIT" | grep -q '^#!/bin/bash' \
-  && pass "shebang is #!/bin/bash" \
+head -1 "$INIT" | grep '^#!/usr/bin/env bash' >/dev/null \
+  && pass "shebang is #!/usr/bin/env bash" \
   || fail "wrong or missing shebang"
 
 # ── bash 3.2 syntax check ─────────────────────────────────────────
@@ -217,14 +217,14 @@ touch "$ENVTMP" && chmod 600 "$ENVTMP" && echo "KEEP=yes" > "$ENVTMP"
 grep -v '^GITHUB_TOKEN=' "$ENVTMP" > "$ENVTMP.tmp" || true
 echo "GITHUB_TOKEN=new" >> "$ENVTMP.tmp"
 mv "$ENVTMP.tmp" "$ENVTMP"
-RAW_PERMS="$(stat -f '%Lp' "$ENVTMP" 2>/dev/null || stat -c '%a' "$ENVTMP" 2>/dev/null || echo "???")"
+RAW_PERMS="$(stat -c '%a' "$ENVTMP" 2>/dev/null || stat -f '%Lp' "$ENVTMP" 2>/dev/null || echo "???")"
 [ "$RAW_PERMS" = "644" ] \
   && pass ".env mv risk demonstrated (644 without post-chmod)" \
   || fail ".env mv risk scenario yielded $RAW_PERMS (expected 644)"
 
 # 2. Apply the fix (chmod 600 AFTER mv) and verify 0600 sticks.
 chmod 600 "$ENVTMP"
-FIXED_PERMS="$(stat -f '%Lp' "$ENVTMP" 2>/dev/null || stat -c '%a' "$ENVTMP" 2>/dev/null || echo "???")"
+FIXED_PERMS="$(stat -c '%a' "$ENVTMP" 2>/dev/null || stat -f '%Lp' "$ENVTMP" 2>/dev/null || echo "???")"
 rm -f "$ENVTMP"
 [ "$FIXED_PERMS" = "600" ] \
   && pass ".env post-mv chmod 600 restores mode" \
@@ -235,7 +235,7 @@ rm -f "$ENVTMP"
 if awk '
   /mv "\$tmp" "\$ENV_FILE"/ { seen_mv=1; next }
   seen_mv && /chmod 600 "\$ENV_FILE"/ { print "ok"; exit }
-' "$INIT" | grep -q ok; then
+' "$INIT" | grep ok >/dev/null; then
   pass "init-gh.sh applies chmod 600 AFTER mv (replacement path safe)"
 else
   fail "init-gh.sh does NOT chmod 600 after mv — token remains world-readable"
@@ -272,12 +272,12 @@ grep -q 'gh auth refresh' "$INIT" \
   && pass "invitee instructions don't reference unimplemented --join" \
   || fail "invitee instructions still reference --join (not implemented)"
 
-grep -q 'npx create-egregore join' "$INIT" \
-  && pass "invitee instructions reference working npx join path" \
+grep -q 'gh repo clone \$GITHUB_ORG/\$REPO_NAME' "$INIT" \
+  && pass "invitee instructions reference the gh clone join path" \
   || fail "invitee instructions missing working join path"
 
 # The broken `gh repo clone && claude` path must NOT be in the invitee message
-if grep -A 3 'Tell .* to run' "$INIT" | grep -q 'gh repo clone .* && .* claude'; then
+if grep -A 3 'Tell .* to run' "$INIT" | grep 'gh repo clone .* && .* claude' >/dev/null; then
   fail "invitee instructions still show broken 'gh repo clone && claude' path"
 else
   pass "invitee instructions don't promise unsupported gh-only join path"
@@ -375,14 +375,14 @@ grep -q "alias %s %s" "$INIT" \
   || fail "no fish alias line format (alias NAME 'CMD')"
 
 # Idempotency: must remove old lines matching this dir / name before appending
-if grep -A 5 'local tmp=' "$INIT" | grep -q 'grep -v -F -- "$dir"'; then
+if grep -A 5 'local tmp=' "$INIT" | grep 'grep -v -F -- "$dir"' >/dev/null; then
   pass "alias install removes old lines for same dir (idempotent)"
 else
   fail "alias install may accumulate duplicate lines on re-run"
 fi
 
 # Must be called from clone_via_gh so every clone gets the helper configured
-if grep -A 15 'clone_via_gh()' "$INIT" | grep -q 'configure_gh_creds'; then
+if grep -A 15 'clone_via_gh()' "$INIT" | grep 'configure_gh_creds' >/dev/null; then
   pass "clone_via_gh invokes configure_gh_creds after every clone"
 else
   fail "clone_via_gh doesn't wire up gh credentials after clone"

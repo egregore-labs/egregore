@@ -1,14 +1,14 @@
 ---
 name: reflect
-description: 'Use when the user says ''we decided'', ''I realized'', or ''that''s a pattern'' — captures decisions, findings, or patterns in shared memory. Not a private half-baked thought (/note) or cross-referencing (/deep-reflect).'
+description: 'Use when the user says ''we decided'', ''I realized'', or ''that''s a pattern'' — captures a share-ready decision, finding, or pattern in canonical organizational memory. Use /note for private or half-baked thoughts and /archive for reusable AI-steering techniques.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore reflect Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `reflect`. Its one
+maintained body is `.claude/skills/reflect/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -28,6 +28,10 @@ reading `.claude/skills/reflect/SKILL.md`, reproduce the same visible UX in Code
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 

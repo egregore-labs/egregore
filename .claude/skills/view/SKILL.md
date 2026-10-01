@@ -16,42 +16,81 @@ Not this: terminal formatting → just format in markdown · dashboard → `/das
 
 Arguments: $ARGUMENTS (Optional: artifact type and/or name, or a file path)
 
+## Runtime source boundary
+
+Resolve deictic requests from the current conversation before organizational
+retrieval. When `this`, `that`, `it`, or `the above` unambiguously refers to
+the single artifact just created, accepted, or shown, reuse its full content
+already in context and stage it verbatim. If that content is collapsed or the
+prior receipt supplies only a canonical path, open that exact path once through
+`bin/search.sh open`; do not run `bin/search.sh query` to rediscover a known
+artifact.
+
+Resolve organizational sources from the attached authorized
+`EGREGORE_ORG_CONTEXT_V1` block first. Do not repeat its retrieval or reopen
+its already opened sources. When the requested source is absent, run one
+Runtime query and open the selected canonical file through
+`bin/search.sh open`; do not use raw `ls`, `find`, or graph traversal as an
+authorization bypass. Local rendering is the default. Publishing or replacing
+a stable hosted view requires an explicit `SHARE` request and checkpoint.
+Never publish from an ordinary view request.
+
 ## Loom routing
 
-**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
+Claude Code: use this Loom routing section. Other harnesses continue with
+Rendering mode below.
 
-**Composition is the default for flagship documents — and it is main-loop-only.** Compose (do **NOT** delegate; run the **Composition path** below inline, print `bash bin/loom.sh footer view --override`, set `"override":true,"class":"composition"` in telemetry, skip the rest of this routing section) whenever **either**:
+Skip this section when the prompt contains `LOOM-EXECUTOR`; execute the
+authorized render directly and never re-delegate.
 
-- **the doc is flagship** — a `document` render that reads as a strategy / prep / board / briefing / explainer / analysis / decision doc, i.e. something meant to be *read or presented*, with multiple `##` sections. This is now the DEFAULT for such docs (the floor disappointed too many times); OR
-- an explicit cue is present — `--compose`, "compose this", "make it presentable / client-facing / flagship", "with the design trace / use the design trace / designed artifact / band 5".
+Explicit `--compose`, designed/flagship, or client-facing requests remain
+main-loop-only: render inline, then print
+`bash bin/loom.sh footer view --override` and mark telemetry as an override.
+For the deterministic renderer:
 
-**Opt DOWN to the fast template floor** (which may route to the cheap tier) ONLY when: the invocation carries `--floor` / `--fast`, or the ask is a quick/utility look ("just show me", "quick look", "rough render"), or the target is short/non-flagship (a stub, a single-section note), or it's a **typed** artifact (quest / handoff / activity / board / network — those keep their own templates and are not affected by this default). Composition is a frontier-authoring act; a cheap executor can only produce the floor.
+1. Resolve `ROUTE=$(bash bin/loom.sh route view)`. When `bin/loom.sh` is not
+   present (Loom is internal-only and does not ship in the OSS distribution),
+   skip route resolution and the footer entirely and follow the script route
+   below — it is the framework default and needs no Loom.
+2. **Script route (`"mode": "script"` — the framework default).** Judgment
+   stays in the main loop: resolve what the user means into a type and source
+   (the Resolution logic below). Then run the mechanics with no model in the
+   loop — one call, which stages the source through the Runtime read boundary,
+   serves repeat views from a content-addressed cache, renders, and opens:
+   `bash bin/view-render.sh <type> <memory/...-or-file> [-- --brief <path>]`.
+   Print its output verbatim, then `bash bin/loom.sh footer view`. Do not
+   spawn a subagent, re-open the source yourself, or re-run retrieval for the
+   render. If the script exits non-zero, report its error; only a composition
+   or interaction need justifies taking over inline.
+3. For an inline route, continue below in the main loop.
+4. For a delegate route (org override), delegate only when available and
+   permitted in this session; otherwise continue inline. When delegating,
+   spawn `loom-executor` at the returned tier with `LOOM-DECISION-ID`, `LOOM-EXECUTOR: Execute
+   .claude/skills/view/SKILL.md`, the user's exact arguments, and the attached
+   `EGREGORE_ORG_CONTEXT_V1` block verbatim; print its final output, then
+   `bash bin/loom.sh footer view`. On `LOW_CONFIDENCE:` take over inline.
+5. Emit telemetry best-effort from the driver:
+   `bash bin/telemetry.sh emit "command" '{"command":"view","routed":true}' 2>/dev/null &`.
 
-1. Resolve: `ROUTE=$(bash bin/loom.sh route view)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
-2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer view --override` after the output and set `"override":true` in telemetry.
-3. Otherwise delegate: spawn the Agent tool with `subagent_type:
-   "loom-executor"`, `model` = the route's `tier`, prompt =
-   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
-   `LOOM-EXECUTOR: Execute .claude/skills/view/SKILL.md`, plus the user's
-   arguments and any context the spec needs from the session. Print the
-   executor's final output **verbatim**, then print the output of
-   `bash bin/loom.sh footer view`.
-4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
-   triage the reason: needs-user-interaction or a main-loop-only tool → take
-   over and finish this skill inline (no escalation); genuine uncertainty or
-   failure → reassign `ROUTE=$(bash bin/loom.sh escalate view "<reason>")`,
-   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
-   carrying the returned decision ID
-   (sticky for this session).
-5. Telemetry (fire-and-forget):
-   `bash bin/telemetry.sh emit "command" '{"command":"view","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+Loom transports the authorized context; it never grants new read or SHARE
+authority. The minion workflow is unrelated to this render route.
+
+## Rendering mode
+
+Use the packaged deterministic renderer by default, driven through
+`bin/view-render.sh` — rendering is mechanical, so no model belongs in that
+path. Run inline composition only when the user explicitly requests it. A
+normal “view/open/render this” uses the script route without duplicate
+retrieval. A repeat view of unchanged content reports
+`(served from render cache)` — that is expected, not staleness: the cache key
+is the content bytes, the renderer, and the arguments.
 
 ## Supported artifact types
 
 - `quest` — renders quest markdown from `memory/quests/`
 - `handoff` — renders handoff markdown from `memory/handoffs/`
 - `activity` — renders live team activity dashboard (no file needed)
-- `board` — renders project board from `memory/board/board.json` (no file needed; interactive editor with paste-back loop, 5 tabs: Activity / Priority / Person / Timeline / Done). In connected mode, also publishes to a stable URL at `egregore.xyz/view/{org}/board` on every invocation — bookmark it and refresh to see the latest.
+- `board` — renders the typed live project-board surface (interactive editor with 5 tabs: Activity / Priority / Person / Timeline / Done). Publishing the stable hosted board is a separate explicit action.
 - `network` — renders people/relationship network (no file needed)
 - `document` — renders any markdown file with branded styling (auto-detected fallback)
 
@@ -64,7 +103,7 @@ The key job of `/view` is resolving what the user wants to see into a file path.
 - `/view quest artifact-generation` → type=quest, name=artifact-generation
 - `/view handoff oss-security-audit` → type=handoff, name=oss-security-audit
 - `/view activity` → type=activity, no file needed
-- `/view board` → type=board, reads `memory/board/board.json`, no file argument needed
+- `/view board` → type=board, typed live surface; no source path resolution
 - `/view network` → type=network, no file needed
 - `/view artifact-generation` → no type specified, search all types
 - `/view memory/knowledge/decisions/some-decision.md` → direct file path
@@ -72,49 +111,54 @@ The key job of `/view` is resolving what the user wants to see into a file path.
 
 ### 2. Resolve the file
 
-**Direct file path**: If the argument looks like a file path (contains `/` or ends in `.md`), resolve it directly. If it exists, use it — type is auto-detected from location or falls back to `document`.
+**Direct canonical file path**: If the argument names `memory/...`, open it
+through `bash bin/search.sh open "memory/..."` into a temporary render source.
+A denied or missing source stops resolution; never pass the raw canonical path
+to the renderer or fall through to an unchecked filesystem read. An explicit
+non-memory path inside the current repository may be rendered as a repository
+document, but it is never treated as organizational memory.
 
-**Quest**: Search `memory/quests/` for `{name}.md` or partial match:
+**Quest, handoff, document, or auto-detected name**: Prefer the best matching
+canonical source and opened content already present in
+`EGREGORE_ORG_CONTEXT_V1`; stage that content as a temporary render source
+without reopening it. Otherwise run one ranked call, optionally including the
+requested type in the concept, then open only the selected result into the
+temporary render source:
+
 ```bash
-# Exact match
-FILE="memory/quests/${name}.md"
-# Partial match — find files containing the name
-ls memory/quests/*.md | grep -i "$name" | head -1
+bash bin/search.sh query "<artifact name and optional type>" -n 6 --compact --context-packet
+bash bin/search.sh open "<selected memory/... path>"
 ```
 
-**Handoff**: Search `memory/handoffs/` recursively (files are in date subdirectories):
-```bash
-# Search all subdirectories
-find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | head -1
-# If multiple matches, prefer most recent (sorted by path which includes date)
-find memory/handoffs/ -name "*.md" -not -name "index*" | grep -i "$name" | sort -r | head -1
-```
+Claude Code: `--compact --context-packet` keeps the ranked evidence out of the
+visible transcript — the resolution query must never print result blocks
+before the render. Pass the selected source to the renderer script as its
+`memory/...` canonical path, never as an absolute filesystem path.
+
+Infer the renderer type from the selected canonical path. If several results
+are genuinely ambiguous, show the short choices rather than scanning the
+repository again.
 
 **Activity**: No file resolution needed — runs `bin/activity-data.sh` live.
 
-**Board / Network**: No file resolution needed. `board` reads `memory/board/board.json` automatically (via git root). `network` is generated from people data.
+**Board / Network**: Use only the renderer's typed Runtime-backed live surface;
+do not pre-scan or pre-open memory files.
 
-**Auto-detect type** (no type specified):
-1. Search `memory/quests/` first
-2. Then `memory/handoffs/` recursively
-3. Then `memory/knowledge/` recursively
-4. If found, infer type from location (`quest` or `handoff`) — everything else is `document`
+**Auto-detect type** (no type specified): infer `quest` or `handoff` from the
+authorized result path; everything else is `document`.
 
 ### 3. Generate and open
 
-**Resolve the renderer first — prefer the in-repo CLI.** Running repo code avoids
-fetching an external npm package (which permission classifiers flag) and exercises
-local edits to `packages/egregore-artifacts` without waiting for an npm release:
-
-```bash
-RENDER="npx egregore-artifacts@latest"
-if [ -f packages/egregore-artifacts/bin/cli.js ] && [ -d packages/egregore-artifacts/node_modules/react ]; then
-  RENDER="node packages/egregore-artifacts/bin/cli.js"
-fi
-```
-
-(If the local package exists but deps are missing, either run
-`npm install --prefix packages/egregore-artifacts` or fall back to npx.)
+**On the script route, `bin/view-render.sh` owns everything in this section**:
+it resolves the packaged renderer locally (checked-out
+`packages/egregore-artifacts` first, then the installed `egregore-artifacts`;
+never `npx`, never a registry fetch), stages complete `memory/...` documents
+through the existing authorized `Runtime.open_source` adapter (ordinary model
+evidence reads remain bounded), serves unchanged content from the content-addressed
+render cache, invokes the renderer exactly once with `--output`, and opens the
+browser. Call it once with the resolved type and source; do not re-implement
+these steps inline. The commands below describe what the script does and are
+the inline fallback only when the resolved route is `inline`.
 
 **Design trace (documents).** A `document` render should follow the design
 trace, not ship bare: auto-walk the UGI synthesis graph from the document's
@@ -124,23 +168,30 @@ grammar; option ids and auto-walk rules in
 pass it to the renderer:
 
 ```bash
-node --input-type=module -e "
+bash bin/node-run.sh --input-type=module -e "
 import { resolveBrief } from './packages/design-system/generative-ui/resolve-brief.js';
 import fs from 'node:fs';
-fs.mkdirSync('/tmp/egregore-artifacts', { recursive: true });
-fs.writeFileSync('/tmp/egregore-artifacts/brief-{slug}.json',
+fs.mkdirSync('tmp', { recursive: true });
+fs.writeFileSync('tmp/view-brief-{slug}.json',
   JSON.stringify(resolveBrief(['{objective}','{audience}','{register}','{palette}','{grammar}'])));
 "
-$RENDER document <file> --brief /tmp/egregore-artifacts/brief-{slug}.json
+bash bin/view-render.sh document <memory/...-or-file> -- --brief tmp/view-brief-{slug}.json
 ```
+
+Picking the five ids is judgment and stays in the main loop; the brief file
+rides into the render through `--` and participates in the cache key.
 
 Pick the five ids from the substance, one line of judgment each (e.g. a
 strategy prep doc → decide · operators · editorial · vellum · decisive; a
 public explainer → persuade · newcomer · marketing · loam · quiet). The brief
 drives palette + grammar treatment; the designed layout (nav · hero · anchored
-sections) renders regardless. If the generative-ui layer is unavailable
-(pure-npx environment, no repo checkout), render without `--brief` — never
-block on the trace.
+sections) renders regardless. If the checked-out generative-ui layer is
+unavailable, render without `--brief`; never fetch it or block on the trace.
+
+The deterministic renderer already owns its light/dark theme contract. Do not
+invoke or reread a separate visual-theme skill for an ordinary render. Apply
+the Dark Mode contract only while authoring composed HTML or changing renderer
+code.
 
 ### Composition path (`--compose`) — band 5, main-loop only
 
@@ -150,15 +201,11 @@ trace at full depth means COMPOSITION, not pass-through (D6 free-generative band
 composition is the frontier model authoring the page from the substance. This
 path is what makes that reachable from the command instead of only by accident.
 
-**This is the DEFAULT for flagship documents** (strategy / prep / board /
-briefing / explainer / analysis / decision docs — see the Loom-routing rule
-above). It also fires on explicit cues: `--compose`, "compose / make it
+This path fires only on explicit cues: `--compose`, "compose / make it
 presentable / client-facing / flagship / with the design trace / use the design
 trace / designed artifact / band 5". **When the user names "the design trace,"
-they mean this composed ceiling — never the floor.** Opt DOWN to the fast
-template floor below only for quick/utility looks or `--floor`/`--fast` (again,
-see the routing rule). The floor is what disappoints when someone wanted the
-trace — so when unsure whether a document is flagship, compose.
+they mean this composed ceiling — never the floor.** Otherwise use the local
+deterministic renderer.
 
 **Technical documents compose too — in a different register.** A spec, RFC,
 protocol, architecture doc, API reference, evaluation report, or postmortem is
@@ -232,48 +279,39 @@ template path below.
 
 For typed artifacts with a file:
 ```bash
-$RENDER <type> <resolved-file-path>
+bash bin/view-render.sh <type> <memory/...-or-file>
 ```
 
 For auto-detected (just a file path):
 ```bash
-$RENDER <resolved-file-path>
+bash bin/view-render.sh document <memory/...-or-file>
 ```
 
-For activity (no file):
+For activity (no file — live surfaces are never cached):
 ```bash
-$RENDER activity
+bash bin/view-render.sh activity
 ```
 
-**For board (connected mode only — publish to stable URL):**
-
-After opening locally, fire-and-forget a publish with a stable `--id` so the URL `egregore.xyz/view/{org}/board` always shows the latest board:
-
-```bash
-_API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
-_MODE=$(jq -r '.mode // empty' egregore.json 2>/dev/null)
-if [ -n "$_API_URL" ] && [ "$_MODE" != "local" ]; then
-  ORG_NAME=$(jq -r '.org_name // .slug' egregore.json)
-  bash bin/publish-artifact.sh board memory/board/board.json \
-    --id board \
-    --title "Project Board — $ORG_NAME" \
-    --author "$ORG_NAME" \
-    --description "Latest board for $ORG_NAME" 2>/dev/null &
-fi
-```
-
-The publish script exits silently on failure, so the local open always succeeds regardless of API state. OSS/local mode skips this step entirely — the board stays local unless the user publishes explicitly.
-
-**Auto-linked references (connected mode).** When `publish-artifact.sh` publishes a markdown file, any backtick-wrapped `memory/**/*.{md,html}` paths inside it are re-published in parallel at deterministic URLs (`egregore.xyz/view/{slug}/{m|h}-{12 hex}`) so the rendered parent view contains clickable links to each referenced file. See `bin/publish-references.sh`. No-op in OSS mode (the relay assigns random slugs, so the renderer falls back to plain `<code>`).
+**For an explicitly requested publish:** local render/open is already complete.
+Authorize `SHARE` for the exact staged artifact and show a Publish / Cancel
+checkpoint containing the organization, destination, title, source, and
+whether a stable URL will be replaced. After approval, invoke the Runtime
+publication adapter once. `/view` does not inspect hosting configuration or
+manage publication transport itself. If no Runtime publication adapter is
+available, keep the local artifact and say publishing is unavailable rather
+than falling back to a legacy script. Notification consent remains separate.
 
 ### 4. Report
+
+Report the exact HTML path returned by the renderer or written by composition;
+do not infer a filename from the examples below.
 
 ```
 ✓ Artifact opened in browser
   File: /tmp/egregore-artifacts/{type}-{name}-{ts}.html
 ```
 
-For `/view board` in connected mode, append:
+Only after an approved SHARE action returns a URL, append:
 ```
 ◆ https://egregore.xyz/view/{org_slug}/board   (stable — refresh for latest)
 ```
@@ -281,15 +319,12 @@ Read `org_slug` from `egregore.json`.
 
 ## Fallback
 
-If the local CLI is unavailable and `npx egregore-artifacts` fails (not installed),
-install it first:
-```bash
-npm install -g egregore-artifacts
-```
+If the local renderer is unavailable, report that the instance renderer needs
+installation or repair. Do not install or fetch software implicitly.
 
 ## Ambiguity handling
 
-If the name matches multiple files, use AskUserQuestion:
+If the name matches multiple files, ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 ```
 Found multiple matches for "security":
 1. handoffs/2026-03/31-cem-oss-security-audit.md
@@ -303,9 +338,16 @@ If no matches found, **fall through to synthesis mode** (see below).
 
 When the input is a prompt or topic rather than a file name — or when file resolution finds nothing — synthesize an artifact from multiple sources.
 
-1. **Read relevant files** — search memory/, codebase, and conversation context for material matching the prompt. Read as many files as needed.
-2. **Write a temporary markdown file** — synthesize the findings into a well-structured document at `/tmp/egregore-artifacts/synthesized-{slug}.md`. Use headings, lists, code blocks — the renderer handles all standard markdown.
-3. **Render it** — `$RENDER document /tmp/egregore-artifacts/synthesized-{slug}.md` (renderer resolved as in §3)
+1. **Reuse authorized evidence** — start from `EGREGORE_ORG_CONTEXT_V1`. If it
+   is absent or insufficient, run Runtime Observe once through
+   `bin/search.sh query`; open only a selected returned canonical source through
+   `bin/search.sh open`. Never scan `memory/`. Read repository files only when
+   the user explicitly asked to synthesize codebase material.
+2. **Write a temporary markdown file** — synthesize only the authorized
+   evidence into `tmp/view-synthesized-{slug}.md`. When the
+   attached context already contains opened content, stage that content without
+   reopening its canonical source.
+3. **Render it** — `bash bin/view-render.sh document tmp/view-synthesized-{slug}.md`
 4. **Report** — same as normal: `✓ Artifact opened in browser`
 
 This is the default fallback — don't ask the user if they want synthesis. If `/view auth architecture` doesn't match a file, just do the research and render it.
@@ -352,7 +394,7 @@ Resolving "security audit"...
 > /view auth architecture
 
 No file match — synthesizing from codebase...
-  Reading: api/main.py, api/auth.py, api/services/supabase.py, ...
+  Reading: api/main.py, api/auth.py, api/services/storage.py, ...
 
 ✓ Artifact opened in browser
   File: /tmp/egregore-artifacts/document-auth-architecture.html

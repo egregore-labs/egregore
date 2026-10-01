@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Live: reads this instance's live memory. Opt in with EGREGORE_LIVE_INTEGRATION=1; otherwise report a skip.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then echo "SKIP: reads this instance's live memory; set EGREGORE_LIVE_INTEGRATION=1 to run"; exit 0; fi
 
-# Test: Local-mode fallback additions for /todo, /issue, /add skills
+# Test: Local-mode authority for /todo, /issue, /add skills
 # Covers: .claude/skills/todo/SKILL.md, .claude/skills/issue/SKILL.md, .claude/skills/add/SKILL.md
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -19,35 +21,33 @@ echo ""
 # ============================================================
 echo "1. Mode detection pattern"
 
-EXPECTED_PATTERN='MODE=\$(jq -r '"'"'.mode // "connected"'"'"' egregore.json'
-for SKILL in add issue todo; do
-  FILE="$SCRIPT_DIR/.claude/skills/$SKILL/SKILL.md"
-  if grep -q 'jq -r.*\.mode.*egregore\.json' "$FILE" 2>/dev/null; then
-    pass "$SKILL has mode detection"
-  else
-    fail "$SKILL missing mode detection" "Expected jq .mode pattern in $FILE"
-  fi
-done
+if grep -q 'jq -r.*\.mode.*egregore\.json' "$SCRIPT_DIR/.claude/skills/add/SKILL.md"; then
+  fail "add still branches canonical state by mode" "Add must use one Runtime ingest lifecycle"
+else
+  pass "add has no mode-specific canonical-state branch"
+fi
+if grep -q 'jq -r.*\.mode.*egregore\.json' "$SCRIPT_DIR/.claude/skills/issue/SKILL.md"; then
+  fail "issue still branches canonical state by mode" "Issue must use one Runtime lifecycle"
+else
+  pass "issue has no mode-specific canonical-state branch"
+fi
+if grep -q 'jq -r.*\.mode.*egregore\.json' "$SCRIPT_DIR/.claude/skills/todo/SKILL.md"; then
+  fail "todo still branches storage by mode" "Todo must use one canonical Markdown lifecycle"
+else
+  pass "todo has no mode-specific storage branch"
+fi
 
 # ============================================================
-# 2. /todo: Graph-only rule must have local-mode exemption
+# 2. /todo: graph is never the lifecycle authority
 # ============================================================
 echo ""
 echo "2. /todo: Graph-only rule consistency"
 
 TODO_FILE="$SCRIPT_DIR/.claude/skills/todo/SKILL.md"
-if grep -q "Graph-only.*no markdown files for todos" "$TODO_FILE" 2>/dev/null; then
-  # Check if the rule has a local-mode exemption
-  LINE=$(grep -n "Graph-only.*no markdown files for todos" "$TODO_FILE" | head -1 | cut -d: -f1)
-  CONTEXT=$(sed -n "$((LINE-1)),$((LINE+1))p" "$TODO_FILE")
-  if echo "$CONTEXT" | grep -qi "local\|connected\|mode"; then
-    pass "Graph-only rule has mode qualifier"
-  else
-    fail "Graph-only rule contradicts local-mode YAML storage" \
-      "Line $LINE says 'no markdown files' but local mode uses memory/todos/{person}.md"
-  fi
+if grep -Eq '^[[:space:]]*bash[[:space:]]+bin/(graph|graph-op|graph-batch)\.sh' "$TODO_FILE"; then
+  fail "todo contains an executable graph command" "Use bin/todo.sh in every mode"
 else
-  pass "No unqualified graph-only rule found"
+  pass "todo has no executable graph lifecycle path"
 fi
 
 # ============================================================
@@ -62,7 +62,7 @@ ISSUE_FILE="$SCRIPT_DIR/.claude/skills/issue/SKILL.md"
 # Use negative lookbehind via grep -P, or simple two-pass approach
 BARE_REFS=0
 while IFS= read -r line; do
-  if ! echo "$line" | grep -q "memory/knowledge/issues/"; then
+  if ! grep -q "memory/knowledge/issues/" <<< "$line"; then
     BARE_REFS=$((BARE_REFS + 1))
   fi
 done < <(grep "memory/issues/" "$ISSUE_FILE" 2>/dev/null || true)
@@ -74,74 +74,72 @@ else
 fi
 
 # ============================================================
-# 4. /issue: Local-mode covers all routes
+# 4. /issue: Runtime adapter covers all routes in every mode
 # ============================================================
 echo ""
-echo "4. /issue: Route coverage in local mode"
+echo "4. /issue: Cross-mode Runtime route coverage"
 
-for ROUTE in "Create mode" "List mode" "Close mode" "Search mode"; do
-  # Check if local-mode section mentions this route
-  if grep -A 100 "Local mode" "$ISSUE_FILE" | grep -B 100 "Connected mode" | grep -qi "$ROUTE"; then
-    pass "Local mode covers $ROUTE"
+for ROUTE in "create" "list" "show" "close" "search"; do
+  if grep -q "bin/issue.sh $ROUTE" "$ISSUE_FILE"; then
+    pass "Runtime issue adapter covers $ROUTE"
   else
-    fail "Local mode missing $ROUTE" \
-      "Local-mode section should document behavior for $ROUTE"
+    fail "Runtime issue adapter missing $ROUTE" \
+      "The same bin/issue.sh route must serve Local and Connected modes"
   fi
 done
 
-# ============================================================
-# 5. /todo: Local-mode route coverage
-# ============================================================
-echo ""
-echo "5. /todo: Route coverage in local mode"
-
-for ROUTE in "Add" "List" "Done" "Cancel" "Check" "Quest view"; do
-  if grep -A 200 "Local-mode route adjustments" "$TODO_FILE" | head -30 | grep -qi "$ROUTE"; then
-    pass "Local mode covers $ROUTE"
-  else
-    fail "Local mode missing $ROUTE" \
-      "Local-mode route adjustments should document $ROUTE"
-  fi
-done
-
-# Check for "all" route specifically
-if grep -A 200 "Local-mode route adjustments" "$TODO_FILE" | head -30 | grep -qi "all\|done/cancelled.*14"; then
-  pass "Local mode covers 'all' route"
+if grep -Eq '^[[:space:]]*bash[[:space:]]+bin/(graph|graph-op|graph-batch)\.sh' "$ISSUE_FILE"; then
+  fail "issue contains an executable graph command" "Graph cannot own issue state"
 else
-  fail "Local mode missing 'all' route (/todo all)" \
-    "No guidance for showing done/cancelled items in local mode"
+  pass "issue has no executable graph lifecycle path"
 fi
 
 # ============================================================
-# 6. /todo: YAML format has required fields
+# 5. /todo: cross-mode canonical route coverage
 # ============================================================
 echo ""
-echo "6. /todo: YAML field completeness"
+echo "5. /todo: Canonical route coverage"
 
-# Extract the YAML example block (between ```yaml and ```)
-YAML_SECTION=$(sed -n '/Local-mode file format/,/^### /p' "$TODO_FILE")
-for FIELD in id text status priority created completed quest source; do
-  if echo "$YAML_SECTION" | grep -q "$FIELD:"; then
-    pass "YAML format includes '$FIELD'"
+for ROUTE in "Add" "List" "Done" "cancel" "Check-in"; do
+  if grep -qi "${ROUTE}" "$TODO_FILE"; then
+    pass "Canonical todo flow covers $ROUTE"
   else
-    fail "YAML format missing '$FIELD'" \
-      "Local-mode YAML should include '$FIELD' to match graph model"
+    fail "Canonical todo flow missing $ROUTE"
+  fi
+done
+
+if grep -Fq '| `all` |' "$TODO_FILE"; then
+  pass "Canonical todo flow covers all-status route"
+else
+  fail "Canonical todo flow missing all-status route"
+fi
+
+# ============================================================
+# 6. /todo: Runtime schema has required fields
+# ============================================================
+echo ""
+echo "6. /todo: Runtime field completeness"
+
+TODO_RUNTIME="$SCRIPT_DIR/egregore_runtime/todos.py"
+for FIELD in id text status priority created completed quest source; do
+  if grep -Fq "\"$FIELD\"" "$TODO_RUNTIME"; then
+    pass "Runtime todo schema includes '$FIELD'"
+  else
+    fail "Runtime todo schema missing '$FIELD'"
   fi
 done
 
 # ============================================================
-# 7. /add: Graph section has mode gate
+# 7. /add: graph is never the lifecycle authority
 # ============================================================
 echo ""
-echo "7. /add: Neo4j section gating"
+echo "7. /add: Graph-free Runtime adapter"
 
 ADD_FILE="$SCRIPT_DIR/.claude/skills/add/SKILL.md"
-NEO4J_HEADING=$(grep -n "Neo4j Artifact creation" "$ADD_FILE" | head -1)
-if echo "$NEO4J_HEADING" | grep -qi "connected\|mode"; then
-  pass "Neo4j section heading has mode qualifier"
+if grep -Eq '^[[:space:]]*bash[[:space:]]+bin/(graph|graph-op|graph-batch)\.sh' "$ADD_FILE"; then
+  fail "add contains an executable graph command" "Graph cannot own source admission"
 else
-  fail "Neo4j section heading has no mode qualifier" \
-    "Add 'CONNECTED MODE ONLY' to prevent local-mode execution"
+  pass "add has no executable graph lifecycle path"
 fi
 
 # ============================================================

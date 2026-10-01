@@ -1,8 +1,7 @@
 [features]
 hooks = true
 
-[mcp_servers.notion]
-url = "https://mcp.notion.com/mcp"
+# Optional MCP servers are registered only through an explicit connection flow.
 
 [tui]
 # Codex currently accepts built-in footer item IDs only. Egregore's dynamic

@@ -9,43 +9,28 @@ Smart sync of all Egregore repos. Fetches first, only pulls if behind.
 
 User says: "/sync-repos", "sync all repos", "sync everything", "get every repo up to date"
 
-## Loom routing
+## Execution boundary
 
-**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
-
-1. Resolve: `ROUTE=$(bash bin/loom.sh route sync-repos)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
-2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer sync-repos --override` after the output and set `"override":true` in telemetry.
-3. Otherwise delegate: spawn the Agent tool with `subagent_type:
-   "loom-executor"`, `model` = the route's `tier`, prompt =
-   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
-   `LOOM-EXECUTOR: Execute .claude/skills/sync-repos/SKILL.md`, plus the user's
-   arguments and any context the spec needs from the session. Print the
-   executor's final output **verbatim**, then print the output of
-   `bash bin/loom.sh footer sync-repos`.
-4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
-   triage the reason: needs-user-interaction or a main-loop-only tool → take
-   over and finish this skill inline (no escalation); genuine uncertainty or
-   failure → reassign `ROUTE=$(bash bin/loom.sh escalate sync-repos "<reason>")`,
-   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
-   carrying the returned decision ID
-   (sticky for this session).
-5. Telemetry (fire-and-forget):
-   `bash bin/telemetry.sh emit "command" '{"command":"sync-repos","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+This is deterministic multi-repository sync. Run it inline with bounded
+parallel fetches; do not spend a Loom/model-routing call or delegate it to
+another agent.
 
 ## Repos to sync
 
-- `../$MEMORY_DIR` — shared knowledge (derived from `memory_repo` in `egregore.json`)
+- `../{memory_dir}` — shared knowledge (derived from `memory_repo` in `egregore.json`)
 - Any repos listed in the `repos` array in `egregore.json` (as sibling directories `../{repo}`)
 - Current repo (egregore-core)
 
 **Read `egregore.json` first** to get the dynamic list:
 ```bash
 # Memory repo directory
-MEMORY_DIR=$(basename "$(jq -r '.memory_repo' egregore.json)" .git)
+bash bin/config-get.sh memory_dir
 
 # Managed repos
-REPOS=$(jq -r '.repos[]? // empty' egregore.json)
+bash bin/config-get.sh repos
 ```
+
+Use the first command’s printed value as `{memory_dir}` and each line from the second as a managed `{repo}` name; for each value, quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`. If a command prints nothing, it contributes no repo to sync.
 
 ## Execution
 
@@ -56,27 +41,48 @@ For each repo, run these commands:
 git -C /path/to/repo fetch origin --quiet
 
 # 2. Compare local vs remote
-LOCAL=$(git -C /path/to/repo rev-parse HEAD)
-REMOTE=$(git -C /path/to/repo rev-parse origin/main)
-
-# 3. Only pull if different
-if [ "$LOCAL" != "$REMOTE" ]; then
-  git -C /path/to/repo pull origin main --quiet
-  # Count commits behind
-  BEHIND=$(git -C /path/to/repo rev-list HEAD..origin/main --count)
-fi
+git -C /path/to/repo rev-parse HEAD
+git -C /path/to/repo rev-parse origin/main
 ```
+
+Use the printed revisions as `{local_sha}` and `{remote_sha}`. If they differ, pull and then count commits behind:
+
+```bash
+# 3. Only pull if different
+git -C /path/to/repo pull origin main --quiet
+# Count commits behind
+git -C /path/to/repo rev-list HEAD..origin/main --count
+```
+
+Use the printed count as `{behind}` for the output. If the revisions match, report the repo as up to date and skip the pull and count.
 
 **For the current repo (egregore-core)**: sync the `develop` branch instead of main:
 ```bash
 # Update local develop ref without switching branches (safe for concurrent sessions)
 git fetch origin develop:develop --quiet
 # If on dev/* branch, rebase onto develop
-BRANCH=$(git branch --show-current)
-if [[ "$BRANCH" == dev/* ]]; then
-  git rebase develop --quiet || (git rebase --abort && git merge develop -m "Sync with develop")
-fi
+git branch --show-current
 ```
+
+Use the printed value as `{branch}`. If it starts with `dev/`, rebase onto develop:
+
+```bash
+git rebase develop --quiet
+```
+
+If the rebase fails, run `git rebase --abort`, then
+`git merge develop -m 'Sync with develop'`. Continue to the merge only if the
+abort succeeds:
+
+```bash
+git rebase --abort
+```
+
+```bash
+git merge develop -m 'Sync with develop'
+```
+
+For any other branch, skip the rebase and merge.
 
 Use absolute paths with `git -C` to avoid permission prompts.
 

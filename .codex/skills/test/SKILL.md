@@ -1,14 +1,14 @@
 ---
 name: test
-description: 'Validate changes before /save — static analysis plus live Cypher validation against the graph, rendered as a pass/fail gate. Use for /test or ''test my changes''.'
+description: 'Run Egregore''s fast static, Runtime-contract, and targeted automated test gate before save. Optional relationship index validation requires an explicit request.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore test Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `test`. Its one
+maintained body is `.claude/skills/test/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -28,6 +28,10 @@ reading `.claude/skills/test/SKILL.md`, reproduce the same visible UX in Codex:
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 

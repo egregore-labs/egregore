@@ -38,7 +38,7 @@ git config user.name "Test User"
 # api_url points at a closed local port so credentialed calls fail fast
 # without touching the network beyond localhost.
 cat > egregore.json <<'EOF'
-{"slug":"test","org_name":"Test Org","mode":"connected","api_url":"http://127.0.0.1:9"}
+{"slug":"test","org_name":"Test Org","mode":"connected","api_url":"http://127.0.0.1:9","features":{"graph_projection":true}}
 EOF
 printf 'GITHUB_TOKEN=fake\nEGREGORE_API_KEY=fake-key\n' > .env
 printf 'memory\n.env\n' > .gitignore
@@ -46,6 +46,7 @@ printf 'memory\n.env\n' > .gitignore
 cp "$SCRIPT_DIR/bin/graph.sh" bin/graph.sh
 cp "$SCRIPT_DIR/bin/graph-batch.sh" bin/graph-batch.sh
 cp "$SCRIPT_DIR/bin/lib/worktree-links.sh" bin/lib/worktree-links.sh
+cp "$SCRIPT_DIR/bin/lib/config.sh" bin/lib/config.sh
 chmod +x bin/graph.sh bin/graph-batch.sh
 
 git add -A
@@ -68,7 +69,7 @@ fi
 
 RESULT=$(bash "$WT_PATH/bin/graph.sh" test 2>&1)
 RESULT_RC=$?
-if echo "$RESULT" | grep -qF "no_api_key"; then
+if grep -qF "no_api_key" <<< "$RESULT"; then
   fail "graph.sh reported no_api_key despite main checkout having a key"
 else
   pass "graph.sh found credentials from the main checkout (no no_api_key)"
@@ -76,7 +77,7 @@ fi
 # With credentials resolved, graph.sh enters API mode and the connection
 # attempt against the closed port fails non-zero (offline mode would exit 0
 # with status JSON instead).
-if [ "$RESULT_RC" -ne 0 ] && ! echo "$RESULT" | grep -qF '"status":"offline"'; then
+if [ "$RESULT_RC" -ne 0 ] && ! grep -qF '"status":"offline"' <<< "$RESULT"; then
   pass "graph.sh reached API mode (connection attempt, not silent offline)"
 else
   fail "graph.sh did not attempt a credentialed connection (rc=$RESULT_RC): $RESULT"
@@ -99,12 +100,12 @@ if [ "$RC" -ne 0 ]; then
 else
   fail "graph.sh query exited 0 without credentials"
 fi
-if echo "$OUT" | grep -qF '"results":[]'; then
+if grep -qF '"results":[]' <<< "$OUT"; then
   fail "graph.sh query faked an empty graph on stdout"
 else
   pass "graph.sh query did not fake an empty graph"
 fi
-if echo "$ERR" | grep -qF "EGREGORE_API_KEY is empty"; then
+if grep -qF "EGREGORE_API_KEY is empty" <<< "$ERR"; then
   pass "graph.sh query names the missing key on stderr"
 else
   fail "graph.sh query stderr missing diagnostic: $ERR"
@@ -112,7 +113,7 @@ fi
 
 BOUT=$(bash "$WT_PATH/bin/graph-batch.sh" '[{"statement":"RETURN 1 AS test","parameters":{}}]' 2>/dev/null)
 BRC=$?
-if [ "$BRC" -ne 0 ] && ! echo "$BOUT" | grep -qF '"results":[]'; then
+if [ "$BRC" -ne 0 ] && ! grep -qF '"results":[]' <<< "$BOUT"; then
   pass "graph-batch.sh fails loudly without credentials"
 else
   fail "graph-batch.sh silent/zero-exit without credentials (rc=$BRC out=$BOUT)"
@@ -120,7 +121,7 @@ fi
 
 # test subcommand keeps its offline JSON contract (dashboards consume it)
 TOUT=$(bash "$WT_PATH/bin/graph.sh" test 2>&1)
-if echo "$TOUT" | grep -qF '"reason":"no_api_key"'; then
+if grep -qF '"reason":"no_api_key"' <<< "$TOUT"; then
   pass "graph.sh test keeps the offline no_api_key contract"
 else
   fail "graph.sh test lost its offline contract: $TOUT"
@@ -133,7 +134,7 @@ cat > "$MAIN_REPO/egregore.json" <<'EOF'
 EOF
 LOUT=$(bash "$MAIN_REPO/bin/graph.sh" query "RETURN 1" 2>&1)
 LRC=$?
-if [ "$LRC" -eq 0 ] && echo "$LOUT" | grep -qF '"results":[]'; then
+if [ "$LRC" -eq 0 ] && grep -qF '"results":[]' <<< "$LOUT"; then
   pass "local mode still returns quiet empty results"
 else
   fail "local mode gate changed (rc=$LRC out=$LOUT)"
@@ -144,7 +145,7 @@ cat > "$MAIN_REPO/egregore.json" <<'EOF'
 EOF
 UOUT=$(bash "$MAIN_REPO/bin/graph.sh" query "RETURN 1" 2>&1)
 URC=$?
-if [ "$URC" -eq 0 ] && echo "$UOUT" | grep -qF '"results":[]'; then
+if [ "$URC" -eq 0 ] && grep -qF '"results":[]' <<< "$UOUT"; then
   pass "unconfigured (no api_url) keeps the quiet offline fallback"
 else
   fail "unconfigured offline fallback changed (rc=$URC out=$UOUT)"

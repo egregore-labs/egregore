@@ -55,8 +55,12 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Purpose**: Versioned named graph operations. Bounded reads include
   `open-handoffs`, `pending-questions`, `lineage`, and `meeting-history`;
   `catalog` exposes their machine-readable routing contract. Writes include
-  set-topic, mark-read, merge-person, claim-handoff, and create-pr.
-- **Called by**: graph-maintenance.sh, activity command, pr command, wrap command, harvest command
+  set-topic (and set-current-topic, which resolves the session id from the
+  checkout receipt, falling back to `.egregore-session-id`), mark-read,
+  merge-person, claim-handoff, and
+  create-pr (and record-pr, which resolves the session id, repository, and
+  author itself).
+- **Called by**: graph-maintenance.sh, worktree-create.sh and agent.sh branch (set-current-topic), activity command, pr command, wrap command, harvest command
 - **Depends on**: graph.sh, graph-wal.sh
 - **Reads**: Nothing directly (delegates to graph.sh)
 - **Writes**: Nothing directly
@@ -324,11 +328,54 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 
 ### Tests
 
+#### `base-branch.sh`
+- **Purpose**: Print the configured integration branch or an existing comparison ref
+- **Run**: `bash bin/base-branch.sh [repo-name] [--resolve]`
+- **Exit**: 0 = branch/ref printed, 1 = configuration failure, 2 = invalid arguments or unresolved checkout/ref
+- **Notes**: Honors `CONFIG`; resolution prefers `origin/<base>` then the local branch. A managed repo resolves in its sibling checkout. Configuration failures never produce a fallback branch.
+
+#### `pull.sh`
+- **Purpose**: Sync the current repository's branch and shared memory from a main checkout or a linked task worktree.
+- **Run**: `bash bin/pull.sh [--json]`
+- **Exit**: 0 = report printed, including unchanged, dirty-branch, or ignored-file skips; 1 = a failed fetch, aborted conflict, or memory link/sync problem needs attention; 2 = usage, checkout, or base-resolution failure.
+- **Notes**: Resolves the base with `base-branch.sh` and fetches `+refs/heads/<base>:refs/remotes/origin/<base>` explicitly, regardless of configured fetch refspecs. A failed fetch reports `fetch-failed` and exits 1 after continuing branch and memory synchronization against the last known ref. Fast-forwards the base itself, rebases task branches with automatic ref updates disabled, and falls back to a committed merge with explicit merge semantics. Both merge paths protect ignored files; a rebase is skipped when incoming added paths overlap local ignored files. If both rebase and merge conflict, the tree is restored. Links memory to a validated physical sibling of the main checkout when needed and syncs it through `agent.sh sync` (Runtime). Prints the `Pulling...` report or one JSON object. Does not sync managed repositories.
+
+#### `qa-inventory.sh`
+- **Purpose**: Print one read-only inventory of changed paths, affected skills, and candidate suites
+- **Run**: `bash bin/qa-inventory.sh [--pr N | --branch NAME | <paths...>] [--base REF] [--json]`
+- **Exit**: 0 = inventory printed (including `Nothing to QA.`), 2 = invalid arguments or unresolved base, branch, or PR
+- **Notes**: Defaults to working tree versus merge-base, including untracked files. PR mode requires `gh` and uses PR file paths without a checkout; unavailable PR ancestry is reported as unavailable (`null` in JSON). `--base` overrides the comparison ref. Generated paths use the shared deny-list; deleted paths remain visible. Relative selected entries keep their spelling, including symlink names, after lexical normalization of repeated slashes and `.` components; containment remains physical. Absolute selections and selections containing `..` retain physical-to-relative conversion. Outside explicit paths are marked without reading them. Skill analysis is optional on installed instances; suites are candidates by reference, not a coverage guarantee; basenames are matched only when unique in the repository. Scratch files live outside the repository and are removed on exit.
+
+#### `suite-shard.sh`
+- **Purpose**: Print a deterministic slice of the repository's shell suite corpus
+- **Run**: `bash bin/suite-shard.sh <index> <count>`
+- **Exit**: 0 = slice printed (possibly empty), 2 = invalid arguments
+- **Notes**: Uses existing regular files matching `tests/*.sh` (except `tests/run-all.sh`) and `bin/tests/*.sh`, sorted with `LC_ALL=C sort`. Assigns each path by its zero-based position modulo the shard count. The index is zero-based and must be smaller than the positive count. Prints repo-relative paths, one per line, from any working directory without reading file contents. This is a repository CI helper, not a shipped instance capability.
+
+#### `test-baseline.sh`
+- **Purpose**: Compare selected suites at the integration ref and in the working tree, classifying regressions, pre-existing failures, fixes, clean, new, and skipped suites
+- **Run**: `bash bin/test-baseline.sh [--base REF] [--keep] [--json] <suite>... | -` (`-` reads newline-separated suite paths from stdin)
+- **Exit**: 0 = no regressions, 1 = at least one regression, 2 = invalid arguments or environment failure
+- **Notes**: Uses a detached scratch worktree under TMPDIR, removed on exit and interruption; use `--keep` to inspect the checkout and logs. Scratch cannot live in the checkout or its Git metadata directories. Cleanup removes only this run's worktree; unrelated registrations are never pruned. The base checkout is clean (no untracked files), so suites depending on local untracked files read as `fixed` rather than `clean`. Suites run sequentially with no timeout in this version and receive stdin from `/dev/null`. The runner writes only scratch files; suites can write in their respective trees. Missing optional runners are reported as skipped. Failure lines, including `ERROR`, are normalized and compared to detect new failures even inside an already failing suite. After ANSI stripping, success records beginning with `PASS` as a word, `✓`, or TAP `ok <digits>` (ignoring leading whitespace) are excluded on both sides; `not ok` remains failure evidence. Different nonzero exit codes are a regression even when no new failure lines appear.
+
+#### `lib/generated-trees.sh`
+- **Purpose**: Own the shared generated-tree deny-list for static scanning and QA inventory
+- **Run**: Source from a script, then call `is_generated_path <repo-relative-path>`
+- **Exit**: `is_generated_path` returns 0 for generated paths, 1 otherwise
+- **Notes**: Defines `GENERATED_TREES` and the matcher without repository access or other side effects.
+
+#### `lib/repo-paths.sh`
+- **Purpose**: Share physical path resolution and repository containment without reading file contents
+- **Run**: Source from a script, then call `physical_path <path>` or `inside_repository <path> [root]`
+- **Exit**: `physical_path` returns 0 and prints the resolved path, or 1 on resolution failure; `inside_repository` returns 0 inside the root and 1 otherwise
+- **Notes**: Resolves directories with `cd -P` before following final-component symlinks, preserving the kernel's symlink and `..` order. Allows up to 40 final-component symlink hops; dangling links and missing directories fail. An ordinary missing final component can be named for missing-file diagnostics. The default containment root is `$SCRIPT_DIR`. Sourcing the library has no side effects.
+
 #### `test-changes.sh`
 - **Purpose**: Static analysis — Cypher safety, bash compat, direct API calls
 - **Run**: `bash bin/test-changes.sh [--all|file1 file2]`
-- **Exit**: 0 = no FAILs, 1 = any FAILs
+- **Exit**: 0 = no FAILs, 1 = any FAILs, 2 = scope could not be resolved or a selected file is unreadable
 - **Checks**: date() guards, LIMIT clauses, coalesce() on collections, macOS compat, direct curl blocking
+- **Scope**: By default, scans the branch's changes against the merge-base with the configured base branch, plus uncommitted and untracked files. Generated trees (runtime bundles, node_modules, dist, worktrees) are always skipped using the shared `bin/lib/generated-trees.sh` library.
 
 #### `test-isolation.sh`
 - **Purpose**: Live E2E API testing — org registration, graph isolation, key security
@@ -431,6 +478,12 @@ Also: `telegram-bot/test_bot.py` and `telegram-bot/test_org_isolation.py` for bo
 
 These are **in addition to** the Python suite, not a replacement:
 
+The local flow is `bash bin/qa-inventory.sh` followed by
+`bash bin/test-baseline.sh <suites>`. CI runs the same baseline tool over the
+whole shell corpus in the `Suite baseline` check, split across four shards.
+Only a `regression` against the base blocks the merge; pre-existing failures
+remain visible in the report.
+
 ```bash
 # Static analysis (fast, checks changed files for antipatterns)
 bash bin/test-changes.sh --all
@@ -454,6 +507,7 @@ bash bin/test-isolation.sh
 - **NEVER construct direct curl calls to Neo4j or Telegram** — use `bin/graph.sh` and `bin/notify.sh`.
 - **NEVER use macOS-incompatible bash** — no `date +%N`, no `sed -i` without `''` backup arg.
 - **NEVER modify `~/.egregore/instances.json`** — managed exclusively by session-start.sh.
+- **Every Runtime launcher sets `PYTHONSAFEPATH=1` beside its own `PYTHONPATH`.** `python3 -m` puts the working directory first on `sys.path`, ahead of `PYTHONPATH`; a hook loaded from the instance root but run inside a task worktree would otherwise import the worktree's older package (2026-09-20: `invalid choice: 'result-hook'` on every tool call). `bin/tests/test-runtime-launch-path.sh` audits every launch line in the source tree and the packaged runtimes.
 - **Always use `bin/graph.sh`** for Cypher queries — it handles auth, routing, and error formatting.
 - **Cypher safety**: Always guard `date()` with `toString()`, collection access with `coalesce()`, and use LIMIT on MATCH queries.
 

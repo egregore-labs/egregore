@@ -1,0 +1,73 @@
+name: Prose Readout
+
+# PR prose reports run in pr-format.yml. Invoke this one-time readout manually
+# on or after READ_OUT_DATE; it no longer starts a runner for every PR event.
+# The title guard and serial execution keep repeated dispatches idempotent.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: prose-read-out
+  cancel-in-progress: false
+
+jobs:
+  prose-read-out:
+    name: prose-read-out
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      READ_OUT_DATE: "20261008"     # four weeks after the check went live on 2026-09-10
+      WINDOW_SINCE: "2026-09-10"
+      ISSUE_TITLE: "prose rules: four-week read"
+    steps:
+      - name: Is it time, and is it already done?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY="$(date -u +%Y%m%d)"
+          if [ "$TODAY" -lt "$READ_OUT_DATE" ]; then
+            echo "not yet: $TODAY < $READ_OUT_DATE"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "in:title \"$ISSUE_TITLE\"" --json number --jq 'length')"
+          if [ "${EXISTING:-0}" -gt 0 ]; then
+            echo "already opened"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Tally the window and open the issue
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash bin/prose-check-tally.sh --repo "$GITHUB_REPOSITORY" --since "$WINDOW_SINCE" --limit 200 > tally.txt 2> tally.err || true
+          cat tally.txt tally.err
+          {
+            echo "## What"
+            echo
+            echo "The advisory prose check has commented on PRs since $WINDOW_SINCE. This is the one look the contract asks for."
+            echo
+            echo '```'
+            cat tally.txt
+            echo '```'
+            if [ -s tally.err ]; then echo; echo "Notes: $(cat tally.err)"; fi
+            echo
+            echo "## Per rule, pick one"
+            echo
+            echo "- Hits are real and nobody argued: flip the rule to blocking in \`.github/workflows/pr-format.yml\`."
+            echo "- Hits were false positives: tighten the pattern in \`bin/prose-rules/<rule>.md\` and add the sentence to \`## Passes\`."
+            echo "- Zero hits: delete the rule file."
+            echo
+            echo "Then delete the \`prose-read-out\` job. Contract: \`docs/specs/prose-rule-v1.md\`."
+          } > issue.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE ($(date -u +%Y-%m-%d))" --body-file issue.md

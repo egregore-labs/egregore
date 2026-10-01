@@ -280,7 +280,7 @@ export async function createHandoff(pi, root, params, signal) {
     await checkedExec(
       pi,
       "bash",
-      ["-c", shell, "egregore-pi-handoff", temp, body, join(root, "bin", "capture-run.sh"), ...runnerArgs],
+      ["-c", shell, "egregore-pi-handoff", temp, body, join(root, "bin", "artifact-writeback.sh"), ...runnerArgs],
       { signal, timeout: 180000 },
       "Handoff",
     );
@@ -329,6 +329,11 @@ export async function captureSessionEnd(pi, root, sessionFile, signal, runtime =
     );
     return true;
   } finally {
+    try {
+      await pi.exec("bash", [join(root, "bin", "scratch-sweep.sh")], { signal, timeout: 10000 });
+    } catch {
+      // Scratch cleanup is best effort; preserve the capture result/error.
+    }
     rmSync(temp, { recursive: true, force: true });
   }
 }

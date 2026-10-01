@@ -4,9 +4,12 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
 EXPECTED_REPO=""
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 
 usage() {
   echo "usage: bash bin/contribute-guard.sh [--config <path>] [--expect <owner/repo>]" >&2
+  echo "       bash bin/contribute-guard.sh scan [--config <path>] [--stdin | --] [file ...]" >&2
   exit 2
 }
 
@@ -14,6 +17,73 @@ fail() {
   echo "contribute: $1" >&2
   exit "${2:-2}"
 }
+
+scan() {
+  local from_stdin=false key value file status=0 grep_status
+  local files=() patterns=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --config)
+        [ $# -ge 2 ] || usage
+        CONFIG="$2"
+        shift 2
+        ;;
+      --stdin)
+        from_stdin=true
+        shift
+        ;;
+      --)
+        shift
+        files+=("$@")
+        break
+        ;;
+      -*) usage ;;
+      *)
+        files+=("$1")
+        shift
+        ;;
+    esac
+  done
+  if "$from_stdin"; then
+    [ "${#files[@]}" -eq 0 ] || usage
+    while IFS= read -r file || [ -n "$file" ]; do
+      [ -z "$file" ] || files+=("$file")
+    done
+  fi
+  [ -r "$CONFIG" ] || fail "cannot read configuration at $CONFIG; refusing to scan"
+  jq -e 'type == "object" and all(.org_name, .github_org, .slug; . == null or type == "string")' \
+    "$CONFIG" >/dev/null 2>&1 || fail 'configuration is invalid; refusing to scan'
+  [ "${#files[@]}" -gt 0 ] || return 0
+  for file in "${files[@]}"; do
+    # Validate the complete list before emitting any matches. Deleted paths
+    # can still appear in the contribution's diff file list.
+    [ -e "$file" ] || continue
+    [ -f "$file" ] && [ -r "$file" ] || fail "cannot read file $file; refusing to scan"
+  done
+  for key in org_name github_org slug; do
+    value="$(_config_val "$key")"
+    # An absent identifier must not turn into a pattern matching every line.
+    [ -z "$value" ] || patterns+=(-e "$value")
+  done
+  [ "${#patterns[@]}" -gt 0 ] || return 0
+  for file in "${files[@]}"; do
+    [ -e "$file" ] || continue
+    grep -Hn "${patterns[@]}" -- "$file"
+    grep_status=$?
+    case "$grep_status" in
+      0) status=1 ;;
+      1) ;;
+      *) fail "could not scan file $file" ;;
+    esac
+  done
+  return "$status"
+}
+
+if [ "${1:-}" = scan ]; then
+  shift
+  scan "$@"
+  exit $?
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in

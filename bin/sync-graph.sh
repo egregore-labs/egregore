@@ -12,7 +12,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo ""
   echo "Sync all missing nodes from memory files into Neo4j."
   echo "Scans handoffs, wraps, knowledge files, and quests,"
-  echo "then creates any nodes not already in the graph."
+  echo "then adds any missing entries to the hosted index."
   echo "Also auto-resolves read handoffs."
   echo ""
   echo "Returns: {\"sessions\":N,\"artifacts\":N,\"quests\":N,\"resolved\":N}"
@@ -31,6 +31,13 @@ CONFIG="$SCRIPT_DIR/egregore.json"
 if [ ! -f "$CONFIG" ]; then
   echo '{"error":"egregore.json not found"}'
   exit 1
+fi
+
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
+if ! _graph_projection_enabled; then
+  echo '{"status":"disabled","enabled":false,"reason":"graph_projection_disabled","replayable":true}'
+  exit 0
 fi
 
 # Load specific variables from .env if it exists (safe extraction, no arbitrary code execution)
@@ -60,7 +67,7 @@ EXISTING_JSON=$(bash "$SCRIPT_DIR/bin/graph-batch.sh" '[
   {"statement": "MATCH (a:Artifact) RETURN collect(a.id) AS ids"},
   {"statement": "MATCH (q:Quest) RETURN collect(q.id) AS ids"}
 ]' 2>/dev/null) || {
-  echo '{"error":"Failed to fetch existing IDs from graph"}'
+  echo '{"error":"Failed to fetch existing IDs from the hosted index"}'
   exit 1
 }
 

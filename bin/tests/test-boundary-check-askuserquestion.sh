@@ -57,11 +57,12 @@ RC="${OUT%%|*}"
 ERR="${OUT#*|}"
 
 [ "$RC" = "2" ] && pass "Read out-of-scope exits 2" || fail "Read out-of-scope exit code" "expected 2, got $RC"
-echo "$ERR" | grep -q "AskUserQuestion" && pass "Read block mentions AskUserQuestion" || fail "Read block missing AskUserQuestion directive" "stderr: $ERR"
-echo "$ERR" | grep -q "Paste contents inline" && pass "Read block offers paste-inline option" || fail "Read block missing paste-inline option"
-echo "$ERR" | grep -q "Move file into the repo" && pass "Read block offers move-into-repo option" || fail "Read block missing move-into-repo option"
-echo "$ERR" | grep -q "Cancel" && pass "Read block offers cancel option" || fail "Read block missing cancel option"
-echo "$ERR" | grep -q "Do not retry" && pass "Read block warns against retry" || fail "Read block missing do-not-retry warning"
+grep -q "AskUserQuestion" <<< "$ERR" && pass "Read block mentions AskUserQuestion" || fail "Read block missing AskUserQuestion directive" "stderr: $ERR"
+grep -q "Paste contents inline" <<< "$ERR" && pass "Read block offers paste-inline option" || fail "Read block missing paste-inline option"
+grep -q "for this session" <<< "$ERR" && pass "Read block offers session-allow option" || fail "Read block missing session-allow option"
+grep -q "Always allow on this instance" <<< "$ERR" && pass "Read block offers always-allow option" || fail "Read block missing always-allow option"
+grep -q "Cancel" <<< "$ERR" && pass "Read block offers cancel option" || fail "Read block missing cancel option"
+grep -q "Do not retry" <<< "$ERR" && pass "Read block warns against retry" || fail "Read block missing do-not-retry warning"
 
 # --- 2. Edit + Write also blocked with same message shape ---
 for TOOL in Edit Write; do
@@ -69,7 +70,7 @@ for TOOL in Edit Write; do
   RC="${OUT%%|*}"
   ERR="${OUT#*|}"
   [ "$RC" = "2" ] && pass "$TOOL out-of-scope exits 2" || fail "$TOOL out-of-scope exit code" "expected 2, got $RC"
-  echo "$ERR" | grep -q "AskUserQuestion" && pass "$TOOL block mentions AskUserQuestion" || fail "$TOOL block missing AskUserQuestion"
+  grep -q "AskUserQuestion" <<< "$ERR" && pass "$TOOL block mentions AskUserQuestion" || fail "$TOOL block missing AskUserQuestion"
 done
 
 # --- 3. Glob / Grep out-of-scope path blocks with AskUserQuestion ---
@@ -78,15 +79,17 @@ for TOOL in Glob Grep; do
   RC="${OUT%%|*}"
   ERR="${OUT#*|}"
   [ "$RC" = "2" ] && pass "$TOOL out-of-scope exits 2" || fail "$TOOL out-of-scope exit code" "expected 2, got $RC"
-  echo "$ERR" | grep -q "AskUserQuestion" && pass "$TOOL block mentions AskUserQuestion" || fail "$TOOL block missing AskUserQuestion"
+  grep -q "AskUserQuestion" <<< "$ERR" && pass "$TOOL block mentions AskUserQuestion" || fail "$TOOL block missing AskUserQuestion"
 done
 
-# --- 4. Bash referencing denied path blocks with AskUserQuestion ---
+# --- 4. Bash referencing another instance's path is a HARD block ---
+# The hard tier has no consent path, so it must NOT invite AskUserQuestion.
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat /tmp/egregore-other-instance/secret.txt"}}')
 RC="${OUT%%|*}"
 ERR="${OUT#*|}"
 [ "$RC" = "2" ] && pass "Bash denied-path exits 2" || fail "Bash denied-path exit code" "expected 2, got $RC"
-echo "$ERR" | grep -q "AskUserQuestion" && pass "Bash block mentions AskUserQuestion" || fail "Bash block missing AskUserQuestion"
+grep -q "another Egregore instance" <<< "$ERR" && pass "Bash block names foreign instance" || fail "Bash block missing hard-tier message" "stderr: $ERR"
+grep -q "AskUserQuestion" <<< "$ERR" && fail "Bash hard block must not offer AskUserQuestion" "stderr: $ERR" || pass "Bash hard block offers no consent path"
 
 # --- 5. In-scope operations still pass cleanly (exit 0, no stderr) ---
 OUT=$(run_hook "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$FIXTURE_PROJECT/README.md\"}}")

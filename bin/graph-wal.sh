@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Graph Write-Ahead Log — resilient graph writes with local buffer.
+# Hosted index write log — retries pending updates from a local buffer.
 # Mirrors bin/telemetry.sh architecture.
 #
 # Subcommands:
@@ -12,16 +12,29 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG="$SCRIPT_DIR/egregore.json"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: graph-wal.sh <command>"
   echo ""
-  echo "Graph Write-Ahead Log — resilient graph writes with local buffer."
+  echo "Hosted index write log — retries pending updates from a local buffer."
   echo ""
   echo "Commands:"
   echo "  append <cypher> <params>  Append entry to WAL (no network)"
   echo "  drain                     Execute pending entries via graph-batch"
   echo "  status                    Show pending count + file size (JSON)"
+  exit 0
+fi
+
+# Do not accumulate a shadow write backlog while the optional projection is
+# quarantined. Canonical Markdown/Git remains the complete source of truth.
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
+if ! _graph_projection_enabled; then
+  case "${1:-status}" in
+    status) echo '{"pending":0,"bytes":0,"status":"disabled","reason":"graph_projection_disabled"}' ;;
+    *) echo '{"status":"disabled","reason":"graph_projection_disabled"}' ;;
+  esac
   exit 0
 fi
 

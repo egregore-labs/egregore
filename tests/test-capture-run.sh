@@ -28,6 +28,98 @@ setup_fixture() {
 
 echo "Testing: shared capture engine"
 
+# A wrap body is consumed at its read, before writeback can fail and before
+# the closing sweep runs. Another scratch file witnesses that distinction.
+WRAP_FIXTURE="$TMPD/wrap-input"
+mkdir -p "$WRAP_FIXTURE/bin/lib" "$WRAP_FIXTURE/memory" "$WRAP_FIXTURE/tmp"
+cp "$ROOT/bin/agent.sh" "$WRAP_FIXTURE/bin/agent.sh"
+cp "$ROOT/bin/lib/scratch.sh" "$WRAP_FIXTURE/bin/lib/scratch.sh"
+cp "$ROOT/bin/lib/git-message.sh" "$WRAP_FIXTURE/bin/lib/git-message.sh"
+cp -R "$ROOT/egregore_runtime" "$WRAP_FIXTURE/egregore_runtime"
+cat > "$WRAP_FIXTURE/bin/artifact-writeback.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+cat > "$WRAP_TEST_CAPTURE"
+[ -f "$WRAP_TEST_UNREAD" ]
+case "$WRAP_TEST_SOURCE_KIND" in
+  scratch) [ ! -e "$WRAP_TEST_BODY" ] ;;
+  document) [ -f "$WRAP_TEST_BODY" ] ;;
+esac
+printf 'read-time assertions passed\n' > "$WRAP_TEST_RECEIPT"
+exit 17
+SH
+cat > "$WRAP_FIXTURE/bin/scratch-sweep.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'unexpected sweep\n' > "$WRAP_TEST_SWEEP"
+SH
+export WRAP_TEST_CAPTURE="$WRAP_FIXTURE/body-captured.md"
+export WRAP_TEST_UNREAD="$WRAP_FIXTURE/tmp/unread-response.json"
+export WRAP_TEST_RECEIPT="$WRAP_FIXTURE/read-receipt"
+export WRAP_TEST_SWEEP="$WRAP_FIXTURE/sweep-receipt"
+printf 'unread response\n' > "$WRAP_TEST_UNREAD"
+for WRAP_TEST_SOURCE_KIND in scratch document; do
+  export WRAP_TEST_SOURCE_KIND
+  if [ "$WRAP_TEST_SOURCE_KIND" = scratch ]; then
+    WRAP_TEST_BODY="$WRAP_FIXTURE/tmp/body.md"
+  else
+    WRAP_TEST_BODY="$WRAP_FIXTURE/document.md"
+  fi
+  export WRAP_TEST_BODY
+  printf 'Body reaches writeback.\n' > "$WRAP_TEST_BODY"
+  : > "$WRAP_TEST_RECEIPT"
+  WRAP_TEST_STATUS=0
+  TMPDIR="$WRAP_FIXTURE/tmp" bash "$WRAP_FIXTURE/bin/agent.sh" wrap --from tester --topic scratch \
+    --summary "Read-time consumption" --body-file "$WRAP_TEST_BODY" --no-push \
+    > "$WRAP_FIXTURE/stdout" 2> "$WRAP_FIXTURE/stderr" || WRAP_TEST_STATUS=$?
+  if [ "$WRAP_TEST_STATUS" -eq 17 ] && [ -s "$WRAP_TEST_RECEIPT" ] &&
+     [ "$(cat "$WRAP_TEST_CAPTURE")" = 'Body reaches writeback.' ] &&
+     [ -f "$WRAP_TEST_UNREAD" ] && [ ! -e "$WRAP_TEST_SWEEP" ]; then
+    ok "wrap $WRAP_TEST_SOURCE_KIND body has correct lifetime before failed writeback and sweep"
+  else
+    bad "wrap $WRAP_TEST_SOURCE_KIND body consumption was deferred or changed writeback failure"
+    printf '  writeback status: %s\n' "$WRAP_TEST_STATUS"
+    cat "$WRAP_FIXTURE/stderr"
+  fi
+done
+
+for WRAP_TEST_SOURCE_KIND in scratch document; do
+  export WRAP_TEST_SOURCE_KIND
+  if [ "$WRAP_TEST_SOURCE_KIND" = scratch ]; then
+    WRAP_TEST_BODY="$WRAP_FIXTURE/tmp/handoff-body.md"
+  else
+    WRAP_TEST_BODY="$WRAP_FIXTURE/handoff-document.md"
+  fi
+  export WRAP_TEST_BODY
+  printf 'Handoff reaches writeback.\n' > "$WRAP_TEST_BODY"
+  : > "$WRAP_TEST_RECEIPT"
+  HANDOFF_TEST_STATUS=0
+  TMPDIR="$WRAP_FIXTURE/tmp" bash "$WRAP_FIXTURE/bin/agent.sh" handoff \
+    --from tester --to teammate --topic scratch --body-file "$WRAP_TEST_BODY" \
+    --no-push --no-publish --no-notify > "$WRAP_FIXTURE/stdout" \
+    2> "$WRAP_FIXTURE/stderr" || HANDOFF_TEST_STATUS=$?
+  if [ "$HANDOFF_TEST_STATUS" -eq 17 ] && [ -s "$WRAP_TEST_RECEIPT" ] &&
+     grep -Fxq 'Handoff reaches writeback.' "$WRAP_TEST_CAPTURE"; then
+    ok "handoff $WRAP_TEST_SOURCE_KIND body has correct lifetime before failed writeback"
+  else
+    bad "handoff $WRAP_TEST_SOURCE_KIND body consumption was deferred or changed writeback failure"
+    printf '  writeback status: %s\n' "$HANDOFF_TEST_STATUS"
+    cat "$WRAP_FIXTURE/stderr"
+  fi
+done
+
+if python3 - "$ROOT/bin/agent.sh" <<'PY'
+from pathlib import Path
+import sys
+
+body = Path(sys.argv[1]).read_text().split("cmd_wrap() {", 1)[1].split("\ncmd_handoff()", 1)[0]
+assert body.index('scratch-sweep.sh') > body.index('bash "$SCRIPT_DIR/bin/session-autosave.sh"')
+PY
+then
+  ok "wrap closes with scratch sweep after session autosave"
+else
+  bad "wrap scratch sweep lifecycle wiring is missing or out of order"
+fi
+
 LOCAL="$TMPD/local"
 setup_fixture local "$LOCAL"
 
@@ -111,7 +203,7 @@ SH
 WAL="$TMPD/wal.jsonl"
 start_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
 printf 'Connected details\n' |
-  CAPTURE_TEST_WAL="$WAL" TMPDIR="$TMPD" bash "$CONNECTED/bin/capture-run.sh" \
+  EGREGORE_GRAPH_PROJECTION=1 CAPTURE_TEST_WAL="$WAL" TMPDIR="$TMPD" bash "$CONNECTED/bin/capture-run.sh" \
     --mode personal \
     --author tester \
     --topic "queued lifecycle" \
@@ -163,6 +255,7 @@ SH
 RECONCILE_MARKER="$TMPD/reconcile.marker"
 start_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
 printf 'Detached worker details\n' |
+  EGREGORE_GRAPH_PROJECTION=1 \
   CAPTURE_TEST_WAL="$WAL" \
   CAPTURE_TEST_RECONCILE_MARKER="$RECONCILE_MARKER" \
   TMPDIR="$TMPD" bash "$CONNECTED/bin/capture-run.sh" \
@@ -182,21 +275,18 @@ else
   bad "reconciliation blocked the caller for ${detached_elapsed}ms"
 fi
 
-if grep -q 'capture-run.sh' "$ROOT/.claude/skills/wrap/SKILL.md" &&
-   grep -q -- '--mode personal' "$ROOT/.claude/skills/wrap/SKILL.md" &&
-   grep -q 'capture-run.sh' "$ROOT/.claude/skills/handoff/SKILL.md" &&
-   grep -q -- '--verify-fidelity' "$ROOT/.claude/skills/handoff/SKILL.md" &&
-   grep -q 'sourceMap' "$ROOT/.claude/skills/handoff/SKILL.md" &&
-   ! grep -q '^## Step 0.5: Triage mode' "$ROOT/.claude/skills/handoff/SKILL.md" &&
+# Canonical handoff preview/approval and no-triage policy are pinned in
+# tests/test_handoff_skill_intent.py; this suite covers their capture wiring.
+if grep -q 'bash bin/agent.sh wrap' "$ROOT/.claude/skills/wrap/SKILL.md" &&
+   grep -q 'one writeback transaction' "$ROOT/.claude/skills/wrap/SKILL.md" &&
    grep -q 'capture-run.sh' "$ROOT/bin/session-log.sh" &&
    grep -q -- '--mode baseline' "$ROOT/bin/session-log.sh" &&
-   grep -q 'capture-run.sh --mode addressed' "$ROOT/.codex/skills/handoff/SKILL.md" &&
-   grep -q -- '--verify-fidelity' "$ROOT/.codex/skills/handoff/SKILL.md" &&
-   grep -q 'sourceMap' "$ROOT/.codex/skills/handoff/SKILL.md" &&
+   grep -Fq 'maintained body is `.claude/skills/handoff/SKILL.md`' "$ROOT/.codex/skills/handoff/SKILL.md" &&
    grep -q "yaml_extract 'addressed_to'" "$ROOT/bin/index-handoff.sh" &&
    grep -q 'restore missing source content' "$ROOT/bin/render-card.sh" &&
-   grep -q 'capture-run.sh --mode personal' "$ROOT/.codex/skills/wrap/SKILL.md" &&
-   grep -q 'capture-run.sh' "$ROOT/bin/pi-product-workflows.mjs" &&
+   grep -Fq 'maintained body is `.claude/skills/wrap/SKILL.md`' "$ROOT/.codex/skills/wrap/SKILL.md" &&
+   grep -q 'one personal canonical writeback transaction' "$ROOT/.claude/skills/wrap/SKILL.md" &&
+   grep -q 'artifact-writeback.sh' "$ROOT/bin/pi-product-workflows.mjs" &&
    grep -q -- '--mode addressed' "$ROOT/bin/pi-product-workflows.mjs" &&
    grep -q '^    "capture_schema: egregore-capture/v1",$' "$ROOT/bin/pi-product-workflows.mjs" &&
    grep -q 'captureSessionEnd' "$ROOT/bin/pi-product-workflows.mjs" &&
@@ -207,6 +297,40 @@ if grep -q 'capture-run.sh' "$ROOT/.claude/skills/wrap/SKILL.md" &&
   ok "Claude Code, Codex, and Pi capture doors route together"
 else
   bad "cross-runtime capture routing or passive lifecycle discovery regressed"
+fi
+
+# --- session-end capture measures the session from its timestamped lines ---
+# Interactive transcripts open with an untimestamped `last-prompt` record and
+# may close with one; reading only the first and last lines computed a zero
+# duration, tripped the empty-session guard, and dropped every capture
+# (2026-08-07 → 09-23). The capture must come from the first and last lines
+# that carry a timestamp, and an empty transcript must still be skipped.
+SL="$TMPD/session-log"
+setup_fixture local "$SL"
+cp "$ROOT/bin/session-log.sh" "$SL/bin/session-log.sh"
+printf '{"github_username":"tester","display_name":"Tester"}\n' > "$SL/.egregore-state.json"
+printf '%s\n' \
+  '{"type":"last-prompt","prompt":"hi"}' \
+  '{"type":"user","timestamp":"2026-09-23T11:38:15.259Z","message":{"role":"user"}}' \
+  '{"type":"assistant","timestamp":"2026-09-23T12:17:01.240Z","message":{"role":"assistant"}}' \
+  '{"type":"file-history-snapshot","snapshot":{}}' > "$TMPD/transcript-real.jsonl"
+printf '{"session_id":"sess-real-shape","transcript_path":"%s"}' "$TMPD/transcript-real.jsonl" |
+  TMPDIR="$TMPD" bash "$SL/bin/session-log.sh" || true
+REAL_CAPTURE="$(grep -rl 'sess-real-shape' "$SL/memory/sessions" 2>/dev/null | head -1 || true)"
+if [ -n "$REAL_CAPTURE" ] && grep -q '^\*\*Duration\*\*: 38min$' "$REAL_CAPTURE" &&
+   grep -q '^date: 2026-09-23$' "$REAL_CAPTURE"; then
+  ok "session-end capture measures a real-shaped transcript from its timestamped lines"
+else
+  bad "session-end capture lost the session whose transcript opens without a timestamp"
+fi
+
+printf '%s\n' '{"type":"last-prompt","prompt":"hi"}' '{"type":"file-history-snapshot","snapshot":{}}' > "$TMPD/transcript-empty.jsonl"
+printf '{"session_id":"sess-empty-shape","transcript_path":"%s"}' "$TMPD/transcript-empty.jsonl" |
+  TMPDIR="$TMPD" bash "$SL/bin/session-log.sh" || true
+if grep -rq 'sess-empty-shape' "$SL/memory/sessions" 2>/dev/null; then
+  bad "session-end capture recorded a transcript with no activity"
+else
+  ok "session-end capture still skips a transcript with no timestamped activity"
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$fail"

@@ -32,25 +32,21 @@ else
   fail "Claude: guided Notion MCP connection is incomplete"
 fi
 
-if grep -q '^\[mcp_servers\.notion\]$' "$ROOT/.codex/config.toml" \
-   && grep -q '^url = "https://mcp\.notion\.com/mcp"$' "$ROOT/.codex/config.toml"; then
-  pass "Codex: official Notion MCP is declared"
-else
-  fail "Codex: official Notion MCP declaration missing"
-fi
-
-for runtime in codex pi prime; do
-  config="$ROOT/packages/create-egregore/runtime/$runtime/.codex/config.toml"
-  if grep -q '^\[mcp_servers\.notion\]$' "$config" \
-     && grep -q '^url = "https://mcp\.notion\.com/mcp"$' "$config"; then
-    pass "Runtime bundle: $runtime carries the Notion MCP declaration"
+# Optional connectors must not start before a user connects them. This checks
+# shipped configuration; installer preservation is exercised in codex-runtime.test.js.
+for config in "$ROOT/.codex/config.toml" \
+  "$ROOT/packages/create-egregore/runtime/codex/.codex/config.toml" \
+  "$ROOT/packages/create-egregore/runtime/pi/.codex/config.toml" \
+  "$ROOT/packages/create-egregore/runtime/prime/.codex/config.toml"; do
+  if [ -f "$config" ] && ! grep -q '^\[mcp_servers\.notion\]$' "$config"; then
+    pass "Optional Notion server is absent from ${config#"$ROOT/"}"
   else
-    fail "Runtime bundle: $runtime lost the Notion MCP declaration"
+    fail "Unexpected default Notion registration or missing configuration: ${config#"$ROOT/"}"
   fi
 done
 
 if grep -q 'notion ...' "$ROOT/.claude/skills/ingest/SKILL.md" \
-   && grep -q 'route directly to `ingest-notion`' "$ROOT/.claude/skills/ingest/SKILL.md"; then
+   && grep -q 'use the ingest-notion skill' "$ROOT/.claude/skills/ingest/SKILL.md"; then
   pass "UI: /ingest routes Notion directly into the MCP ingest flow"
 else
   fail "UI: /ingest does not own the Notion MCP flow"

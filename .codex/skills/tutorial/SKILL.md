@@ -1,14 +1,14 @@
 ---
 name: tutorial
-description: 'Interactive walkthrough of Egregore''s core loop — /activity, /reflect, and /quest or /add — with adaptive questions and real artifacts. Use for /tutorial or ''walk me through Egregore''.'
+description: 'Interactive walkthrough of Egregore''s Local core loop — activity, reflection, and a quest — using adaptive questions and real Runtime-backed artifacts. Use for ''tutorial'', ''walk me through Egregore'', or ''show me how this works''; use onboarding for first-time identity or org setup.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore tutorial Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `tutorial`. Its one
+maintained body is `.claude/skills/tutorial/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -28,6 +28,10 @@ reading `.claude/skills/tutorial/SKILL.md`, reproduce the same visible UX in Cod
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 

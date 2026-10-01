@@ -133,7 +133,7 @@ case "$CMD" in
       fi
 
       # Age
-      WT_MTIME=$(stat -f %m "$WT_DIR" 2>/dev/null || stat -c %Y "$WT_DIR" 2>/dev/null || echo "$NOW_TS")
+      WT_MTIME=$(stat -c %Y "$WT_DIR" 2>/dev/null || stat -f %m "$WT_DIR" 2>/dev/null || echo "$NOW_TS")
       WT_AGE_H=$(( (NOW_TS - WT_MTIME) / 3600 ))
 
       if [ "$STATUS" = "merged" ] || [ "$STATUS" = "broken" ] || [ "$WT_AGE_H" -gt 24 ]; then

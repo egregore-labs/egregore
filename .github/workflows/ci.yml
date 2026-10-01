@@ -1,0 +1,927 @@
+name: CI
+
+# One planner routes the existing strict owners. Release candidates and full
+# runs are selected by the planner from the event and requested mode.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Affected checks or the complete suite
+        type: choice
+        options: [affected, full]
+        default: full
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.mode || 'affected' }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    uses: ./.github/workflows/ci-plan.yml
+    with:
+      workflow: all
+      mode: ${{ inputs.mode || 'affected' }}
+
+  shell-contracts:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.shell_contracts == 'true') }}
+    name: Strict shell contracts
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install shell suite dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zsh procps util-linux
+          # Missing Zsh must fail here, not become a passing coverage skip.
+          for tool in bash jq zsh pgrep setsid; do command -v "$tool"; done
+
+      - name: Syntax check — all shell scripts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FAIL=0
+          for f in bin/*.sh bin/lib/*.sh; do
+            if ! bash -n "$f" 2>/dev/null; then
+              echo "FAIL: $f"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: No hardcoded internal references
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          # Check bin/ scripts for Curve-Labs references (should be parameterized)
+          FOUND=$(grep -rn "Curve-Labs\|curve-labs\|curvelabs" bin/ --include='*.sh' | grep -v 'test-' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found internal references in bin/ scripts:"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: No unsafe .env sourcing
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FOUND=$(grep -rn 'source.*\.env' bin/ --include='*.sh' | grep -v 'test-' | grep -v '#' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found unsafe 'source .env':"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      # Under pipefail, grep -q exits at its first match and the printf or
+      # echo feeding it can die with a broken pipe, failing a passing check
+      # at random. Tests read a variable with `grep -q PATTERN <<< "$VAR"`.
+      - name: No echo or printf piped into grep -q under pipefail
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FOUND=$(grep -l pipefail bin/tests/*.sh tests/*.sh | xargs grep -nE '(printf .%s[^ ]*|echo) .\$[^ ]* \| *grep -[A-Za-z]*q' | grep -vE '^[^:]+:[0-9]+: *#' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found a pipe into grep -q under pipefail (use grep -q PATTERN <<< \"\$VAR\"):"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: No manual JSON construction
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FOUND=$(grep -rn '"{\\\"' bin/ --include='*.sh' | grep -v 'test-' || true)
+          if [ -n "$FOUND" ]; then
+            echo "Found manual JSON construction (use jq -n):"
+            echo "$FOUND"
+            exit 1
+          fi
+
+      - name: Local mode graceful degradation
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FAIL=0
+          for script in bin/graph.sh bin/notify.sh bin/graph-op.sh; do
+            if [ -f "$script" ] && ! grep -q '"local"' "$script" 2>/dev/null; then
+              echo "FAIL: $script missing local mode handling"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: Commands have valid structure
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          FAIL=0
+          COMMAND_FILES=$(find .claude/commands -name '*.md' -type f 2>/dev/null || true)
+          if [ -z "$COMMAND_FILES" ]; then
+            COMMAND_FILES=$(find .claude/skills -name 'SKILL.md' -type f 2>/dev/null || true)
+          fi
+          if [ -z "$COMMAND_FILES" ]; then
+            echo "FAIL: no Claude command or skill files found"
+            exit 1
+          fi
+          while IFS= read -r cmd; do
+            [ -n "$cmd" ] || continue
+            # Every command should have content (not empty)
+            LINES=$(wc -l < "$cmd" | tr -d ' ')
+            if [ "$LINES" -lt 3 ]; then
+              echo "FAIL: $cmd is too short ($LINES lines)"
+              FAIL=1
+            fi
+          done <<< "$COMMAND_FILES"
+          echo "Checked $(echo "$COMMAND_FILES" | wc -l | tr -d ' ') command/skill files"
+          exit $FAIL
+
+      - name: Harvest question palette contract
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-harvest-question-palette.sh
+
+      - name: Convention parity (commit/PR format paragraphs)
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-convention-parity.sh
+
+      - name: Run worktree tests
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-worktree.sh
+
+      - name: Run agent protocol smoke test
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-agent-protocol.sh
+
+      - name: Test greeting in Bash and Zsh
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/test-greeting.sh
+
+      - name: Test pending-turn greeting projection
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-greeting-pending-turns.sh
+
+      - name: Test runtime mode status
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-runtime-mode-status.sh
+
+      - name: Test boundary consent guidance
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-boundary-check-askuserquestion.sh
+
+      - name: Test instance isolation topologies
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-boundary-instance-isolation.sh
+
+      - name: Test retrieval output hygiene
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-retrieval-output-hygiene.sh
+
+      - name: Test runtime launch path
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-runtime-launch-path.sh
+
+      - name: Test card output hygiene
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-card-output-hygiene.sh
+
+      - name: Test prose rule contract
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-prose-check.sh
+
+      - name: Loom routing
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom.sh
+
+      - name: Loom truth
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-truth.sh
+
+      - name: Loom evals
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-evals.sh
+
+      - name: Loom learner
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-learner.sh
+
+      - name: Loom replay
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-replay.sh
+
+      - name: Loom scenarios
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-scenarios.sh
+
+      - name: Loom dashboard
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-loom-dashboard.sh
+
+      - name: Minion workflow
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-minion-workflow.sh
+
+      - name: Activity and handoff lifecycle
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-handoff-activity-lifecycle.sh
+
+      - name: CI suite ownership
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-ci-test-ownership.sh
+
+      - name: CI shard partition
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-suite-shard.sh
+
+  multiplayer-poc-tests:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.multiplayer == 'true') }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    env:
+      TZ: UTC
+      LC_ALL: C.UTF-8
+      NODE_ENV: ''
+      NODE_OPTIONS: ''
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Test multiplayer Thread protocol, governance, lifecycle, and dependency continuation
+        run: node --test threads/experiments/multiplayer-poc/test/*.test.mjs
+
+  artifacts-tests:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.artifacts == 'true') }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    env:
+      TZ: UTC
+      LC_ALL: C.UTF-8
+      NODE_ENV: ''
+      NODE_OPTIONS: ''
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/egregore-artifacts/package-lock.json
+
+      - name: Install egregore-artifacts deps
+        working-directory: packages/egregore-artifacts
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+
+      - name: Re-vendor design-system (build dist + copy into the package)
+        working-directory: packages/egregore-artifacts
+        run: npm run vendor
+
+      - name: Test egregore-artifacts
+        working-directory: packages/egregore-artifacts
+        run: npm test
+
+      - name: Test design-system
+        working-directory: packages/design-system
+        run: npm test
+
+      - name: Require renderer dependencies for shell coverage
+        run: test -d packages/egregore-artifacts/node_modules/react && test -d packages/egregore-artifacts/node_modules/react-dom
+
+      - name: Test deterministic view rendering with installed dependencies
+        run: bash bin/tests/test-view-render.sh
+
+      - name: Test artifact dark mode with installed dependencies
+        run: bash bin/tests/test-artifact-dark-mode.sh
+
+  runtime-parity:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.runtime == 'true') }}
+    name: Runtime contracts
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+        with:
+          # Frozen evaluation export verifies the manifest's original commit.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install focused test dependencies
+        run: python -m pip install pytest==9.0.2 PyYAML==6.0.3
+
+      - name: Require Runtime fixture capabilities
+        run: |
+          for tool in git jq shasum; do command -v "$tool"; done
+          python - <<'PY'
+          import os
+          import pty
+          import socket
+
+          master, slave = pty.openpty()
+          os.close(master)
+          os.close(slave)
+          with socket.socket() as listener:
+              listener.bind(("127.0.0.1", 0))
+          PY
+
+      - name: Verify bundle freshness, skill parity, and dependency completeness
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        working-directory: packages/create-egregore
+        run: npm run test:runtime
+
+      - name: Verify packaged runtime portability
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        working-directory: packages/create-egregore
+        # test:package bounds Node file concurrency for PTY timing on one CPU.
+        run: npm run test:package
+
+      - name: Verify strict Runtime skill migration contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-runtime-skill-migration.sh
+
+      - name: Verify Runtime observations, authorization, and canonical recovery
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_runtime_telemetry.py tests/test_operation_observations.py
+          tests/test_runtime_observe.py tests/test_runtime_writeback.py
+          tests/test_runtime_upgrade.py
+          tests/test_runtime_source_open.py tests/test_runtime_artifacts.py
+          tests/test_runtime_threads_scrolls.py tests/test_runtime_batch_recovery.py
+          tests/test_runtime_research_ingest.py tests/test_runtime_contracts.py
+          tests/test_harness_observe.py tests/test_runtime_continuity.py
+
+      - name: Verify retrieval readiness and save preflight without live services
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_qmd_retriever.py tests/test_cache_readiness_cli.py
+          tests/test_save_preflight.py
+
+      - name: Verify immutable evaluation fixtures and no-model execution
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_eg_eval*.py tests/test_frozen_export.py
+
+      - name: Verify advisory triage and immutable issue drafts without live services
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_issue_triage.py tests/test_issue_triage_service.py
+          tests/test_issue_triage_eval.py tests/test_github_issues.py
+          tests/test_issue_reporting.py tests/test_issue_duplicates.py
+          tests/test_issue_duplicate_lookup.py tests/test_issue_readiness.py
+
+      - name: Verify CI selection, proof reuse, and cost accounting offline
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_ci_plan.py tests/test_ci_workflow.py tests/test_ci_domains.py tests/test_ci_reuse.py tests/test_ci_usage.py tests/test_nightly_ci.py
+          tests/test_release_ci.py
+
+  test:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_core == 'true') }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            api/requirements.txt
+            .github/workflows/ci.yml
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest respx pytest-html pytest-asyncio pytest-metadata pglast neo4j
+
+      - name: Run corpus map and MCP input contracts
+        run: python -m pytest -q tests/test_corpus_map.py tests/test_mcp_users.py
+
+      - name: Run API tests
+        run: |
+          node bin/capability-distribution.mjs validate
+          node api/scripts/build-connect-runtime-pack.mjs --check
+          cd tests
+          python -m pytest -v --tb=short -m "api and not postgres"
+
+      - name: Run OAuth and web-auth tests
+        run: |
+          python -m pytest -q \
+            api/test_oauth.py \
+            api/test_web_auth.py \
+            api/test_html_safety.py \
+            api/test_design_render.py \
+            api/test_connect_runtime.py \
+            api/test_teams.py \
+            api/test_slack.py
+
+  emissary-tests:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_emissary == 'true') }}
+    name: Emissary CLI (Node ${{ matrix.node }})
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 22]
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Run Emissary package tests
+        working-directory: packages/egregore-emissary
+        run: npm test
+
+  respond-proof:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_emissary == 'true') }}
+    name: Exact-SHA respond-loop proof
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prove the checked-out candidate
+        working-directory: packages/egregore-emissary
+        env:
+          EMISSARY_PROOF_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run prove:respond-loop
+
+      - name: Retain the respond-loop proof trace
+        if: ${{ always() && needs.plan.result == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: emissary-respond-loop-${{ github.event.pull_request.head.sha || github.sha }}
+          path: test-results/emissary/respond-loop/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  mcp-resource-server:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_emissary == 'true') }}
+    name: MCP resource server
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/egregore-handoff/mcp/package-lock.json
+
+      - name: Install, test, and audit MCP
+        working-directory: packages/egregore-handoff/mcp
+        run: |
+          npm ci
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - name: Build and health-check the MCP image
+        run: |
+          docker build \
+            --file packages/egregore-handoff/mcp/Dockerfile \
+            --tag egregore-emissary-mcp:proof \
+            packages/egregore-handoff/mcp
+          docker run --rm --detach \
+            --name egregore-emissary-mcp-proof \
+            --publish 3002:3002 \
+            egregore-emissary-mcp:proof
+          trap 'docker rm -f egregore-emissary-mcp-proof >/dev/null 2>&1 || true' EXIT
+          if ! curl --fail --retry 20 --retry-delay 1 --retry-all-errors \
+            http://127.0.0.1:3002/health; then
+            docker logs egregore-emissary-mcp-proof
+            exit 1
+          fi
+
+  site-contract:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_site == 'true') }}
+    name: Emissary site routing and build
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify site dependency and route contracts
+        run: |
+          npm --prefix site ci
+          npm --prefix site audit --omit=dev --audit-level=high
+          python -m pip install pytest
+          python -m pytest -q tests/test_emissary_site_routing.py
+
+      - name: Build the production site
+        run: npm --prefix site run build
+
+  api-image:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_image == 'true') }}
+    name: API production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Build the API image from the candidate
+        run: docker build --file api/Dockerfile --tag egregore-api:proof .
+
+      - name: Start and health-check the API image
+        run: |
+          docker run --rm --detach \
+            --name egregore-api-proof \
+            --publish 8000:8000 \
+            egregore-api:proof
+          trap 'docker rm -f egregore-api-proof >/dev/null 2>&1 || true' EXIT
+          if ! curl --fail --retry 20 --retry-delay 1 --retry-all-errors \
+            http://127.0.0.1:8000/health; then
+            docker logs egregore-api-proof
+            exit 1
+          fi
+
+  postgres-proofs:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_postgres == 'true') }}
+    name: Emissary PostgreSQL 16 proofs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: proof
+          POSTGRES_DB: egregore_test_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d egregore_test_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            api/requirements.txt
+            .github/workflows/ci.yml
+
+      - name: Install PostgreSQL proof dependencies
+        run: |
+          python -m pip install -r api/requirements.txt
+          python -m pip install pytest pytest-asyncio "psycopg[binary]>=3.2"
+
+      - name: Prove publish recovery against PostgreSQL
+        env:
+          EMISSARY_TEST_POSTGRES_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+          EMISSARY_TEST_POSTGRES_DISPOSABLE: '1'
+        run: python -m pytest -q tests/test_emissary_publish_postgres.py
+
+      - name: Prove issue feed receipt concurrency and role isolation
+        env:
+          ISSUE_FEED_TEST_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+        run: python -m pytest -q tests/test_issue_feed_sql.py
+
+      - name: Prove Runtime identity and membership removal against PostgreSQL
+        env:
+          EGREGORE_IDENTITY_TEST_POSTGRES_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+          EGREGORE_IDENTITY_TEST_POSTGRES_DISPOSABLE: '1'
+          PYTHON_DOTENV_DISABLED: '1'
+          USE_SUPABASE: 'false'
+        run: python -m pytest -q tests/test_runtime_identity_postgres.py
+
+      - name: Prove handle security and concurrency contracts
+        run: bash tests/test-handle-claim-pg16.sh
+
+      - name: Prove data-plane security and concurrency contracts
+        run: bash tests/test-emissary-data-plane-hardening-pg16.sh
+
+      - name: Prove donation-ingestion security and concurrency contracts
+        run: bash tests/test-emissary-donation-ingestion-pg16.sh
+
+  static-contracts:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_emissary == 'true') }}
+    name: Handoff schema and publication contracts
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/egregore-handoff/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            api/requirements.txt
+            .github/workflows/ci.yml
+
+      - name: Install shared handoff and validator dependencies
+        working-directory: packages/egregore-handoff
+        run: npm ci
+
+      - name: Install dependencies
+        run: |
+          pip install -r api/requirements.txt
+          pip install pytest pytest-asyncio pytest-html pytest-metadata pglast
+
+      - name: Verify generated JSON Schema is current
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          npm --prefix packages/egregore-handoff run gen-schema
+          git diff --exit-code -- docs/specs/handoff-v1.schema.json
+
+      - name: Run shared handoff tests
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        working-directory: packages/egregore-handoff
+        run: |
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - name: Run schema and publication contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: |
+          python -m pytest -q \
+            tests/test_emissary_publish_idempotency_migration.py \
+            tests/test_platform_migration.py \
+            tests/test_validator_drift.py \
+            tests/test_validate_handoff_v1.py \
+            tests/test_publication_audit.py \
+            tests/test_release_safety.py
+
+  baseline:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.baseline == 'true') }}
+    name: Suite baseline — shard ${{ matrix.shard }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.baseline_shards || '[0]') }}
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      # Full history: suites and the inventory engine compute merge-bases
+      # against the base, which a shallow merge-ref checkout cannot answer.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install baseline suite dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zsh procps lsof rsync util-linux
+          # Process inspection and cleanup are required proofs, never optional skips.
+          for tool in bash git python3 node jq zsh perl tar pgrep ps lsof rsync shasum setsid; do command -v "$tool"; done
+          python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))'
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22 ? 1 : 0)'
+      - name: Resolve the base
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+          MERGE_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+        run: |
+          if [ -z "$BASE" ]; then BASE="${MERGE_BASE_REF#refs/heads/}"; fi
+          if [ -z "$BASE" ]; then BASE=develop; fi
+          git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" || exit 2
+          # PR and merge-queue classification uses the event's immutable base.
+          # Strict dispatches cannot pass merely because base and head match.
+          case "$BASE_SHA" in
+            '') BASE_REF="origin/$BASE" ;;
+            *[!0-9a-fA-F]*) exit 2 ;;
+            *) [ "${#BASE_SHA}" -eq 40 ] || exit 2; BASE_REF="$BASE_SHA" ;;
+          esac
+          printf 'BASE=%s\nBASE_REF=%s\n' "$BASE" "$BASE_REF" >> "$GITHUB_ENV"
+      - name: Compare shell suites
+        shell: bash
+        env:
+          BASELINE_SUITES: ${{ needs.plan.outputs.baseline_suites }}
+          BASELINE_SHARD_COUNT: ${{ needs.plan.outputs.baseline_shard_count }}
+          BASELINE_STRICT: ${{ needs.plan.outputs.baseline_strict }}
+        run: |
+          set -o pipefail
+          # Keep the run directory so every suite's head log ships with the report.
+          export TMPDIR="$RUNNER_TEMP/suite-baseline"
+          mkdir -p "$TMPDIR"
+          # Preserve the baseline status while still writing a failed run's summary.
+          set +e
+          printf '%s\n' "$BASELINE_SUITES" > "$RUNNER_TEMP/baseline-selection.json"
+          bash bin/suite-shard.sh --exclude-owned --selected "$RUNNER_TEMP/baseline-selection.json" ${{ matrix.shard }} "$BASELINE_SHARD_COUNT" > selected-suites.txt || exit 2
+          baseline_args=(--head-first --timeout 300 --keep --base "$BASE_REF")
+          case "$BASELINE_STRICT" in
+            true) baseline_args+=(--strict-head) ;;
+            false) ;;
+            *) exit 2 ;;
+          esac
+          bash bin/test-baseline.sh "${baseline_args[@]}" - < selected-suites.txt | tee suite-baseline.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          mkdir -p suite-logs
+          cp "$TMPDIR"/qa-baseline.*/logs/head/*.log suite-logs/ 2>/dev/null || true
+          {
+            printf '## Suite baseline — shard ${{ matrix.shard }} of %s (base %s)\n\n' "$BASELINE_SHARD_COUNT" "$BASE_REF"
+            printf '```text\n'
+            cat suite-baseline.txt
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Upload baseline report
+        if: ${{ always() && needs.plan.result == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-baseline-shard-${{ matrix.shard }}
+          path: |
+            suite-baseline.txt
+            suite-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  shellcheck:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.shellcheck == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+
+      - name: Run ShellCheck on bin/ scripts
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: './bin'
+          severity: error
+          format: gcc
+
+  full-result:
+    name: Full CI result — ${{ github.sha }}
+    needs:
+      - plan
+      - shell-contracts
+      - multiplayer-poc-tests
+      - artifacts-tests
+      - runtime-parity
+      - test
+      - emissary-tests
+      - respond-proof
+      - mcp-resource-server
+      - site-contract
+      - api-image
+      - postgres-proofs
+      - static-contracts
+      - baseline
+      - shellcheck
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.baseline_strict == 'true') }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Require every full-suite owner to pass
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          required = {
+              "plan", "shell-contracts", "multiplayer-poc-tests", "artifacts-tests",
+              "runtime-parity", "test", "emissary-tests", "respond-proof",
+              "mcp-resource-server", "site-contract", "api-image", "postgres-proofs",
+              "static-contracts", "baseline", "shellcheck",
+          }
+          results = json.loads(os.environ["CI_NEEDS_JSON"])
+          if set(results) != required:
+              sys.exit("Full CI evidence is incomplete")
+          failed = sorted(name for name in required if results[name].get("result") != "success")
+          if failed:
+              sys.exit("Full CI did not pass: " + ", ".join(failed))
+          print("Every full-suite owner passed")
+          PY

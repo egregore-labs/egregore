@@ -24,7 +24,7 @@ require_text "$ROOT_DIR/.claude/skills/harvest/SKILL.md" ".claude/skills/harvest
 require_text "$ROOT_DIR/.claude/skills/harvest/PROCESS.md" "[\`QUESTION_PALETTE.md\`](./QUESTION_PALETTE.md)"
 require_text "$ROOT_DIR/.claude/skills/harvest/FORMAT.md" "[\`QUESTION_PALETTE.md\`](./QUESTION_PALETTE.md)"
 require_text "$ROOT_DIR/.claude/skills/scroll/SKILL.md" ".claude/skills/harvest/QUESTION_PALETTE.md"
-require_text "$ROOT_DIR/.codex/skills/harvest/SKILL.md" 'Read `QUESTION_PALETTE.md` completely.'
+require_text "$ROOT_DIR/.claude/skills/harvest/SKILL.md" 'Read these completely before questioning:'
 
 scroll_refs="$(grep -Fc '.claude/skills/harvest/QUESTION_PALETTE.md' "$ROOT_DIR/.claude/skills/scroll/SKILL.md")"
 [ "$scroll_refs" -eq 1 ] || fail "scroll must reference the canonical palette exactly once; found $scroll_refs"
@@ -60,7 +60,7 @@ require_text "$ROOT_DIR/.claude/skills/harvest/PROCESS.md" "There is no"
 require_text "$ROOT_DIR/.claude/skills/harvest/PROCESS.md" "automatic second pass after disclosure"
 require_text "$ROOT_DIR/.claude/skills/harvest/PROCESS.md" "Never turn attributed positions into an anonymous or aggregate claim"
 require_text "$ROOT_DIR/.claude/skills/harvest/SKILL.md" "dispatch the frozen question set unchanged"
-require_text "$ROOT_DIR/.codex/skills/harvest/SKILL.md" "After the declared"
+require_text "$ROOT_DIR/.claude/skills/harvest/SKILL.md" "declared completion condition seals the evidence"
 if grep -REiq 'use an .?IDEA round|private revision after disclosure|completes the IDEA structure|rounds capped 2.?3' \
   "$ROOT_DIR/.claude/skills/harvest" "$ROOT_DIR/.codex/skills/harvest" \
   "$ROOT_DIR/docs/specs/scroll-harvest-iteration.md"; then

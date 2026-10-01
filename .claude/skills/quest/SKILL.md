@@ -1,289 +1,121 @@
 ---
 name: quest
-description: "Use when the user says 'let's explore', 'start a quest', or 'what quests are open' — manages open-ended explorations anyone can contribute to. Not a personal task (/todo) or something broken (/issue)."
+description: "Manage shared open-ended quests through one canonical Markdown lifecycle. Use for /quest, listing or opening quests, starting an exploration, contributing, prioritizing, pausing, or completing a quest."
 ---
 
-Manage quests — open-ended explorations that anyone can contribute to.
+# Quest
+
+Manage collaborative explorations without making a graph or harness prompt an
+authority.
 
 ## When to invoke
 
-User says: "let's explore", "open question", "we should investigate", "start a quest", "what quests are open", "contribute to [quest]"
-Not this: personal task → `/todo` · something is broken → `/issue`
+Manage shared open-ended quests through one canonical Markdown lifecycle. Use for /quest, listing or opening quests, starting an exploration, contributing, prioritizing, pausing, or completing a quest.
 
-Arguments: $ARGUMENTS (Optional: quest name, or subcommand)
+## Runtime contract
 
-## Usage
+- `memory/quests/<slug>.md` is canonical in Local and Connected modes.
+- Resolve identity and permissions through `ActorContext` before reading or
+  changing quest state.
+- `bin/quest.sh` is the only lifecycle adapter. It authorizes, validates,
+  writes canonical Markdown, records Git provenance, refreshes retrieval,
+  schedules changed-hash embedding, emits content-free telemetry, and may
+  update an optional graph projection downstream.
+- A projection failure never rolls back or overrides canonical Markdown/Git.
+- `memory/quests/index.md`, dashboards, and graph records are rebuildable
+  views, not state the ritual edits.
 
-- `/quest` — List active quests
-- `/quest [name]` — Show quest details and linked artifacts
-- `/quest new` — Create a new quest interactively
-- `/quest contribute [name]` — Add a contribution entry
-- `/quest prioritize [name] [high|medium|low|none]` — Set quest priority
-- `/quest pause [name]` — Pause a quest
-- `/quest complete [name]` — Complete with outcome
+Arguments: `$ARGUMENTS`.
 
-## Quest file location
+## Routes
 
-All quests live in `memory/quests/[slug].md`
+| Input | Runtime action |
+|---|---|
+| empty | `bash bin/quest.sh list` |
+| `all` | `bash bin/quest.sh list --all` |
+| `<name>` | resolve one listed slug, then `bash bin/quest.sh show <slug>` |
+| `new` | collect the minimum fields, then one `new` call |
+| `contribute <name>` | resolve the slug and record one contribution |
+| `prioritize <name> <level>` | set `none`, `low`, `medium`, or `high` |
+| `pause <name>` | explicitly pause one active quest |
+| `complete <name>` | require an outcome, then complete one active quest |
 
-## Quest frontmatter
+Suppress raw JSON. Render only the fields returned by the adapter.
 
-```yaml
----
-title: Evaluation Benchmark for Dynamic Ontologies
-slug: benchmark-eval
-status: active | paused | completed
-projects: [backend]
-started: 2026-01-26
-started_by: Alice
-priority: 0
-completed: null
----
-```
+## List and show
 
-Priority values: `0` (none/default), `1` (low), `2` (medium), `3` (high). Used by `/activity` scoring.
+Run one list call and use that snapshot for display and name resolution. Show
+active quests first, ordered by priority and recency; show paused separately.
+Include title, slug, projects, priority, starter, and canonical path. For a
+detail request, call `show` once after resolution and render its question,
+threads, contributions, artifacts, entry points, and outcome from the returned
+canonical body.
 
-**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
+Do not run a graph query to enrich the view. Linked todos and relationships may
+appear only when a future Runtime read model returns them with freshness and
+provenance.
 
-## Mode detection
+## Create
 
-```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
-```
+Collect:
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging ("Graph offline", "Recording in knowledge graph", Neo4j, etc.). Create quest file in `memory/quests/`, update `memory/quests/index.md`, commit, push. No graph node creation, no notifications. Quest management works entirely from filesystem.
+1. title
+2. the open question or goal
+3. optional slug, projects, and initial threads
 
-Specifically in local mode:
-- `/quest new`: Skip the Neo4j Quest creation section below. Show `✓ Quest saved to memory/quests/{slug}.md` (not "Quest node created").
-- `/quest pause`/`complete`: Skip the Neo4j status update. Only update the quest markdown frontmatter.
-- `/quest prioritize`: Skip the Neo4j priority update. Only update the quest markdown frontmatter.
-- `/quest [name]` detail view: Skip the linked Todos graph query. Show quest details from the markdown file only. Omit the Todos section.
-- Notifications: Skip entirely — do not mention notifications.
-
-**Connected mode**: Full behavior including graph nodes and notifications as specified below.
-
-## Neo4j Quest creation (via bin/graph.sh, on `/quest new`) — CONNECTED MODE ONLY
-
-**Skip this entire section in local mode.** Do not run these queries.
-
-Run with `bash bin/graph.sh query "..." '{"param": "value"}'`
-
-```cypher
-MATCH (p:Person {name: $author})
-CREATE (q:Quest {
-  id: $slug,
-  title: $title,
-  status: 'active',
-  started: date(),
-  question: $question,
-  filePath: $filePath,
-  priority: 0
-})
-CREATE (q)-[:STARTED_BY]->(p)
-WITH q
-UNWIND $projects AS projName
-MATCH (proj:Project {name: projName})
-CREATE (q)-[:RELATES_TO]->(proj)
-RETURN q.id
-```
-
-## Neo4j status update (via bin/graph.sh, on `/quest pause` or `/quest complete`) — CONNECTED MODE ONLY
-
-**Skip this query in local mode.** Only update the quest markdown frontmatter.
-
-```cypher
-MATCH (q:Quest {id: $slug})
-SET q.status = $status, q.completed = CASE WHEN $status = 'completed' THEN date() ELSE null END
-RETURN q.id, q.status
-```
-
-## Neo4j priority update (via bin/graph.sh, on `/quest prioritize`) — CONNECTED MODE ONLY
-
-**Skip this query in local mode.** Only update the quest markdown frontmatter.
-
-Maps: high=3, medium=2, low=1, none=0.
-
-```cypher
-MATCH (q:Quest {id: $slug})
-SET q.priority = $priority
-RETURN q.id, q.priority
-```
-
-Also update the quest markdown file — add or repfrontend `priority:` in frontmatter.
-
-```
-> /quest prioritize grants high
-
-✓ grants priority set to high (3)
-  Updated Neo4j and memory/quests/grants.md
-```
-
-## Example (list)
-
-```
-> /quest
-
-Active Quests
-─────────────
-
-| Quest | Project | Artifacts | Contributors |
-|-------|---------|-----------|--------------|
-| benchmark-eval | backend | 4 | Alice, Carol |
-| research-agent | frontend, backend | 1 | Alice |
-
-Paused: (none)
-
-To see details: /quest benchmark-eval
-To create: /quest new
-```
-
-## Example (show)
-
-```
-> /quest benchmark-eval
-
-Quest: Evaluation Benchmark for Dynamic Ontologies
-──────────────────────────────────────────────────
-
-Status: active
-Projects: backend
-Started: 2026-01-26 by Alice
-
-The Question:
-  What does it mean for a dynamic ontology to be "good"?
-  How do we measure emergence, coherence, utility over time?
-
-Threads:
-  - [ ] Survey existing ontology evaluation methods
-  - [ ] Define "dynamic" — what changes, how fast?
-  - [x] Look at HELM for inspiration
-
-Artifacts (4):
-  → 2026-01-26 [source] HELM Framework Review
-  → 2026-01-26 [thought] Temporal dimension in evaluation (Alice)
-  → 2026-01-27 [source] Benchmarking LLM Reasoning
-  → 2026-01-27 [finding] HELM adaptable with modifications (Carol)
-
-Todos:
-  □ bob: fix retry logic in graph.sh (2d ago)
-  □ alice: investigate connection pooling (today)
-
-Contributors: Alice, Carol
-
-Entry points:
-  - Read the HELM finding
-  - Check backend/benchmarks/ for prototype
-```
-
-## Example (new)
-
-```
-> /quest new
-
-Creating a new quest...
-
-What's the question or goal?
-> Build a research agent that can autonomously explore topics
-
-Short slug (lowercase, hyphens):
-> research-agent
-
-Which projects does this relate to?
-  [x] backend
-  [x] frontend
-  [ ] infrastructure
-
-✓ Created memory/quests/research-agent.md
-
-Add initial threads? (or skip)
-> - Survey existing research agent architectures
-> - Define scope: what does "research" mean here?
-> - Prototype with Claude tool use
-> done
-
-Recording in knowledge graph...
-  ✓ Quest node created, linked to backend + frontend
-
-Pushing to shared memory...
-  ✓ Quest saved to memory/quests/research-agent.md
-
-✓ Quest created and shared.
-```
-
-## Auto-push to memory (MANDATORY on quest create/update)
-
-Quest files live in `memory/` which is its own repo on `main`. After writing or updating a quest file, **always** commit and push immediately — do not defer to `/save`.
+Then make one call:
 
 ```bash
-git -C memory add "quests/${slug}.md"
-git -C memory commit -m "quest: ${slug} — ${action}" --quiet
-git -C memory push origin main --quiet
+bash bin/quest.sh new \
+  --title "<title>" \
+  --question "<question>" \
+  [--slug "<slug>"] \
+  [--project "<project>"]... \
+  [--thread "<thread>"]...
 ```
 
-Where `${action}` is `created`, `updated`, `paused`, `completed`, `prioritized`, or `contribution`.
+Confirm the stable quest id, canonical path, and writeback status. Do not run a
+second Git, index, graph, save, or publish action.
 
-This applies to: `/quest new`, `/quest contribute`, `/quest pause`, `/quest complete`, `/quest prioritize` — any operation that modifies a quest file.
+## Update
 
-If the push fails, warn the user: `Quest saved locally but push failed — run /save to retry.`
-
-## Notifications — CONNECTED MODE ONLY
-
-**Skip this entire section in local mode.** Do not run `bin/notify.sh` or mention notifications.
-
-When creating a quest that involves specific people, offer a separate
-notification for each person. Selecting people for the quest is not
-notification consent.
-
-**Detection**: "quest involving bob and alice" → notify both
-
-For each person, follow `.claude/context/notification-consent.md` and prepare:
-```bash
-PLAN_JSON=$(bash bin/notify.sh plan send "bob" "message")
-```
-
-Show the exact organization, recipient, channel, and message in a dedicated
-Send / Edit / Cancel checkpoint. One approval covers one recipient and one
-immutable message; never batch approvals across people.
-
-**Message format**:
-```
-Hey Bob, alice started a quest you're involved in: {title}
-
-"{question}"
-```
-
-## Linked Todos (in detail view) — CONNECTED MODE ONLY
-
-**Skip this entire section in local mode.** Do not run the linked todos query. Omit the Todos section from the detail view.
-
-When showing quest details (`/quest [name]`), query linked todos (all active statuses):
+Resolve a user-supplied name against one list snapshot. If ambiguous, show the
+bounded choices. Then mutate by stable slug:
 
 ```bash
-bash bin/graph.sh query "MATCH (t:Todo)-[:PART_OF]->(q:Quest {id: '$questSlug'}) WHERE t.status IN ['open', 'blocked', 'deferred'] MATCH (t)-[:BY]->(p:Person) RETURN t.text AS text, t.status AS status, t.blockedBy AS blockedBy, t.deferredUntil AS deferredUntil, p.name AS by, t.created AS created ORDER BY t.created DESC"
+bash bin/quest.sh contribute "<slug>" "<contribution>"
+bash bin/quest.sh prioritize "<slug>" "<none|low|medium|high>"
+bash bin/quest.sh pause "<slug>"
+bash bin/quest.sh complete "<slug>" --outcome "<outcome>"
 ```
 
-Display after Threads section, before Artifacts, with status indicators and health:
+Only an active quest accepts contributions, pause, or completion. Completion
+requires an explicit outcome. Never infer completion from inactivity, age,
+closed todos, or graph state.
+
+## Failure behavior
+
+- Authorization denial: return no quest content and perform no write.
+- Writeback partial: canonical Markdown/Git wins; surface projection,
+  retrieval, or telemetry warnings without retrying the entire write.
+- Concurrent edit: stop on the Runtime conflict, re-list, then retry only with
+  current user intent.
+- Graph/control-plane unavailable: quest lifecycle remains functional.
+
+## Rules
+
+- Markdown/Git is authoritative in every mode.
+- One list snapshot per route; one canonical write per transition.
+- Never edit quest files or their index directly.
+- Never call Git, QMD, Neo4j, Supabase, or notification APIs from this skill.
+- Quest participation is not notification consent. Any later notification is
+  a separate exact recipient/message approval after canonical writeback.
+- Do not include titles, questions, contributions, outcomes, or paths in
+  telemetry.
+
+Emit content-free command telemetry only if Runtime writeback did not already
+record the operation:
+
+```bash
+bash bin/telemetry.sh emit "command" '{"command":"quest","subcommand":"<route>"}' 2>/dev/null &
 ```
-Todos: (healthy — 2/3 moving)
-  □ bob: fix retry logic in graph.sh (2d ago)
-  ✗ alice: investigate connection pooling — blocked: "waiting on API docs" (today)
-  ↓ bob: finalize tier naming — deferred until Feb 15 (5d ago)
-```
-
-**Health indicator** — derived from todo status distribution:
-- All open/progressing → `healthy`
-- >50% blocked → `stalling`
-- All deferred → `hibernating`
-- Mixed → show fraction: `{n}/{total} moving`
-
-Format: `Todos: ({health} — {n}/{total} moving)` or `Todos: ({health})` for simple states.
-
-Status sigils in todo list: `□` open, `✗` blocked (with blockedBy text), `↓` deferred (with deferredUntil date).
-
-Omit the Todos section entirely if no todos are linked to the quest.
-
-## Next
-
-Use `/add` to attach artifacts. Quest files are auto-pushed to memory — no `/save` needed.
-
-View a quest in the browser: `/view quest {slug}` — renders a branded, shareable artifact.

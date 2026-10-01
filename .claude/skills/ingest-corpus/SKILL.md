@@ -18,19 +18,20 @@ recording → `ingest-meeting` · a Notion or Google source → those connectors
 ## Step 0 — Connected mode only
 
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+bash bin/config-get.sh mode
 ```
 
-If `mode` is `local`, stop and tell the user:
+Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`.
 
-> Building a knowledge base needs Egregore Connect. The statements it produces
-> are shared through the graph, so your team asks one archive rather than each
-> keeping a private copy. This configuration has no graph.
+If it prints `local`, stop and tell the user:
+
+> This specialized corpus workflow needs Egregore Connect. It uses a hosted
+> index of extracted statements. Your ordinary memory and search with QMD run locally.
 >
 > Plain `/ingest` still works — it stores your documents and makes them
 > searchable on this machine.
 
-Then stop. Do not run the survey, and do not offer a way to turn Connect on.
+Offer `egregore connect` or “Not now,” then stop. Do not run the survey in Local mode. Do not describe this specialized statement index as shared hosted retrieval or hosted embeddings.
 
 ## What makes this different from plain ingest
 
@@ -58,7 +59,8 @@ cannot be read, a spreadsheet sitting beside the documents.
 Only if the survey reports more than one group. One group means there is nothing to separate,
 so ask nothing.
 
-Use `AskUserQuestion` with the question `corpus_survey.boundary_question()` returns. It already
+Ask with a structured question when available and permitted in this session; otherwise ask in plain text.
+Use the question `corpus_survey.boundary_question()` returns. It already
 carries the user's own folder names and states the consequence. Keep both options in the order
 given: **keeping them together is first**, because most folder structures are subjects, and
 separating subjects removes real answers.

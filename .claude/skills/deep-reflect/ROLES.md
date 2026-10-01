@@ -2,7 +2,7 @@
 
 Prompts and output schemas for every subagent the engine spawns. Contracts are **tier-silent** — no model names anywhere; spawns pass no model override and inherit the session tier. Each prompt must be self-contained: subagents inherit nothing from the main conversation.
 
-**Two bindings, one contract.** When the harness provides schema-validated subagent spawning (the Workflow tool), bind each role's schema there and validation is enforced by the harness. In the foreground-Task fallback, append to every prompt: `Return ONLY valid JSON matching the schema below. No markdown fences, no explanation.` — one repair attempt on invalid JSON, then continue with whatever agents succeeded; synthesis works with partial input.
+**Two bindings, one contract.** When schema-validated subagent spawning is available and permitted in this session, bind each role's schema there and validation is enforced by the harness. Otherwise, use foreground subagent delegation when available and permitted in this session; otherwise perform the role inline under the same contract, with provenance marked `verification: self-checked`. For the foreground or inline fallback, append to every prompt: `Return ONLY valid JSON matching the schema below. No markdown fences, no explanation.` — one repair attempt on invalid JSON, then continue with whatever role outputs succeeded; synthesis works with partial input.
 
 Every prompt begins with the same context block:
 
@@ -34,7 +34,7 @@ Max 12 candidates across both scouts after the main loop merges. Prefer breadth 
 
 Mission: read assigned files IN FULL, in your own context, and extract claims + leads. Titles and topics are hints, not evidence — your claims must be grounded in what the text actually says.
 
-Inputs: 3-6 file paths (you read them yourself with the Read tool), the question + sub-questions, the current seen-set (paths only, for lead dedup), and in cross-ref mode the relation instruction below.
+Inputs: 3-6 file paths (read each file yourself at its supplied path), the question + sub-questions, the current seen-set (paths only, for lead dedup), and in cross-ref mode the relation instruction below.
 
 Hard rules:
 - No claim without a verbatim excerpt (≤30 words) copied exactly from the file — it will be mechanically re-checked; a fabricated or paraphrased excerpt kills the claim.

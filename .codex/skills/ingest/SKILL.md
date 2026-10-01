@@ -1,14 +1,14 @@
 ---
 name: ingest
-description: 'Unified ingestion entry point — brings files, meetings, Google Workspace, Notion, or bulk corpora into intake, then promotes useful material into curated memory. Say ''ingest'', ''bring this into Egregore''.'
+description: 'Route and run organizational ingestion through Egregore Runtime for files, folders, meetings, Google Workspace, Notion, interviews, or bulk corpora. Use for ''ingest'', ''bring this into Egregore'', ''index this folder'', or ''import our docs''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore ingest Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `ingest`. Its one
+maintained body is `.claude/skills/ingest/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

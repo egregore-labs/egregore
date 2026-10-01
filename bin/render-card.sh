@@ -268,17 +268,39 @@ extract_briefing_from_file() {
   ' "$file"
 }
 
+extract_frontmatter_scalar() {
+  local file="$1"
+  local key="$2"
+  local raw
+  [ -f "$file" ] || return 0
+  raw="$(awk -v key="$key" '
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { exit }
+    in_frontmatter && index($0, key ":") == 1 {
+      sub("^" key ":[[:space:]]*", "")
+      print
+      exit
+    }
+  ' "$file")"
+  [ -n "$(trim "$raw")" ] || return 0
+  printf '%s' "$raw" | jq -Rr 'fromjson? // .'
+}
+
 abs_file_for_briefing="$(jq -r '.absFile // ""' "$RESULT_FILE")"
+FILE_BRIEFING="$(extract_briefing_from_file "$abs_file_for_briefing")"
+FILE_CLAIM="$(extract_frontmatter_scalar "$abs_file_for_briefing" claim)"
 if [ -n "$(trim "$BRIEFING_FILE_TEXT")" ]; then
   BRIEFING="$BRIEFING_FILE_TEXT"
 elif [ -n "$(trim "$STDIN_BRIEFING")" ]; then
   BRIEFING="$STDIN_BRIEFING"
+elif [ -n "$(trim "$FILE_BRIEFING")" ]; then
+  BRIEFING="$FILE_BRIEFING"
 else
-  BRIEFING="$(extract_briefing_from_file "$abs_file_for_briefing")"
+  BRIEFING="$FILE_CLAIM"
 fi
 
 if [ -z "$(trim "$BRIEFING")" ]; then
-  echo "briefing input is empty; pass --briefing-file, stdin, or include a ## Briefing section in absFile" >&2
+  echo "briefing input is empty; pass --briefing-file, stdin, or include a claim or ## Briefing section in absFile" >&2
   exit 1
 fi
 
@@ -427,6 +449,11 @@ recipient="$(clean_inline "$(json_string '.recipient')")"
 topic="$(clean_inline "$(json_string '.topic')")"
 author="$(clean_inline "$(json_string '.author')")"
 
+canonical_author="$(clean_inline "$(extract_frontmatter_scalar "$abs_file" from)")"
+canonical_recipient="$(clean_inline "$(extract_frontmatter_scalar "$abs_file" addressed_to)")"
+[ -n "$canonical_author" ] && author="$canonical_author"
+[ -n "$canonical_recipient" ] && recipient="$canonical_recipient"
+
 author_display="$(display_author "$author")"
 today="$(date '+%b %d')"
 topic="$(fit_text "$topic" 58)"
@@ -450,7 +477,7 @@ while IFS=$'\t' read -r artifact_type artifact_title; do
 done < <(jq -r '(.artifacts // []) | .[]? | [((.type // "Artifact") | tostring | gsub("[\t\r\n]+"; " ")), ((.title // "") | tostring | gsub("[\t\r\n]+"; " "))] | @tsv' "$RESULT_FILE")
 
 STATUS_BITS=("saved")
-[ "$graph_status" = "ok" ] && STATUS_BITS+=("graphed")
+[ "$graph_status" = "ok" ] && STATUS_BITS+=("indexed")
 [ "$memory_status" = "ok" ] && STATUS_BITS+=("pushed")
 [ "$notify_status" = "approval_required" ] && STATUS_BITS+=("notify approval pending")
 [ -n "$artifact_url" ] && STATUS_BITS+=("published")
@@ -469,7 +496,7 @@ done
 # ─── render ─────────────────────────────────────────────────────────────
 
 if [ "$mode" = "connected" ] && [ "$graph_status" = "offline" ]; then
-  echo "⚠ graph indexing failed — will sync on next /save"
+  echo "⚠ optional hosted indexing failed — will sync on next /save"
 fi
 if [ "$memory_status" = "failed" ]; then
   echo "⚠ memory push failed — commits are local"

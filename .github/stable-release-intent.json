@@ -1,0 +1,23 @@
+{
+  "schema": "egregore-stable-intent/v1",
+  "packages": [
+    {
+      "name": "create-egregore",
+      "version": "0.21.1",
+      "action": "publish",
+      "reason": "Existing-user identity reconciliation fix released as create-egregore 0.21.1."
+    },
+    {
+      "name": "egregore-artifacts",
+      "version": "0.30.0",
+      "action": "publish",
+      "reason": "Companion renderer for the preserved staircase and Runtime artifact features; source 0.30.0 is not yet available on npm."
+    },
+    {
+      "name": "egregore-emissary",
+      "version": "0.20.1",
+      "action": "defer",
+      "reason": "Release preparation only; select and version this package in the reviewed production candidate before publication."
+    }
+  ]
+}

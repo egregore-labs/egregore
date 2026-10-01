@@ -40,10 +40,45 @@ _save() {
   tmp="$(mktemp "$CONFIG.XXXXXX")" || _die "cannot create temp file" 1
   if jq "$@" "$filter" "$CONFIG" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
     mv "$tmp" "$CONFIG"
+    _control_plane_push
   else
     rm -f "$tmp"
     _die "failed to update $CONFIG (invalid jq filter or unwritable file)" 1
   fi
+}
+
+# ── control-plane push (Connected mode) ──────────────────────────────────
+# A confirmed settings write reaches the control plane immediately — no
+# harness session, no git ceremony in the loop. Fail-soft: the file write
+# already landed, and a missed push is reconciled by the next session
+# start's settings sync (bin/lib/settings-drift.sh).
+_control_plane_push() {
+  local api_url api_key payload actor response revision
+  api_url=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+  [ -n "$api_url" ] || return 0
+  api_key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  [ -n "$api_key" ] || return 0
+  actor=$(jq -r '.github_username // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null)
+  payload=$(jq -c --arg by "$actor" '{
+    settings: ({boundary, base_branch, people_removed, features, repos, admins, people}
+      | with_entries(select(.value != null))),
+    updated_by: (if $by == "" then null else $by end)
+  }' "$CONFIG" 2>/dev/null)
+  [ -n "$payload" ] || return 0
+  response=$(curl -s --max-time 10 -X PUT "$api_url/api/org/settings" \
+    -H "Authorization: Bearer $api_key" -H "Content-Type: application/json" \
+    --data-binary "$payload" 2>/dev/null) || return 0
+  revision=$(printf '%s' "$response" | jq -r '.settings_revision // empty' 2>/dev/null)
+  if [ -n "$revision" ] && [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
+    local st
+    st="$(mktemp "$SCRIPT_DIR/.egregore-state.json.XXXXXX")" || return 0
+    if jq --arg rev "$revision" '.org_settings_revision = $rev' "$SCRIPT_DIR/.egregore-state.json" > "$st" 2>/dev/null && [ -s "$st" ]; then
+      mv "$st" "$SCRIPT_DIR/.egregore-state.json"
+    else
+      rm -f "$st"
+    fi
+  fi
+  return 0
 }
 
 _has_repo() { jq -e --arg n "$1" 'any(.repos[]?; (if type=="object" then .name else . end) == $n)' "$CONFIG" >/dev/null; }
@@ -59,6 +94,7 @@ settings.sh — Egregore instance settings
   settings.sh repo   list | add <name> [description] | remove <name>
   settings.sh admin  list | add <github-handle> | remove <github-handle>
   settings.sh people list | add <github-handle> | remove <github-handle>
+  settings.sh posture status|strict|standard|open   org-wide boundary posture
   settings.sh dump                         full snapshot (JSON)
 
   --json    machine-readable output for status/list
@@ -145,7 +181,7 @@ cmd_workflow() {
           || _die "cannot switch workflow: origin/main does not exist or could not be reached" 1
         _save '.base_branch = "main"'
       fi
-      echo "Git workflow: SIMPLE — pull requests now target main"
+      echo "Git workflow: SIMPLE — pull requests now target main · /save shares it with the org"
       ;;
     staged)
       if [ "$base" != "develop" ]; then
@@ -159,7 +195,7 @@ cmd_workflow() {
       elif ! jq -e 'has("base_branch")' "$CONFIG" >/dev/null 2>&1; then
         _save '.base_branch = "develop"'
       fi
-      echo "Git workflow: STAGED — pull requests now target develop; releases promote to main"
+      echo "Git workflow: STAGED — pull requests now target develop; releases promote to main · /save shares it with the org"
       ;;
     *) _die "usage: settings.sh workflow status|simple|staged" 1 ;;
   esac
@@ -232,8 +268,26 @@ _people_dir() { echo "$SCRIPT_DIR/memory/people"; }
 _people_names() {
   local pdir; pdir="$(_people_dir)"
   [ -d "$pdir" ] || return 0
-  ls "$pdir"/*.md 2>/dev/null | while IFS= read -r f; do basename "$f" .md; done \
-    | grep -viE '^(index|readme)$' || true
+  # Removals are durable: sessions and syncs can resurrect person FILES
+  # (observed: deleted members reappearing via session auto-saves), so the
+  # committed removal ledger in egregore.json, not file presence, decides
+  # who is listed. `people add` clears the tombstone.
+  local removed; removed="$(jq -r '(.people_removed // [])[] | ascii_downcase' "$CONFIG" 2>/dev/null | sort -u)"
+  ls "$pdir"/*.md 2>/dev/null | while IFS= read -r f; do
+      # Alias witness files (Alias-Of: other.md) are presentation metadata
+      # for an existing member, not members themselves — one person, one row.
+      if head -8 "$f" 2>/dev/null | grep -q '^Alias-Of:[[:space:]]*[^[:space:]]'; then
+        continue
+      fi
+      basename "$f" .md
+    done \
+    | grep -viE '^(index|readme)$' \
+    | while IFS= read -r name; do
+        if [ -n "$removed" ] && printf '%s\n' "$removed" | grep -qxF "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"; then
+          continue
+        fi
+        printf '%s\n' "$name"
+      done || true
 }
 
 _people_json() {
@@ -299,6 +353,7 @@ cmd_people() {
     add)
       local h="${1:-}"
       _valid_token "$h" || _die "usage: settings.sh people add <github-handle>" 1
+      _save '.people_removed = ((.people_removed // []) | map(select(ascii_downcase != ($h | ascii_downcase)))) | if .people_removed == [] then del(.people_removed) else . end' --arg h "$h"
       if _has_person "$h"; then echo "'$h' is already in people"; return 0; fi
       _people_github "$h" "add"
       _people_file "$h" "add"
@@ -307,10 +362,14 @@ cmd_people() {
     remove)
       local h="${1:-}"
       _valid_token "$h" || _die "usage: settings.sh people remove <github-handle>" 1
-      if ! _has_person "$h"; then echo "'$h' is not in people"; return 0; fi
+      # Tombstone first: the removal ledger in committed org config keeps a
+      # removal durable even when a person file is later resurrected by a
+      # session write or sync.
+      _save '.people_removed = ((.people_removed // []) + [$h] | map(ascii_downcase) | unique)' --arg h "$h"
+      if ! _has_person "$h"; then echo "'$h' is not in people (removal recorded)"; return 0; fi
       _people_github "$h" "remove"
       _people_file "$h" "remove"
-      echo "removed '$h' (repo access + person file)"
+      echo "removed '$h' (repo access + person file + durable removal record)"
       [ -n "$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)" ] && echo "  connected org: for full deprovision (Supabase/Neo4j), run /delete-user $h" ;;
     *) _die "usage: settings.sh people list|add|remove" 1 ;;
   esac
@@ -349,6 +408,182 @@ for _a in "$@"; do
 done
 set -- "${_args[@]+"${_args[@]}"}"
 
+# ── privacy & access (read snapshot) ─────────────────────────────────────
+# One composed JSON for the Settings Privacy & access panel. Identity,
+# membership, and capability values come from the Runtime authorization
+# backend (access-status); this shell layer adds only committed boundary
+# config, the personal boundary-local file, isolation state, and honest
+# constant statements. Never includes secrets, tokens, or internal paths.
+
+_md5() { if command -v md5 >/dev/null 2>&1; then md5 -q -s "$1" 2>/dev/null || printf '%s' "$1" | md5; else printf '%s' "$1" | md5sum | cut -d' ' -f1; fi; }
+
+_graph_retrieval_state() {
+  # Mirrors bin/search.sh: activation record keyed sha256(org_id|main)[:16].
+  local org main gitdir key record
+  org=$(jq -r '.org_id // empty' "$CONFIG" 2>/dev/null)
+  [ -n "$org" ] || { echo "unknown"; return; }
+  main="$SCRIPT_DIR"
+  if [ -f "$SCRIPT_DIR/.git" ]; then
+    gitdir=$(sed -n 's/^gitdir: //p' "$SCRIPT_DIR/.git" 2>/dev/null)
+    case "$gitdir" in */.git/worktrees/*) main="${gitdir%/.git/worktrees/*}" ;; esac
+  fi
+  main=$(cd "$main" 2>/dev/null && pwd -P) || { echo "unknown"; return; }
+  key=$(printf '%s|%s' "$org" "$main" | shasum -a 256 2>/dev/null | cut -c1-16)
+  record="${EGREGORE_UPGRADE_ROOT:-$HOME/.egregore/runtime/upgrade}/${key}/active.json"
+  if [ -f "$record" ] && [ "$(jq -r '.retrieval // empty' "$record" 2>/dev/null)" = "runtime-qmd" ]; then
+    echo "not-used-by-this-runtime"
+  else
+    echo "legacy"
+  fi
+}
+
+cmd_privacy() {
+  local access posture locked org_reads personal_reads denied digest graph
+  access=$(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m egregore_runtime.harness_cli access-status 2>/dev/null) || true
+  printf '%s' "$access" | jq -e . >/dev/null 2>&1 || access='{"status":"attention"}'
+  posture=$(jq -r '.boundary.posture // "standard"' "$CONFIG" 2>/dev/null || echo standard)
+  locked=$(jq -r 'if (.boundary.locked // false) == true then "true" else "false" end' "$CONFIG" 2>/dev/null || echo false)
+  org_reads=$(jq -c '.boundary.read // []' "$CONFIG" 2>/dev/null || echo '[]')
+  personal_reads=$(jq -c '.read // []' "$SCRIPT_DIR/.egregore-boundary.local.json" 2>/dev/null || echo '[]')
+  digest=$(_md5 "$SCRIPT_DIR")
+  denied=$(jq -r '.denied_paths | length' "/tmp/egregore-boundary-${digest}.json" 2>/dev/null || echo 0)
+  graph=$(_graph_retrieval_state)
+  jq -n \
+    --argjson access "$access" \
+    --arg posture "$posture" \
+    --argjson locked "$locked" \
+    --argjson org_reads "$org_reads" \
+    --argjson personal_reads "$personal_reads" \
+    --argjson denied "${denied:-0}" \
+    --arg graph "$graph" \
+    '{
+      access: $access,
+      boundary: {
+        posture: $posture,
+        locked: $locked,
+        org_read_roots: $org_reads,
+        personal_read_roots: $personal_reads
+      },
+      isolation: { foreign_instances_denied: $denied },
+      graph_retrieval: $graph,
+      content_protection: {
+        admin_marked: "hidden on Egregore surfaces from non-admin members",
+        external_publication: "admin-marked content blocked unless an authorized admin separately confirms",
+        raw_repository_access: "organization-wide",
+        per_document_filesystem_acl: "not enabled"
+      }
+    }'
+}
+
+# ── boundary posture (org-wide) ──────────────────────────────────────────
+# Edits committed egregore.json for the whole organization. `locked: true`
+# removes the change path entirely — posture is then org-policy managed.
+
+cmd_posture() {
+  local action="${1:-status}" current
+  current="$(jq -r '.boundary.posture // "standard"' "$CONFIG" 2>/dev/null || echo standard)"
+  case "$current" in strict|standard|open) ;; *) current="standard" ;; esac
+  case "$action" in
+    status)
+      if [ "$JSON" = 1 ]; then
+        jq -n --arg posture "$current" \
+          --argjson locked "$(_boundary_locked && echo true || echo false)" \
+          '{domain:"posture", posture:$posture, locked:$locked}'
+      else
+        echo "Boundary posture: $current"
+        _boundary_locked && echo "(organization boundary policy is locked — posture cannot change)"
+      fi
+      ;;
+    strict|standard|open)
+      if _boundary_locked; then
+        _die "boundary policy is managed by your organization and locked; posture cannot change" 1
+      fi
+      if [ "$action" != "$current" ]; then
+        _save '.boundary = ((.boundary // {}) + {posture: $p})' --arg p "$action"
+      fi
+      echo "Boundary posture: $action · applies to new sessions · /save shares it with the org"
+      ;;
+    *) _die "usage: settings.sh posture status|strict|standard|open" 1 ;;
+  esac
+}
+
+# ── personal boundary read roots ─────────────────────────────────────────
+# Personal-only: edits .egregore-boundary.local.json for the current member.
+# Respects org `locked: true` (no personal expansion), and never accepts a
+# path inside another Egregore instance — the hard tier has no consent path.
+
+LOCAL_BOUNDARY="$SCRIPT_DIR/.egregore-boundary.local.json"
+
+_boundary_locked() {
+  [ "$(jq -r '.boundary.locked // false' "$CONFIG" 2>/dev/null)" = "true" ]
+}
+
+_inside_foreign_instance() {
+  local target="$1" registry="$HOME/.egregore/instances.json" p self
+  [ -f "$registry" ] || return 1
+  self=$(cd "$SCRIPT_DIR" 2>/dev/null && pwd -P)
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p=$(cd "$p" 2>/dev/null && pwd -P) || continue
+    [ "$p" = "$self" ] && continue
+    case "$target" in "$p"|"$p"/*) return 0 ;; esac
+  done < <(jq -r '.[].path // empty' "$registry" 2>/dev/null)
+  return 1
+}
+
+cmd_boundary() {
+  local action="${1:-list}" raw target current
+  case "$action" in
+    list)
+      current=$(jq -c '.read // []' "$LOCAL_BOUNDARY" 2>/dev/null || echo '[]')
+      if [ "$JSON" -eq 1 ]; then
+        jq -n --argjson read "$current" --argjson locked "$(_boundary_locked && echo true || echo false)" \
+          '{personal_read_roots: $read, locked: $locked}'
+      else
+        echo "personal read roots:"
+        printf '%s\n' "$current" | jq -r '.[] // empty' | sed 's/^/  /'
+        _boundary_locked && echo "(organization boundary policy is locked — personal changes disabled)"
+      fi
+      ;;
+    add|remove)
+      raw="${2:-}"
+      [ -n "$raw" ] || _die "usage: settings.sh boundary $action <directory>" 1
+      if _boundary_locked; then
+        _die "boundary policy is managed by your organization and locked; personal read roots cannot change" 1
+      fi
+      case "$raw" in "~"*) target="$HOME${raw#\~}" ;; *) target="$raw" ;; esac
+      target=$(cd "$target" 2>/dev/null && pwd -P) || {
+        [ "$action" = "remove" ] && target="$raw" || _die "directory not found: $raw" 1
+      }
+      if [ "$action" = "add" ]; then
+        if _inside_foreign_instance "$target"; then
+          _die "that directory belongs to another Egregore instance; it can never be a personal read root" 1
+        fi
+        [ -f "$LOCAL_BOUNDARY" ] || printf '{}\n' > "$LOCAL_BOUNDARY"
+        tmp="$(mktemp "$LOCAL_BOUNDARY.XXXXXX")"
+        if jq --arg p "$target" '.read = ((.read // []) + [$p] | unique)' "$LOCAL_BOUNDARY" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+          mv "$tmp" "$LOCAL_BOUNDARY"
+          echo "added personal read root: $target (applies from the next session start)"
+        else
+          rm -f "$tmp"; _die "failed to update $LOCAL_BOUNDARY" 1
+        fi
+      else
+        [ -f "$LOCAL_BOUNDARY" ] || { echo "removed personal read root: $raw (was not present)"; return 0; }
+        tmp="$(mktemp "$LOCAL_BOUNDARY.XXXXXX")"
+        if jq --arg p "$target" --arg raw "$raw" '.read = ((.read // []) | map(select(. != $p and . != $raw)))' "$LOCAL_BOUNDARY" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+          mv "$tmp" "$LOCAL_BOUNDARY"
+          echo "removed personal read root: $target"
+        else
+          rm -f "$tmp"; _die "failed to update $LOCAL_BOUNDARY" 1
+        fi
+      fi
+      ;;
+    *) _die "usage: settings.sh boundary list|add <dir>|remove <dir>" 1 ;;
+  esac
+}
+
 DOMAIN="${1:-}"; shift || true
 case "$DOMAIN" in
   hosting) cmd_hosting "$@" ;;
@@ -357,7 +592,11 @@ case "$DOMAIN" in
   repo)    cmd_repo "$@" ;;
   admin)   cmd_admin "$@" ;;
   people)  cmd_people "$@" ;;
+  privacy) cmd_privacy ;;
+  posture) cmd_posture "$@" ;;
+  push)    _control_plane_push ;;
+  boundary) cmd_boundary "$@" ;;
   dump)    cmd_dump ;;
   ""|-h|--help|help) usage 0 ;;
-  *) _die "unknown settings domain: '$DOMAIN' (try: hosting, relay, workflow, repo, admin, people, dump)" 1 ;;
+  *) _die "unknown settings domain: '$DOMAIN' (try: hosting, relay, workflow, repo, admin, people, privacy, posture, boundary, dump)" 1 ;;
 esac

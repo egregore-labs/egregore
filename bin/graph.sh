@@ -9,6 +9,50 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# Optional compatibility projection. A dogfood instance can quarantine every
+# graph path without changing its Connected control-plane mode.
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
+if ! _graph_projection_enabled; then
+  case "${1:-}" in
+    query)  echo '{"results":[],"status":"disabled","reason":"graph_projection_disabled"}' ;;
+    schema) echo '{}' ;;
+    test)   echo '{"status":"disabled","reason":"graph_projection_disabled"}' ;;
+    *)      echo '{"results":[],"status":"disabled","reason":"graph_projection_disabled"}' ;;
+  esac
+  exit 0
+fi
+
+# --- Runtime cutover gate --------------------------------------------------
+# Once the Runtime/QMD MVP is activated, graph retrieval is not used by this
+# Runtime: background callers (attendant cache warm, greeting enrichment,
+# search enrichment) get silence with no network and no telemetry — observed
+# live as a wall of graph_query telemetry events from the attendant on an
+# upgraded instance. An explicitly requested projection read passes through
+# by setting EGREGORE_GRAPH_EXPLICIT=1 (bin/graph-op.sh named reads do).
+if [ "${EGREGORE_GRAPH_EXPLICIT:-0}" != "1" ]; then
+  _CUT_ORG=$(jq -r '.org_id // empty' "$CONFIG" 2>/dev/null)
+  if [ -n "$_CUT_ORG" ]; then
+    _CUT_MAIN="$SCRIPT_DIR"
+    if [ -f "$SCRIPT_DIR/.git" ]; then
+      _CUT_GD=$(sed -n 's/^gitdir: //p' "$SCRIPT_DIR/.git" 2>/dev/null)
+      case "$_CUT_GD" in */.git/worktrees/*) _CUT_MAIN="${_CUT_GD%/.git/worktrees/*}" ;; esac
+    fi
+    _CUT_MAIN=$(cd "$_CUT_MAIN" 2>/dev/null && pwd -P || printf '%s' "$SCRIPT_DIR")
+    _CUT_KEY=$(printf '%s|%s' "$_CUT_ORG" "$_CUT_MAIN" | shasum -a 256 2>/dev/null | cut -c1-16)
+    _CUT_REC="${EGREGORE_UPGRADE_ROOT:-$HOME/.egregore/runtime/upgrade}/${_CUT_KEY}/active.json"
+    if [ -f "$_CUT_REC" ] && [ "$(jq -r '.retrieval // empty' "$_CUT_REC" 2>/dev/null)" = "runtime-qmd" ]; then
+      case "${1:-}" in
+        query)  echo '{"results":[],"status":"disabled","reason":"runtime_qmd_active"}' ;;
+        schema) echo '{}' ;;
+        test)   echo '{"status":"disabled","reason":"runtime_qmd_active"}' ;;
+        *)      echo '{"results":[],"status":"disabled","reason":"runtime_qmd_active"}' ;;
+      esac
+      exit 0
+    fi
+  fi
+fi
+
 # --- Local mode gate: bail immediately, no .env sourcing, no network ---
 _MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
 if [ "$_MODE" = "local" ]; then
@@ -217,7 +261,7 @@ case "${1:-help}" in
     echo ""
     echo "Commands:"
     echo "  query <cypher> [params_json]  Run a Cypher query"
-    echo "  schema                        Show graph schema"
+    echo "  schema                        Show hosted index schema"
     echo "  test                          Test connection"
     ;;
 esac

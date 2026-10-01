@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { isConsentCommand, isMutatingBash, isRuntimeStatePath, mutatesOnlyRuntimeState } from "../../bin/pi-branch-policy.mjs";
+import { registerObserveHook, registerUserCommand } from "../../bin/pi-observe-context.mjs";
 import {
   activityDataPath,
   captureSessionEnd,
@@ -83,6 +84,12 @@ export default function egregore(pi) {
   let lastSyncAt = 0;
   let activeWorkflow = "";
   const hasEntryRenderer = typeof pi.registerEntryRenderer === "function";
+
+  registerObserveHook(pi, {
+    root,
+    harness: "pi",
+    shouldObserve: () => !activeWorkflow,
+  });
 
   const appendCard = (kind, text) => {
     const content = String(text || "").trimEnd();
@@ -195,14 +202,14 @@ export default function egregore(pi) {
       if (!existsSync(skillFile)) continue;
       workflowCount += 1;
       if (PRODUCT_COMMANDS.has(entry.name)) continue;
-      pi.registerCommand(entry.name, {
+      registerUserCommand(pi, { root, harness: "pi" }, entry.name, {
         description: skillDescription(skillFile),
         handler: async (args, ctx) => sendQuietWorkflow(entry.name, args, ctx),
       });
     }
   }
 
-  pi.registerCommand("activity", {
+  registerUserCommand(pi, { root, harness: "pi" }, "activity", {
     description: skillDescription(join(skillsDir, "activity", "SKILL.md")),
     handler: async (_args, ctx) => {
       setBusy(ctx, "Refreshing activity");
@@ -241,7 +248,7 @@ export default function egregore(pi) {
     },
   });
 
-  pi.registerCommand("view", {
+  registerUserCommand(pi, { root, harness: "pi" }, "view", {
     description: skillDescription(join(skillsDir, "view", "SKILL.md")),
     handler: async (args, ctx) => {
       let request = parseViewRequest(root, args);
@@ -284,7 +291,7 @@ export default function egregore(pi) {
     },
   });
 
-  pi.registerCommand("handoff", {
+  registerUserCommand(pi, { root, harness: "pi" }, "handoff", {
     description: skillDescription(join(skillsDir, "handoff", "SKILL.md")),
     handler: async (args, ctx) => {
       const people = existsSync(join(root, "memory", "people"))
@@ -306,7 +313,7 @@ export default function egregore(pi) {
     },
   });
 
-  pi.registerCommand("scroll", {
+  registerUserCommand(pi, { root, harness: "pi" }, "scroll", {
     description: skillDescription(join(skillsDir, "scroll", "SKILL.md")),
     handler: async (args, ctx) => {
       sendQuietWorkflow("scroll", args, ctx, {
@@ -351,8 +358,9 @@ export default function egregore(pi) {
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    if (!activeWorkflow || !ctx.hasUI) return;
+    if (!activeWorkflow) return;
     activeWorkflow = "";
+    if (!ctx.hasUI) return;
     ctx.ui.setWorkingMessage?.();
     ctx.ui.setToolsExpanded?.(false);
   });

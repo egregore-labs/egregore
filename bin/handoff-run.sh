@@ -37,7 +37,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=bin/lib/git-message.sh
-. "$SCRIPT_DIR/bin/lib/git-message.sh" 2>/dev/null || true
+if [ -f "$SCRIPT_DIR/bin/lib/git-message.sh" ]; then
+  . "$SCRIPT_DIR/bin/lib/git-message.sh"
+fi
 type egregore_commit >/dev/null 2>&1 || egregore_commit() {
   local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
 }
@@ -57,6 +59,7 @@ INTENT="action"
 NO_PUSH=0
 NO_NOTIFY=0
 NO_PUBLISH=0
+NO_INDEX=0
 COMPOSED=""    # optional house-kit JSON — the agent-composed render spec
 CONTENT_MODE="generated"
 INCLUDE_SESSION_ARTIFACTS=0
@@ -74,6 +77,7 @@ while [ $# -gt 0 ]; do
     --no-push)    NO_PUSH=1;          shift ;;
     --no-notify)  NO_NOTIFY=1;        shift ;;
     --no-publish) NO_PUBLISH=1;       shift ;;
+    --no-index)   NO_INDEX=1;         shift ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -104,6 +108,7 @@ if [ "$CONTENT_MODE" = "supplied" ] && [ -n "$COMPOSED" ]; then
 fi
 
 MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null || echo "connected")
+GRAPH_ENABLED="${EGREGORE_GRAPH_PROJECTION:-0}"
 TODAY=$(date +%Y-%m-%d)
 YYYY_MM=$(date +%Y-%m)
 DD=$(date +%d)
@@ -212,24 +217,29 @@ if [ -n "$REPO_STATE" ]; then
   printf '\n%s\n' "$REPO_STATE" >> "$ABS_FILE"
 fi
 
-# --- Prepend memory/handoffs/index.md -----------------------------------
-INDEX="$SCRIPT_DIR/memory/handoffs/index.md"
-mkdir -p "$(dirname "$INDEX")"
-[ -f "$INDEX" ] || printf '# Handoffs\n\n' > "$INDEX"
+# --- Legacy handoff ledger ----------------------------------------------
+# Runtime-owned capture skips this compatibility index. The canonical handoff
+# file is independently discoverable and QMD is a rebuildable projection;
+# mutating a second Markdown file would create a second canonical write that
+# the Runtime transaction did not authorize or include in provenance.
+if [ "$NO_INDEX" = "0" ]; then
+  INDEX="$SCRIPT_DIR/memory/handoffs/index.md"
+  mkdir -p "$(dirname "$INDEX")"
+  [ -f "$INDEX" ] || printf '# Handoffs\n\n' > "$INDEX"
 
-if [ -n "$RECIPIENT" ]; then
-  IDX_LINE="- **${TODAY}** — ${AUTHOR}: ${TOPIC} (handoff to ${RECIPIENT})"
-else
-  IDX_LINE="- **${TODAY}** — ${AUTHOR}: ${TOPIC} (handoff)"
+  if [ -n "$RECIPIENT" ]; then
+    IDX_LINE="- **${TODAY}** — ${AUTHOR}: ${TOPIC} (handoff to ${RECIPIENT})"
+  else
+    IDX_LINE="- **${TODAY}** — ${AUTHOR}: ${TOPIC} (handoff)"
+  fi
+
+  awk -v line="$IDX_LINE" '
+    BEGIN { inserted = 0 }
+    /^$/ && !inserted { print; print line; inserted = 1; next }
+    { print }
+    END { if (!inserted) print line }
+  ' "$INDEX" > "$INDEX.new" && mv "$INDEX.new" "$INDEX"
 fi
-
-# Insert after the first blank line (keeping the # header intact)
-awk -v line="$IDX_LINE" '
-  BEGIN { inserted = 0 }
-  /^$/ && !inserted { print; print line; inserted = 1; next }
-  { print }
-  END { if (!inserted) print line }
-' "$INDEX" > "$INDEX.new" && mv "$INDEX.new" "$INDEX"
 
 # --- Parallel stage: graph + memory + (publish → notification proposal) -
 #
@@ -260,7 +270,7 @@ BRIEFING_SHORT=$(awk '/^## Briefing/{found=1; next} found && /^##/{exit} found &
 
 # --- Branch A: Graph index ---
 (
-  if [ "$MODE" = "connected" ]; then
+  if [ "$MODE" = "connected" ] && [ "$GRAPH_ENABLED" = "1" ]; then
     GJ=$(bash "$SCRIPT_DIR/bin/index-handoff.sh" "$ABS_FILE" 2>/dev/null || echo '{}')
     SID=$(echo "$GJ" | jq -r '.sessionId // ""' 2>/dev/null || echo "")
     RES=$(echo "$GJ" | jq -r '.resolved // 0' 2>/dev/null || echo 0)
@@ -273,7 +283,7 @@ BRIEFING_SHORT=$(awk '/^## Briefing/{found=1; next} found && /^##/{exit} found &
     fi
   else
     echo "null" > "$TMPD/subgraph"
-    printf '\n0\nskipped\n' > "$TMPD/graph"
+    printf '\n0\ndisabled\n' > "$TMPD/graph"
   fi
 ) &
 PID_GRAPH=$!
@@ -285,7 +295,7 @@ PID_GRAPH=$!
 # this before committing so the file always has the section.
 (
   ARTIFACTS_JSON="[]"
-  if [ "$MODE" = "connected" ]; then
+  if [ "$MODE" = "connected" ] && [ "$GRAPH_ENABLED" = "1" ]; then
     YY=$(date +%Y); MM=$(date +%-m); DD_NUM=$(date +%-d)
     RAW=$(bash "$SCRIPT_DIR/bin/graph.sh" query "
       MATCH (a:Artifact)-[:CONTRIBUTED_BY]->(p:Person {github: \$gh})
@@ -328,7 +338,11 @@ PID_ARTIFACTS=$!
     fi
 
     cd "$MEMORY_DIR"
-    git add "$REL_FILE" handoffs/index.md >/dev/null 2>&1
+    if [ "$NO_INDEX" = "1" ]; then
+      git add "$REL_FILE" >/dev/null 2>&1
+    else
+      git add "$REL_FILE" handoffs/index.md >/dev/null 2>&1
+    fi
 
     if [ -n "$RECIPIENT" ]; then
       MSG_COMMIT="chore(handoff): record ${TOPIC} (to ${RECIPIENT})"
@@ -405,14 +419,16 @@ PID_MEMORY=$!
       if [ "$RENDER_TYPE" = "composed" ]; then
         FIDELITY_ARGS+=(--source "$ABS_FILE")
       fi
-      if [ "${EGREGORE_USE_PUBLISHED:-0}" != "1" ] && [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-        if node "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
+      # Node always runs through the adapter (broken Volta/NVM shims are a
+      # live hazard in harness shells), and there is no npx/@latest fallback:
+      # a hidden registry fetch of a floating version is never an acceptable
+      # renderer. Missing local renderer → structured-only handoff.
+      if [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
+        if bash "$SCRIPT_DIR/bin/node-run.sh" "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
           RENDER_OK=1
         fi
       else
-        if npx -y egregore-artifacts@latest "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
-          RENDER_OK=1
-        fi
+        echo "local egregore-artifacts renderer unavailable; sending structured handoff without custom HTML" > "$TMPD/render-error"
       fi
 
       # Step 2: build the emissary payload. If rendering succeeded AND the
@@ -617,7 +633,7 @@ fi
 # visually quiet. Full structured data goes to a well-known tmpfile that
 # the caller (skill) reads to render the rich card.
 STATUS_BITS=("saved")
-[ "$GRAPH_STATUS"  = "ok" ]    && STATUS_BITS+=("graphed")
+[ "$GRAPH_STATUS"  = "ok" ]    && STATUS_BITS+=("indexed")
 [ "$MEMORY_STATUS" = "ok" ]    && STATUS_BITS+=("pushed")
 [ "$NOTIFY_STATUS" = "approval_required" ] && STATUS_BITS+=("notify approval pending")
 [ -n "$ARTIFACT_URL" ]         && STATUS_BITS+=("published")

@@ -17,7 +17,11 @@ mkdir -p "$TMP/shim"
 cat > "$TMP/shim/curl" <<'SHIM'
 #!/bin/bash
 printf '%s\n' "$*" >> "$CURL_LOG"
-printf '%s\n' '{"url":"https://example.invalid/artifact"}'
+if [ -n "${CURL_REPLY_FILE:-}" ]; then
+  cat "$CURL_REPLY_FILE"
+else
+  printf '%s\n' '{"url":"https://example.invalid/artifact"}'
+fi
 SHIM
 chmod +x "$TMP/shim/curl"
 
@@ -29,8 +33,9 @@ run_publish() {
   local config="$1"; shift
   local sb="$TMP/case"
   rm -rf "$sb"
-  mkdir -p "$sb/bin"
+  mkdir -p "$sb/bin/lib"
   cp "$ROOT/bin/publish-artifact.sh" "$sb/bin/publish-artifact.sh"
+  cp "$ROOT/bin/lib/permissions.sh" "$sb/bin/lib/permissions.sh"
   printf '#!/bin/bash\nexit 0\n' > "$sb/bin/artifact-register.sh"
   printf '#!/bin/bash\nexit 0\n' > "$sb/bin/publish-references.sh"
   chmod +x "$sb/bin/"*.sh
@@ -96,6 +101,33 @@ case "$CURL_ARGS" in
   *"/api/artifacts/share"*) bad "connected publishing touched the public relay" ;;
   *) ok "connected publishing never touches the public relay" ;;
 esac
+
+# A server refusal (409 when another org holds the id) exits 6 with the
+# server's reason on stderr, so callers that report stderr can show it.
+CONNECTED='{"mode":"connected","api_url":"https://api.example.invalid"}'
+printf '%s\n' '{"detail":"The artifact id '"'"'board'"'"' is already used by another organization. Publish with a different id."}' \
+  > "$TMP/refused.json"
+run_publish "$CONNECTED" EGREGORE_API_KEY=test-key CURL_REPLY_FILE="$TMP/refused.json"
+check "a refused publish exits 6" "6" "$RC"
+check "a refused publish emits no URL" "" "$OUT"
+case "$ERR" in
+  *"Not published: The artifact id 'board' is already used by another organization."*)
+    ok "a refused publish gives the server's reason" ;;
+  *) bad "a refused publish hid the server's reason: $ERR" ;;
+esac
+
+printf '%s\n' '<html>502 Bad Gateway</html>' > "$TMP/proxy-error.html"
+run_publish "$CONNECTED" EGREGORE_API_KEY=test-key CURL_REPLY_FILE="$TMP/proxy-error.html"
+check "an answer that is not JSON exits 6" "6" "$RC"
+case "$ERR" in
+  *"Not published:"*) ok "an answer that is not JSON is reported as not published" ;;
+  *) bad "an answer that is not JSON was not reported: $ERR" ;;
+esac
+
+: > "$TMP/no-answer"
+run_publish "$CONNECTED" EGREGORE_API_KEY=test-key CURL_REPLY_FILE="$TMP/no-answer"
+check "no answer from the server stays a soft failure" "0" "$RC"
+check "no answer from the server emits no URL" "" "$OUT"
 
 run_publish '{"mode":"connected","api_url":"https://api.example.invalid","features":{"publishing":false,"public_relay":true}}' \
   EGREGORE_API_KEY=test-key

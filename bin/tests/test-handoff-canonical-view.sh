@@ -24,6 +24,8 @@
 #   RELAY=http://localhost:8000 bin/tests/test-handoff-canonical-view.sh
 
 set -euo pipefail
+# Live: publishes to the live relay. Opt in with EGREGORE_LIVE_INTEGRATION=1; otherwise report a skip.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then echo "SKIP: publishes to the live relay; set EGREGORE_LIVE_INTEGRATION=1 to run"; exit 0; fi
 
 RELAY="${RELAY:-https://egregore-production-55f2.up.railway.app}"
 NOW="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"
@@ -95,7 +97,7 @@ INSTR=$(echo "$EXEC_JSON" | python3 -c '
 import json, sys
 print(json.load(sys.stdin).get("_receiver_hints",{}).get("instructions",""))
 ')
-if echo "$INSTR" | grep -q "Skip any introduction"; then
+if grep -q "Skip any introduction" <<< "$INSTR"; then
   pass "GET /h/{id} JSON (executable): anti-meta posture present"
 else
   fail "GET /h/{id} JSON (executable): anti-meta missing — Day 4.2 regression"
@@ -116,7 +118,7 @@ NOTIF_INSTR=$(echo "$NOTIF_JSON" | python3 -c '
 import json, sys
 print(json.load(sys.stdin).get("_receiver_hints",{}).get("instructions",""))
 ')
-if echo "$NOTIF_INSTR" | grep -q "Skip any introduction"; then
+if grep -q "Skip any introduction" <<< "$NOTIF_INSTR"; then
   fail "GET /h/{id} JSON (notification): anti-meta leaked onto non-executable"
 else
   pass "GET /h/{id} JSON (notification): no anti-meta leak (correct)"
@@ -125,12 +127,12 @@ fi
 # ── HTML path: /h/{id} with Accept: text/html ────────────────────────────
 
 EXEC_HTML=$(curl -sS -H "Accept: text/html" "$RELAY/h/$EXEC_ID")
-if echo "$EXEC_HTML" | grep -q "Runnable capsule"; then
+if grep -q "Runnable capsule" <<< "$EXEC_HTML"; then
   pass "GET /h/{id} HTML (executable): visible banner present"
 else
   fail "GET /h/{id} HTML (executable): banner missing"
 fi
-if echo "$EXEC_HTML" | grep -q "data-egregore-banner"; then
+if grep -q "data-egregore-banner" <<< "$EXEC_HTML"; then
   pass "GET /h/{id} HTML (executable): banner has machine-readable marker"
 else
   fail "GET /h/{id} HTML (executable): data-egregore-banner attr missing"
@@ -155,7 +157,7 @@ else
 fi
 
 NOTIF_HTML=$(curl -sS -H "Accept: text/html" "$RELAY/h/$NOTIF_ID")
-if echo "$NOTIF_HTML" | grep -q "Runnable capsule"; then
+if grep -q "Runnable capsule" <<< "$NOTIF_HTML"; then
   fail "GET /h/{id} HTML (notification): banner leaked onto non-executable"
 else
   pass "GET /h/{id} HTML (notification): no banner (correct)"
@@ -168,7 +170,7 @@ API_INSTR=$(echo "$API_EXEC_JSON" | python3 -c '
 import json, sys
 print(json.load(sys.stdin).get("_receiver_hints",{}).get("instructions",""))
 ')
-if echo "$API_INSTR" | grep -q "Skip any introduction"; then
+if grep -q "Skip any introduction" <<< "$API_INSTR"; then
   pass "GET /api/artifacts/handoff/{id} (executable): anti-meta present"
 else
   fail "GET /api/artifacts/handoff/{id} (executable): anti-meta missing"

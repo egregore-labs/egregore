@@ -1,108 +1,81 @@
 ---
 name: me
-description: "View or change your member identity — display name, email — shared across Claude Code, Codex, and Pi. Say 'who am I', 'call me <name>', 'change my name to X', or run '/me'."
+description: "View or change the current member's Egregore profile across Claude Code, Codex, Pi, and Prime. Use for /me, 'who am I', 'call me <name>', or an explicit self email update."
 ---
 
-# /me — View or reconcile your identity
+# Egregore identity
 
-Show the current member identity or change how the member wants to be called.
-All writes go through one portable identity spine shared by Claude Code, Codex,
-and Pi.
+Use the Runtime identity adapter. Account identity, actor identity,
+organization membership, and provider aliases are separate concepts:
+
+- `AccountIdentity` is the provider-independent authenticated account.
+- `ActorIdentity` is the person, agent, or service acting in this session.
+- `OrgMembership` supplies organization, role, and team context.
+- GitHub is an optional linked provider and current transport alias. Its login
+  or numeric ID is never the Egregore account or actor identity.
+
+External people discovered during ingestion remain source-scoped identities;
+this workflow never promotes them into organizational members.
 
 ## When to invoke
 
-- "who am I", "my profile", "my name", "what's my name"
-- "call me Oz", "I go by Cem", "change my name to X"
-- "use me@example.com for me", "add/change my email"
-- User runs `/me` or `/me <name>`
+View or change the current member's Egregore profile across Claude Code, Codex, Pi, and Prime. Use for /me, 'who am I', 'call me <name>', or an explicit self email update.
 
-## Identity contract
+## Show
 
-`bin/person.sh` is the only writer for person identity. It reconciles:
-
-- `.egregore-state.json` — local runtime identity;
-- `memory/people/{github_username}.md` — durable organizational profile;
-- Supabase `users` + `memberships` — platform identity and per-org display name;
-- Neo4j `Person` — knowledge-graph identity and relationships.
-
-The durable identity is GitHub's numeric user id (`person_id=github:<id>`)
-when available. GitHub login, preferred/display name, historical names, and
-emails are aliases/addresses of that identity. A login rename or preferred-name
-change must update the same person, not create another member.
-
-External people introduced by `$ingest` remain source-scoped external
-identities and are never promoted into members by this workflow.
-
-## No arguments
-
-Run:
+Run once:
 
 ```bash
 bash bin/person.sh show
 ```
 
-Display the useful fields only:
+The adapter resolves `ActorContext` and authorizes `read` on the current
+identity before returning anything. Display the preferred name, linked
+provider alias, explicitly supplied email, and aliases. Do not expose internal
+IDs unless the user requests diagnostics.
 
-```text
-Name: {display_name}
-GitHub: {github_username}
-Email: {email or "not shared"}
-Aliases: {github_aliases + previous_names, if any}
-```
+## Change preferred name
 
-Never expose internal platform ids unless the user asks for diagnostics.
-
-## With a name
-
-Run:
+For an explicit self-update, use `{arguments}` for the text after the command, or empty; single-quote the value and write any embedded single quote as `'\''`.
 
 ```bash
-bash bin/person.sh set-name "$ARGUMENTS"
+bash bin/person.sh set-name '{arguments}'
 ```
 
-The command validates the name, preserves the old display name as an alias,
-updates the canonical markdown profile, reconciles simple duplicate/alias
-profiles, syncs Supabase, updates the graph, and moves known relationships from
-duplicate Person nodes onto the canonical member.
+The identity adapter validates the value, preserves previous names as aliases,
+authorizes `administer` on the current identity, and reconciles the same stable
+account/actor/membership records. Report the returned status without exposing
+raw JSON.
 
-Report:
+## Change email
 
-- `synced` → `You're now known as **{name}** everywhere in this Egregore.`
-- `synced-local` → `You're now known as **{name}** in this Egregore.`
-- `partial` → the local state and markdown are durable; say which projection
-  (`supabase` or `graph`) is pending and that a later `bin/person.sh sync`
-  retries it.
-
-## With an email
-
-When the user explicitly supplies their own email, run:
+Only when the authenticated user explicitly supplies their own address:
 
 ```bash
 bash bin/person.sh set-email "person@example.com"
 ```
 
-This makes the supplied address primary and retains earlier addresses as
-aliases. Never infer an address from git configuration.
+Never infer an email from Git configuration or unrelated source content.
 
-## Reconciliation
+## Reconcile
 
-When onboarding, a GitHub login changes, an email is added, or a profile looks
-duplicated, run:
+Use this only for onboarding, a linked-provider rename, or an identity repair:
 
 ```bash
 bash bin/person.sh sync
 ```
 
-Do not hand-write Person Cypher, call `/api/user/ensure` independently, or edit
-only the H1 in a people file. Those partial updates caused the original
-cross-surface identity inconsistency.
+The adapter owns Local/Connected reconciliation and optional derived
+projections. Do not call storage providers or edit identity files directly.
+A partial result means canonical Local identity is retained and the named
+external reconciliation can be retried.
 
 ## Rules
 
-- Preferred/display name is per organization.
-- GitHub numeric id is durable; GitHub login is mutable.
-- Persist only email addresses already supplied by the authenticated user or
-  their public GitHub profile. Never infer an email from git config.
-- Markdown remains authoritative and replayable in local mode.
-- All graph access goes through `bin/graph.sh`/`bin/graph-op.sh`.
-- Suppress raw JSON in the user-facing response.
+- Preferred name is organization-scoped; stable account and actor IDs survive
+  provider changes.
+- Authentication never grants membership, retrieval scope, or action
+  permission by itself.
+- Do not hand-edit `.egregore-state.json`, people profiles, membership state,
+  or projections.
+- Emit only content-free command telemetry.

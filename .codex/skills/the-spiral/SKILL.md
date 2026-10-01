@@ -1,84 +1,29 @@
 ---
 name: the-spiral
-description: Run a Codex-native structured Socratic dialogue when the user invokes /the-spiral or $the-spiral to turn an intuition into rigorous, communicable output.
+description: 'A generative epistemology engine that transforms intuitions into rigorous, communicable output through structured Socratic dialogue. Use this skill whenever someone needs to develop, pressure-test, and articulate a complex thesis — fundraising materials, book proposals, product strategy, research agendas, organizational philosophy, policy design, or any context requiring deep structured thinking. Triggers on: ''let''s think through'', ''help me articulate'', ''pressure test this'', ''develop this thesis'', ''spiral'', ''deep exploration'', ''Socratic'', or any request to go from intuition to rigorous output. Also triggers when a user has a strong conviction but can''t yet articulate it clearly, or when they need to prepare materials that require deep domain understanding (pitch decks, memos, strategy docs, proposals).'
 ---
 
-# The Spiral
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. The Spiral is a stateful Socratic process for
-developing, pressure-testing, and compressing a complex thesis.
+# Egregore the-spiral Adapter
 
-## Setup
+This adapter runs the canonical Egregore workflow for `the-spiral`. Its one
+maintained body is `.claude/skills/the-spiral/SKILL.md`; read that file completely and follow it here.
 
-Gather three inputs, using structured Codex question tooling when available and
-plain one-at-a-time questions otherwise:
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-1. Domain: what are we spiraling on?
-2. Purpose: what should the process produce?
-3. Known areas: what domains must be covered, if any?
-
-Create state files:
-
-```text
-spiral_state.json
-spiral_artifacts/ring1
-spiral_artifacts/ring2
-spiral_artifacts/ring3
-spiral_artifacts/ring4
-spiral_artifacts/ring5
-```
-
-State includes domain, purpose, addressable space, current ring, current loop,
-artifacts, emerged domains, parked threads, descents, and ring history.
-
-## Rings
-
-1. Seed: find the irreducible claim. Artifact:
-   `spiral_artifacts/ring1/seed.md`.
-2. Territory: map implications, tensions, contradictions, and open questions.
-   Artifact: `spiral_artifacts/ring2/territory.md`.
-3. Encounter: ground claims in reality. Research facts when needed and write
-   domain artifacts under `spiral_artifacts/ring3/`.
-4. Crucible: test objections and disconfirming evidence. Artifact:
-   `spiral_artifacts/ring4/crucible.md`.
-5. Compression: produce the final deliverables under
-   `spiral_artifacts/ring5/`.
-
-Ask one question at a time. After each alignment check, update
-`spiral_state.json`. Render a compact text progress view only at setup,
-alignment checks, ring transitions, descents, resume, and completion.
-
-## TUI Rendering
-
-Structured UX parity is required. The Spiral must present state as a structured
-terminal view at phase boundaries, not as loose paragraphs:
-
-- Show rings 1-5 with current/completed/parked status.
-- Show current thesis, emerged domains, parked threads, descents, and next
-  question or alignment check.
-- Render only at setup, alignment checks, ring transitions, descents, resume,
-  and completion.
-- On completion, render a final structured view with rings completed, loop
-  count, deliverable paths, emerged domains, and parked threads.
-- Do not render mid-flow while asking a Socratic question.
-
-## Flow Rules
-
-- If the user gives a marketing-like answer in Ring 1, push toward the real
-  conviction.
-- If an objection breaks an earlier assumption, offer a descent to the right
-  ring and record the reason.
-- Research is active only when factual claims need grounding or pressure.
-- Never force a domain that has not emerged from the user's answers.
-- If the user is tired or wants to pause, crystallize the current state and
-  stop at an alignment boundary.
-
-## Resume
-
-If `spiral_state.json` exists, summarize domain, ring, loop, and current
-artifacts, then ask whether to continue or start fresh.
-
-## Completion
-
-The process ends when Ring 5 deliverables satisfy the user. Report artifact
-paths, rings completed, loop count, emerged domains, and any parked threads.
+1. Read `.claude/skills/the-spiral/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

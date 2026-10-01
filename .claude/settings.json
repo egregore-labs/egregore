@@ -5,7 +5,8 @@
       "Bash(bash bin/search.sh query:*)",
       "Read",
       "Write",
-      "Edit"
+      "Edit",
+      "Bash(bash bin/search.sh investigate:*)"
     ],
     "deny": [
       "Edit(~/.egregore/instances.json)"
@@ -20,6 +21,11 @@
       {
         "matcher": "startup",
         "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONSAFEPATH=1 PYTHONPATH=\"$CLAUDE_PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}\" python3 -m egregore_runtime.harness_cli session-env --harness claude",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/bin/session-start.sh"
@@ -41,7 +47,8 @@
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/search-hint.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/bin/observe-context.sh claude",
+            "timeout": 45
           }
         ]
       }
@@ -113,9 +120,31 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/session-autosave.sh"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/bin/scratch-sweep.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/retrieval-context.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/card-context.sh"
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write|Bash|NotebookEdit",
         "hooks": [
@@ -162,6 +191,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/boundary-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/memory-read-guard.sh"
           }
         ]
       },

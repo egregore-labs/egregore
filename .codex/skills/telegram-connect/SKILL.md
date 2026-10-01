@@ -7,8 +7,8 @@ description: 'Set up Telegram as a notification center for your Egregore — cre
 
 # Egregore telegram-connect Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `telegram-connect`. Its one
+maintained body is `.claude/skills/telegram-connect/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

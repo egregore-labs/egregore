@@ -148,6 +148,7 @@ fi
 if [ -z "$AUTHOR" ]; then
   AUTHOR="unknown"
   HEALTH_GITHUB="fail"
+  HEALTH_GITHUB_REASON="no GitHub identity in state, .env, or git config; run /env"
 fi
 
 # --- Validate gh CLI identity matches git identity ---

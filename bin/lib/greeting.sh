@@ -67,6 +67,13 @@ echo "$SEPARATOR"
 source "$SCRIPT_DIR/bin/lib/metrics.sh"
 _render_momentum_board
 
+# Notices remember what they already told you (bin/lib/notices.sh): open
+# items say since when they have been waiting, standing state folds into one
+# line after its first showing, tips expire. Set EGREGORE_NOTICE_LEDGER=off
+# for a render that must not read or record.
+source "$SCRIPT_DIR/bin/lib/notices.sh"
+_notice_init
+
 # Pending questions and handoffs addressed to you. These are lightweight
 # discovery beats; management stays in /answer and /activity.
 PENDING_Q=$(cat "$CTX_DIR/pending_questions" 2>/dev/null || echo "[]")
@@ -79,15 +86,18 @@ if [ "$PENDING_Q_COUNT" -gt 0 ] 2>/dev/null && [ "$PENDING_Q_COUNT" != "0" ]; th
     PQ_NOUN="questions"
   fi
   if [ -n "$PQ_SENDERS" ]; then
-    printf "  ◐ %s pending %s from %s — /answer to engage\n" "$PENDING_Q_COUNT" "$PQ_NOUN" "$PQ_SENDERS"
+    PQ_LINE=$(printf "  ◐ %s pending %s from %s — /answer to engage" "$PENDING_Q_COUNT" "$PQ_NOUN" "$PQ_SENDERS")
   else
-    printf "  ◐ %s pending %s — /answer to engage\n" "$PENDING_Q_COUNT" "$PQ_NOUN"
+    PQ_LINE=$(printf "  ◐ %s pending %s — /answer to engage" "$PENDING_Q_COUNT" "$PQ_NOUN")
   fi
+  _notice pending-questions open "questions" "$PENDING_Q_COUNT:$PQ_SENDERS" "$PQ_LINE"
 fi
 ADDRESSED_RICH=$(cat "$CTX_DIR/addressed_rich" 2>/dev/null || echo "[]")
 ADDRESSED_COUNT=$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")
 if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null; then
-  printf "  ◇ %s handoffs for you — say \"show my handoffs\" to review or close\n" "$ADDRESSED_COUNT"
+  ADDRESSED_SIG=$(echo "$ADDRESSED_RICH" | jq -c '[.[] | (.name // .id // .)] | sort' 2>/dev/null || echo "$ADDRESSED_COUNT")
+  _notice handoffs-for-you open "handoffs" "$ADDRESSED_SIG" \
+    "$(printf "  ◇ %s handoffs for you — say \"show my handoffs\" to review or close" "$ADDRESSED_COUNT")"
 fi
 
 # Show auto-save notice if work was committed from a previous branch
@@ -95,60 +105,47 @@ if [ -n "$SAVED_BRANCH" ]; then
   echo "  ✓ Auto-saved uncommitted work on $SAVED_BRANCH"
 fi
 
+# --- Org-settings sync receipts. A settings.json heal is logged to
+# .egregore/settings-drift.log, never announced; local settings changes reach
+# the control plane through bin/settings.sh, so there is nothing to ask. ---
+if [ -n "${SETTINGS_SYNCED_FROM_ORG:-}" ]; then
+  echo "  ◇ org settings synced from the control plane (${SETTINGS_SYNCED_FROM_ORG})"
+fi
+if [ -n "${SETTINGS_POSTURE_HELD:-}" ]; then
+  echo "  ◇ boundary posture was set to ${SETTINGS_POSTURE_HELD} elsewhere — relaxing access needs your confirm: bash bin/settings.sh posture ${SETTINGS_POSTURE_HELD}"
+fi
+
 # --- Footer: health + repos + memory (tertiary) ---
 echo "$SEPARATOR"
 
-# Build compact footer line
-if [ "$LOCAL_MODE" = "true" ]; then
-  # Local mode: only check github + git, skip api-key/graph/telegram
-  HAS_FAILURE="false"
-  FAILED_SERVICES=""
-  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT"; do
-    svc="${pair%%:*}"
-    svc_status="${pair#*:}"
-    if [ "$svc_status" = "fail" ]; then
-      HAS_FAILURE="true"
-      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
-    fi
-  done
+# One renderer for every runtime: a failed dimension names its cause and the
+# action; stale recall is a separate non-failure line. See health-footer.sh.
+source "$SCRIPT_DIR/bin/lib/health-footer.sh"
+_render_health_footer || true
 
-  if [ "$HAS_FAILURE" = "true" ]; then
-    echo "  ⚠${FAILED_SERVICES} — run /checkup"
-  else
-    if [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
-      printf "  ◆ updated\n"
-    else
-      printf "  ✓ ready\n"
-    fi
-  fi
-else
-  # Connected mode: check all services
-  HAS_FAILURE="false"
-  FAILED_SERVICES=""
-  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
-    svc="${pair%%:*}"
-    svc_status="${pair#*:}"
-    if [ "$svc_status" = "fail" ]; then
-      HAS_FAILURE="true"
-      FAILED_SERVICES="${FAILED_SERVICES} ${svc} ✗"
-    fi
-  done
-
-  if [ "$HAS_FAILURE" = "true" ]; then
-    echo "  ⚠${FAILED_SERVICES} — run /checkup"
-  else
-    # Compact footer: ready + memory on one line, repos on next if present
-    FOOTER_LEFT="  ✓ ready"
-    FOOTER_RIGHT=""
-    if [ "$MEMORY_SYNCED" = "true" ]; then
-      FOOTER_RIGHT="◆ memory synced"
-    fi
-
-    FL_LEN=${#FOOTER_LEFT}
-    FR_LEN=${#FOOTER_RIGHT}
-    F_PAD=$((LINE_WIDTH - FL_LEN - FR_LEN))
-    if [ "$F_PAD" -lt 1 ]; then F_PAD=1; fi
-    printf "%s%*s%s\n" "$FOOTER_LEFT" "$F_PAD" "" "$FOOTER_RIGHT"
+# Runtime update summary — cached durable state only, never a live probe, so
+# session start stays fast. One compact line; silent when nothing is staged.
+# Keyed by stable org identity composed with the main installation path
+# (mirrors egregore_runtime.upgrade.instance_key); no org_id → no summary.
+_UPGRADE_ORG=$(jq -r '.org_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+_UPGRADE_MAIN=$(cd "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" 2>/dev/null && pwd -P || true)
+if [ -n "$_UPGRADE_ORG" ] && [ -n "$_UPGRADE_MAIN" ]; then
+  _UPGRADE_HASH=$(printf '%s|%s' "$_UPGRADE_ORG" "$_UPGRADE_MAIN" | shasum -a 256 2>/dev/null | cut -c1-16)
+  _UPGRADE_DIR="${EGREGORE_UPGRADE_ROOT:-$HOME/.egregore/runtime/upgrade}/${_UPGRADE_HASH}"
+  if [ -f "$_UPGRADE_DIR/active.json" ] \
+    && [ "$(jq -r '.retrieval // empty' "$_UPGRADE_DIR/active.json" 2>/dev/null)" = "runtime-qmd" ]; then
+    _UPGRADE_VER=$(jq -r '.active_version // "?"' "$_UPGRADE_DIR/active.json" 2>/dev/null)
+    _notice runtime-active standing "runtime ${_UPGRADE_VER##*-}" "$_UPGRADE_VER" \
+      "  ◆ runtime ${_UPGRADE_VER} active · organizational retrieval: Runtime/QMD"
+  elif [ -f "$_UPGRADE_DIR/state.json" ]; then
+    case "$(jq -r '.status // empty' "$_UPGRADE_DIR/state.json" 2>/dev/null)" in
+      preparing)
+        echo "  ◐ runtime update preparing in background — egregore settings" ;;
+      ready-to-activate)
+        echo "  ● runtime update ready to activate — egregore settings" ;;
+      failed)
+        echo "  ⚠ runtime update needs attention — egregore settings" ;;
+    esac
   fi
 fi
 
@@ -205,19 +202,18 @@ fi
 # Greeting links. Org config `pinned_links` in egregore.json replaces the
 # default dashboard + board links. Entries are strings or {url, label}.
 # (OSC 8 hyperlink — clickable text in supported terminals)
-PINNED_LINKS=$(jq -c '.pinned_links // []' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "[]")
+PINNED_LINKS=$(jq -c '.pinned_links // []' "${CONFIG:-$SCRIPT_DIR/egregore.json}" 2>/dev/null || echo "[]")
 if [ "$(printf '%s' "$PINNED_LINKS" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
-  printf '%s' "$PINNED_LINKS" | jq -r '.[] |
-    if type == "string" then "  ◆ \(.)"
-    elif (.label // "") != "" then "  ◆ \(.label): \(.url)"
-    else "  ◆ \(.url)" end' 2>/dev/null
+  # Each pinned link is a standing notice keyed by its position: full line on
+  # first sight or change, folded under its label afterwards.
+  _notice_pinned_links "$PINNED_LINKS"
 else
   if [ -n "${DASHBOARD_URL:-}" ]; then
-    printf "  ◆ %s\n" "$DASHBOARD_URL"
+    _notice dashboard-link standing "dashboard" "$DASHBOARD_URL" "  ◆ $DASHBOARD_URL"
   fi
 
   if [ -n "${BOARD_URL:-}" ]; then
-    printf "  ◆ %s (board)\n" "$BOARD_URL"
+    _notice board-link standing "board" "$BOARD_URL" "  ◆ $BOARD_URL (board)"
   fi
 fi
 
@@ -225,13 +221,20 @@ if [ -n "${LOOM_DOCTOR_BRIEF:-}" ]; then
   # Indent every line — printf '  %s' indents only the first line of a
   # multiline brief, which misaligns the card and hides follow-up warnings
   # from the fast-path signal-line scraper (it keys on "^  ").
-  printf '%s\n' "$LOOM_DOCTOR_BRIEF" | sed 's/^/  /'
+  # A standing notice: the brief is deterministic for a given config, so an
+  # unchanged brief folds after its first showing instead of repeating.
+  LOOM_LABEL=$(printf '%s\n' "$LOOM_DOCTOR_BRIEF" | head -1 | sed 's/^[⚠◆] *//; s/ (.*$//')
+  _notice loom-doctor standing "$LOOM_LABEL" "$LOOM_DOCTOR_BRIEF" \
+    "$(printf '%s\n' "$LOOM_DOCTOR_BRIEF" | sed 's/^/  /')"
 fi
 
 # --- Creator review gate: pending turns on owned scrolls/surfaces ---
 # This is deliberately filesystem-only and fail-soft. The two environment seams
 # make the scan safe to exercise without touching the instance memory repo.
 _print_pending_scroll_turns() {
+  # Empty event directories are normal. Match Bash's literal unmatched globs
+  # for this function only; never change the caller's Zsh options.
+  if [ -n "${ZSH_VERSION:-}" ]; then setopt local_options nonomatch; fi
   local memory_root="${EGREGORE_MEMORY_ROOT:-$SCRIPT_DIR/memory}"
   local person="${EGREGORE_PERSON:-${AUTHOR:-}}"
   local rows="" file slug owner count surface_file
@@ -282,7 +285,7 @@ _print_pending_scroll_turns() {
           | select(if $mode == "scroll" then true else (is_applied($events; $turn.id) | not) end)]
       | length
     ' --arg mode scroll "$file" 2>/dev/null) || continue
-    [[ "$count" =~ ^[0-9]+$ ]] || return 0
+    [[ "$count" =~ ^[0-9]+$ ]] || continue
     [ "$count" -gt 0 ] && rows+="${safe_slug}"$'\t'"${count}"$'\n'
   done
 
@@ -326,7 +329,7 @@ _print_pending_scroll_turns() {
           | select((is_declined($events; $received; $turn.id) | not))]
       | length
     ' --arg mode harvest "$file" 2>/dev/null) || continue
-    [[ "$count" =~ ^[0-9]+$ ]] || return 0
+    [[ "$count" =~ ^[0-9]+$ ]] || continue
     [ "$count" -gt 0 ] && rows+="${safe_slug}"$'\t'"${count}"$'\n'
   done
 
@@ -337,10 +340,16 @@ _print_pending_scroll_turns() {
   total=$(printf '%s\n' "$summary" | awk -F '\t' '{ total += $2 } END { print total + 0 }') || return 0
   details=$(printf '%s\n' "$summary" | awk -F '\t' '{printf "%s%s (%s)", (NR == 1 ? "" : ", "), $1, $2}') || return 0
   [ -n "$details" ] || return 0
-  printf "  ⧖ %s pending turn(s) on your scrolls: %s\n" "$total" "$details"
+  _notice scroll-turns open "scroll turns" "$total:$details" \
+    "$(printf "  ⧖ %s pending turn(s) on your scrolls: %s" "$total" "$details")"
 }
 
 _print_pending_scroll_turns
+
+# Fold the standing notices that did not change since last session into one
+# line, and persist the ledger. The tutorial tip below is recorded by the
+# second flush at the end of the file.
+_notice_flush
 
 # Framework updates come through PRs to develop — no separate auto-update channel.
 # The develop sync above already keeps framework files current.
@@ -413,7 +422,7 @@ Organization: $SA_ORG_NAME (github: $SA_GITHUB_ORG)
 Session: $BRANCH — ${EGREGORE_SESSION_ID}
 Active quests: $SA_QUESTS
 Recent handoffs: $SA_HANDOFFS
-Memory: memory/ is a symlink to shared knowledge base. Use bin/graph.sh for Neo4j queries.
+Memory: memory/ holds canonical organizational knowledge. Use bin/search.sh for Runtime/QMD retrieval.
 -->
 SAEOF
 ) 2>/dev/null || true
@@ -509,8 +518,11 @@ else
   fi
 
   if [ "$TUTORIAL_COMPLETE" != "true" ]; then
-    echo "  Tip: Run /tutorial to learn the core loop."
+    # A tip that has not been acted on after a few sessions is noise; the
+    # ledger retires it after NOTICE_TIP_MAX showings.
+    _notice tutorial-tip tip "tutorial" "tutorial" "  Tip: Run /tutorial to learn the core loop."
   fi
+  _notice_flush
 
   echo ""
   echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"

@@ -111,21 +111,46 @@ for _r in $_repos; do
   MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON,\"$_resolved\""
 done
 MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON]"
-# Denied paths: other instances, but NOT the main repo (worktree is its child)
+# Denied paths: shared computation (bin/boundary.sh compute-denied). The main
+# repo is passed as the caller-proven same-instance allowance — this worktree
+# was just created from it and physically shares its git dir — so it stays
+# excluded even on legacy registries whose entries carry no org_id yet.
 DENIED_JSON="[]"
 REGISTRY="$HOME/.egregore/instances.json"
 if [ -f "$REGISTRY" ]; then
-  DENIED_JSON=$(jq --arg self "$REPO_ROOT" --arg wt "$WT_PATH" \
-    '[.[] | select(.path != $self and .path != $wt) | .path]' \
-    "$REGISTRY" 2>/dev/null || echo "[]")
+  WT_ORG=$(jq -r '.org_id // empty' "$WT_PATH/egregore.json" 2>/dev/null || true)
+  DENIED_JSON=$(bash "$REPO_ROOT/bin/boundary.sh" compute-denied \
+    "$REGISTRY" "$WT_PATH" "$WT_ORG" "$REPO_ROOT" 2>/dev/null || echo "[]")
+  case "$DENIED_JSON" in "["*) ;; *) DENIED_JSON="[]" ;; esac
+fi
+# Inherit posture, locked, and read roots from the main checkout's boundary
+# cache: a worktree that silently dropped them fell back to `standard` and
+# stopped honoring `locked: true` (found in the 6b.3 enforcement audit).
+MAIN_DIGEST=$(printf '%s' "$REPO_ROOT" | md5 2>/dev/null || printf '%s' "$REPO_ROOT" | md5sum | cut -d' ' -f1)
+MAIN_BOUNDARY="/tmp/egregore-boundary-${MAIN_DIGEST}.json"
+POSTURE_JSON='{}'
+if [ -f "$MAIN_BOUNDARY" ]; then
+  POSTURE_JSON=$(jq -c '{posture: (.posture // "standard"), locked: (.locked // false), read_roots: (.read_roots // [])}' "$MAIN_BOUNDARY" 2>/dev/null || echo '{}')
 fi
 jq -n \
   --arg project_dir "$WT_PATH" \
   --arg memory_dir "$MEMORY_DIR" \
   --argjson managed_repos "$MANAGED_REPOS_JSON" \
   --argjson denied_paths "$DENIED_JSON" \
-  '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
+  --argjson inherited "$POSTURE_JSON" \
+  '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths} + $inherited' \
   > "$BOUNDARY_FILE.tmp" 2>/dev/null && mv "$BOUNDARY_FILE.tmp" "$BOUNDARY_FILE" 2>/dev/null || true
+
+# --- Session topic on the graph (fire-and-forget, detached) ---
+# CLAUDE.md used to ask the model to run this after EnterWorktree with a
+# "$(cat .egregore-session-id)" substitution; Claude Code's worktree isolation
+# refuses that shape, so the write silently never happened. The hook runs
+# outside that parser and already knows the slug and branch. Detached so the
+# 2-second hook budget is untouched; graph.sh fails soft in local mode.
+TOPIC="${SLUG//-/ }"
+if [ -x "$WT_PATH/bin/graph-op.sh" ] && [ -e "$WT_PATH/.egregore-session-id" ]; then
+  ( nohup bash "$WT_PATH/bin/graph-op.sh" set-current-topic "$TOPIC" "$BRANCH" >/dev/null 2>&1 & ) 2>/dev/null
+fi
 
 # --- Output the worktree path (ONLY stdout line) ---
 echo "$WT_PATH"

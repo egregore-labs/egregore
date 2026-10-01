@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Recipient-scoped lifecycle actions used by /activity.
-# Usage: bash bin/activity-action.sh <read|done|expire|reopen> <session-id>
+# Usage: bash bin/activity-action.sh <read|claim|done|expire|reopen|review> <artifact-id>
 #        [--user HANDLE]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,19 +10,36 @@ ACTION="${1:-}"
 SID="${2:-}"
 shift 2 2>/dev/null || true
 USER_REF=""
+EXPECTED_REVISION=""
+USE_LEGACY_GRAPH=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user) USER_REF="${2:?missing user}"; shift 2 ;;
+    --expected-revision) EXPECTED_REVISION="${2:?missing lifecycle revision}"; shift 2 ;;
+    --graph) USE_LEGACY_GRAPH=true; shift ;;
     *) jq -n --arg option "$1" '{error:"unknown option",option:$option}'; exit 2 ;;
   esac
 done
 
 case "$ACTION" in
-  read|done|expire|reopen) ;;
-  *) jq -n '{error:"action must be read, done, expire, or reopen"}'; exit 2 ;;
+  read|claim|done|expire|reopen|review) ;;
+  *) jq -n '{error:"unsupported lifecycle action"}'; exit 2 ;;
 esac
 [[ -n "$SID" ]] || { jq -n '{error:"missing session id"}'; exit 2; }
+
+if [[ "$USE_LEGACY_GRAPH" != true ]]; then
+  export PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  ARGS=(action "$ACTION" "$SID" --reason explicit_user_action)
+  [ -z "$USER_REF" ] || ARGS+=(--user "$USER_REF")
+  [ -z "$EXPECTED_REVISION" ] || ARGS+=(--expected-revision "$EXPECTED_REVISION")
+  exec python3 -m egregore_runtime.lifecycle_cli "${ARGS[@]}"
+fi
+
+case "$ACTION" in
+  read|done|expire|reopen) ;;
+  *) jq -n '{error:"legacy graph compatibility supports read, done, expire, and reopen only"}'; exit 2 ;;
+esac
 
 MODE="$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo connected)"
 if [[ "$MODE" == "local" ]]; then

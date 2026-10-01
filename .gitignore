@@ -21,6 +21,7 @@ mcp.shared.*.json
 
 # User state
 .egregore-state.json
+.egregore-state.json.identity.lock
 
 # Runtime files (session-specific, never commit)
 .transcript-retry-queue
@@ -33,6 +34,8 @@ mcp.shared.*.json
 
 # Personal notes — never shared, never committed
 .egregore/notes/
+.egregore/runtime/
+.egregore/secret-entry/
 
 # Eval run outputs (local, per-machine)
 .egregore/eval-runs/
@@ -87,7 +90,8 @@ dashboards/
 # untracked files into PRs (see #1080's 2.7MB loom-phase2-evals sweep).
 # Three pre-existing tracked files under tmp/ are unaffected (gitignore
 # doesn't untrack) — evals/handoff-fidelity-v2/DESIGN.md references one.
-tmp/
+tmp/*
+!tmp/.gitkeep
 .egregore-worktree-tty
 .codex/worktrees/
 .pi/worktrees/
@@ -99,3 +103,6 @@ test-results/
 .egregore/activity-data.json
 .egregore/*.log
 *.egg-info/
+
+# prose-check workflow scratch (dry runs)
+.prose-inputs/

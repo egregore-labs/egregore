@@ -1,0 +1,96 @@
+name: CI plan
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        required: true
+        type: string
+      mode:
+        default: affected
+        type: string
+    outputs:
+      run:
+        value: ${{ jobs.plan.outputs.run }}
+      reason:
+        value: ${{ jobs.plan.outputs.reason }}
+      baseline:
+        value: ${{ jobs.plan.outputs.baseline }}
+      baseline_suites:
+        value: ${{ jobs.plan.outputs.baseline_suites }}
+      baseline_shards:
+        value: ${{ jobs.plan.outputs.baseline_shards }}
+      baseline_shard_count:
+        value: ${{ jobs.plan.outputs.baseline_shard_count }}
+      baseline_strict:
+        value: ${{ jobs.plan.outputs.baseline_strict }}
+      shell_contracts:
+        value: ${{ jobs.plan.outputs.shell_contracts }}
+      artifacts:
+        value: ${{ jobs.plan.outputs.artifacts }}
+      multiplayer:
+        value: ${{ jobs.plan.outputs.multiplayer }}
+      api_core:
+        value: ${{ jobs.plan.outputs.api_core }}
+      api_emissary:
+        value: ${{ jobs.plan.outputs.api_emissary }}
+      api_site:
+        value: ${{ jobs.plan.outputs.api_site }}
+      api_postgres:
+        value: ${{ jobs.plan.outputs.api_postgres }}
+      api_image:
+        value: ${{ jobs.plan.outputs.api_image }}
+      runtime:
+        value: ${{ jobs.plan.outputs.runtime }}
+      shellcheck:
+        value: ${{ jobs.plan.outputs.shellcheck }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    env:
+      TZ: UTC
+      LC_ALL: C.UTF-8
+      NODE_ENV: ''
+      NODE_OPTIONS: ''
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      reason: ${{ steps.plan.outputs.reason }}
+      baseline: ${{ steps.plan.outputs.baseline }}
+      baseline_suites: ${{ steps.plan.outputs.baseline_suites }}
+      baseline_shards: ${{ steps.plan.outputs.baseline_shards }}
+      baseline_shard_count: ${{ steps.plan.outputs.baseline_shard_count }}
+      baseline_strict: ${{ steps.plan.outputs.baseline_strict }}
+      shell_contracts: ${{ steps.plan.outputs.shell_contracts }}
+      artifacts: ${{ steps.plan.outputs.artifacts }}
+      multiplayer: ${{ steps.plan.outputs.multiplayer }}
+      api_core: ${{ steps.plan.outputs.api_core }}
+      api_emissary: ${{ steps.plan.outputs.api_emissary }}
+      api_site: ${{ steps.plan.outputs.api_site }}
+      api_postgres: ${{ steps.plan.outputs.api_postgres }}
+      api_image: ${{ steps.plan.outputs.api_image }}
+      runtime: ${{ steps.plan.outputs.runtime }}
+      shellcheck: ${{ steps.plan.outputs.shellcheck }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        name: Select checks from the candidate inputs
+        env:
+          CI_WORKFLOW: ${{ inputs.workflow }}
+          CI_MODE: ${{ inputs.mode }}
+        run: python3 bin/ci-plan.py --workflow "$CI_WORKFLOW" --mode "$CI_MODE" --no-reuse --output "$RUNNER_TEMP/ci-plan/plan.json" --github-output "$GITHUB_OUTPUT"
+      - name: Retain the plan for subsequent verification
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-plan-${{ inputs.workflow }}
+          path: ${{ runner.temp }}/ci-plan/plan.json
+          retention-days: 2
+          if-no-files-found: error

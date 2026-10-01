@@ -26,9 +26,10 @@ cat > "$TMPDIR/.egregore-state.json" << 'EOF'
 }
 EOF
 
-# Helper: pipe JSON to guard, return exit code
+# Supply finite JSON without a producer that can receive SIGPIPE when the
+# guard deliberately exits before reading stdin; preserve the guard exit code.
 run_guard() {
-  echo "$1" | CLAUDE_PROJECT_DIR="$TMPDIR" bash "$GUARD" 2>/dev/null
+  CLAUDE_PROJECT_DIR="$TMPDIR" bash "$GUARD" <<< "$1" 2>/dev/null
   return $?
 }
 

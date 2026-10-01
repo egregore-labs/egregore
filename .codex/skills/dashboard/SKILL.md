@@ -1,59 +1,49 @@
 ---
 name: dashboard
-description: Show the current user's Egregore dashboard, recent sessions, open threads, and current work from Codex when the user invokes /dashboard or $dashboard, or asks for their dashboard.
+description: 'Explicit personal-status surface for /dashboard or a direct request for the whole personal overview. Do not use it to find or resume one specific prior handoff, project, or work thread; that is semantic organizational recall through Runtime/QMD.'
 ---
 
-# Egregore Dashboard
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. Render the personal dashboard immediately from
-`bin/dashboard-data.sh` and the shared renderer.
+# Egregore dashboard Adapter
 
-## Flow
+This adapter runs the canonical Egregore workflow for `dashboard`. Its one
+maintained body is `.claude/skills/dashboard/SKILL.md`; read that file completely and follow it here.
 
-1. Map user range words to ISO-ish ranges:
-   - empty or `week` -> `P7D`
-   - `today` -> `P1D`
-   - `month` -> `P30D`
-   - `all` -> `P365D`
-2. Run `bash bin/dashboard-data.sh "" "$TIME_RANGE"` with network escalation
-   and capture stdout as JSON. This command performs the graph API call
-   internally; a normal sandboxed Codex shell can make a healthy graph look
-   unreachable.
-3. Classify graph status:
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-```bash
-node bin/codex-skill-render.mjs classify-graph --mode connected
-```
+## Structured UX parity
 
-If the network-enabled command still returns `retry` because the reason is
-`unreachable`, render the filesystem fallback and mention that the graph service
-was unreachable after a network-enabled attempt. If network escalation is denied
-or unavailable, run the command without escalation, render the fallback, and
-say Codex graph network access was not granted; do not claim the graph itself
-was unreachable.
+This workflow has a Claude skill with user-visible structured output. After
+reading `.claude/skills/dashboard/SKILL.md`, reproduce the same visible UX in Codex:
 
-4. Render:
+- Preserve TUI boxes, markdown tables, rich cards, browser artifact rendering,
+  exact confirmation blocks, and "no preamble" rules from the source skill.
+- Use the source skill's frame width, section order, labels, status footer,
+  and examples as the contract for the final response.
+- Never replace a required box/table/card/artifact view with a prose summary
+  unless the user explicitly asks for a summary.
+- When the source says to output a TUI box directly, paste that box as the
+  visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
+- Never show raw JSON, raw command output, or unformatted script output when
+  the source skill requires formatted status or rendered output.
 
-```bash
-node bin/codex-skill-render.mjs dashboard-card <json-file>
-```
-
-Paste the rendered card exactly in the visible response, preferably in a
-`text` fenced block. Do not paraphrase the card into bullets unless the user
-asks for a summary.
-
-5. End with a compact next-action prompt. Use structured Codex question
-   tooling when available; otherwise render numbered choices plus `Other:`.
-
-## Rules
-
-- Never show raw JSON.
-- Do not narrate each command step unless something blocks the workflow; the
-  final visible response should lead with the rendered card.
-- Structured UX parity is required: preserve the rendered dashboard TUI card,
-  no preamble, no prose-only replacement, and no raw collector output.
-- Do not call `bin/graph.sh` directly; `bin/dashboard-data.sh` is the data
-  boundary.
-- In local mode, do not mention graph setup; memory files are the source of
-  truth.
-- Do not use Claude Code commands.
+1. Read `.claude/skills/dashboard/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

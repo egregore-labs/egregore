@@ -5,7 +5,7 @@
     {
       "section": "(intro)",
       "action": "replace",
-      "sourceHash": "a33ca691aacf",
+      "sourceHash": "7493722713d6",
       "note": "Reframed for Codex: names AGENTS.md as the delivery surface and the manifest; \"organizations using Claude Code\" generalized."
     },
     {
@@ -23,7 +23,7 @@
     {
       "section": "Voice",
       "action": "keep",
-      "sourceHash": "af73d4eaa7cd",
+      "sourceHash": "6dcdb3cb3dd9",
       "note": "Kept — all runtimes can consult the shared voice rules and register-specific skills."
     },
     {
@@ -33,9 +33,9 @@
       "note": "Claude SessionStart hook does not run on Codex; the egregore launcher renders the card via bin/codex-session-start.sh before the session. Greeting-replay instruction dropped (card is already on screen)."
     },
     {
-      "section": "After Greeting — BRANCH ON FIRST RESPONSE",
+      "section": "Before Project Changes — WORKING BRANCH",
       "action": "replace",
-      "sourceHash": "3bac01c0a00a",
+      "sourceHash": "094a06f647a4",
       "note": "EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout bash kept verbatim (pure git); surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained."
     },
     {
@@ -45,21 +45,21 @@
       "note": "Kept verbatim — shell facts, runtime-neutral."
     },
     {
-      "section": "Knowledge Graph",
+      "section": "Optional Knowledge Graph Projection",
       "action": "keep",
-      "sourceHash": "b5d9a149f1a6",
-      "note": "Kept verbatim — bin/graph.sh is runtime-neutral."
+      "sourceHash": "64ee4c75b5fa",
+      "note": "Kept verbatim — graph traversal remains an explicit optional adapter and canonical evidence wins."
     },
     {
       "section": "Egregore Retrieval Beat",
       "action": "keep",
-      "sourceHash": "0c4d4715fb13",
+      "sourceHash": "b8fb46453ae7",
       "note": "Kept verbatim — product attribution applies across runtimes."
     },
     {
       "section": "Notifications",
       "action": "keep",
-      "sourceHash": "1649d6eebb96",
+      "sourceHash": "5c29befa7b47",
       "note": "Kept verbatim — bin/notify.sh is runtime-neutral."
     },
     {
@@ -84,31 +84,31 @@
       "section": "Loom Routing",
       "action": "replace",
       "sourceHash": "b6a6ca2bc2b7",
-      "note": "Loom delegation rides the Claude Code Agent tool; Codex has no subagent delegation — commands run inline. Preambles and bin/loom.sh calls marked skippable."
+      "note": "Native collaboration is conditional on exposed capabilities, workflow intent, and session permissions. Claude-only Loom calls stay excluded; inline fallback reports lost independence."
     },
     {
       "section": "Git Workflow",
       "action": "keep",
-      "sourceHash": "40735c0c09ff",
+      "sourceHash": "48777b92d7b3",
       "note": "Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence)."
     },
     {
       "section": "Working Conventions",
       "action": "keep",
-      "sourceHash": "2e4ec18b72a6",
+      "sourceHash": "e28cdfc77bf3",
       "note": "Kept verbatim."
     },
     {
       "section": "Command Awareness",
       "action": "keep",
-      "sourceHash": "be00d1fc715f",
-      "note": "Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
+      "sourceHash": "187cf8034fb8",
+      "note": "Prepended the Codex command surface (skill tokens, canonical workflow adapters, org-owned native support, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is."
     },
     {
       "section": "Socratic Questioning (MANDATORY)",
       "action": "replace",
       "sourceHash": "febe45868016",
-      "note": "AskUserQuestion -> numbered plain-text question batches with explicit stop-and-wait; multiSelect -> \"pick any that apply\"."
+      "note": "Use permitted structured question tools when exposed, with a numbered plain-text fallback; dependent work waits for answers."
     },
     {
       "section": "Telemetry",
@@ -119,7 +119,7 @@
     {
       "section": "Mode",
       "action": "keep",
-      "sourceHash": "0f74e18fd1b4",
+      "sourceHash": "40f8959fb66c",
       "note": "Kept; /env and /checkup rendered as $skill tokens."
     },
     {

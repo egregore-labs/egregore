@@ -158,6 +158,45 @@ EOF
   printf '%s' "$result"
 }
 
+write_result_e() {
+  local result="$TMPD/e-result.json"
+  local handoff="$TMPD/e-handoff.md"
+  cat > "$handoff" <<'EOF'
+---
+schema_version: "egregore-artifact/v1"
+from: "oz"
+addressed_to: "oz"
+claim: "Runtime persistence passed; render the canonical receipt."
+---
+
+## Current State
+
+The canonical Runtime artifact does not require a Briefing section.
+
+## Next Steps
+
+Resume this handoff in a fresh session.
+EOF
+  cat > "$result" <<EOF
+{
+  "mode": "local",
+  "file": "handoffs/2026-08/28-actor-id-runtime-receipt.md",
+  "absFile": "$handoff",
+  "sessionId": "session-runtime",
+  "graphStatus": "disabled",
+  "memoryStatus": "ok",
+  "notifyStatus": "skipped",
+  "artifactUrl": "",
+  "publishStatus": "disabled",
+  "recipient": "fa355df3-b588-4102-a7ef-f2bd3d33c322",
+  "topic": "Runtime receipt",
+  "author": "fa355df3-b588-4102-a7ef-f2bd3d33c322",
+  "artifacts": []
+}
+EOF
+  printf '%s' "$result"
+}
+
 extract_box() {
   awk '
     /^```$/ { fence += 1; next }
@@ -221,6 +260,7 @@ A_RESULT="$(write_result_a)"
 B_RESULT="$(write_result_b)"
 C_RESULT="$(write_result_c)"
 D_RESULT="$(write_result_d)"
+E_RESULT="$(write_result_e)"
 
 printf 'A compact briefing for local mode.' | bash "$RENDER" --result "$A_RESULT" > "$TMPD/a.out"
 printf 'This briefing proves wrapping across a few short operational sentences without redesigning the card.' | bash "$RENDER" --result "$B_RESULT" > "$TMPD/b.out"
@@ -230,11 +270,21 @@ printf 'Use %s for verification.' "$LONG_URL" | bash "$RENDER" --result "$D_RESU
 bash "$RENDER" --result "$A_RESULT" < /dev/null > "$TMPD/abs.out"
 printf 'Override briefing wins.' > "$TMPD/override-briefing.txt"
 bash "$RENDER" --result "$A_RESULT" --briefing-file "$TMPD/override-briefing.txt" < /dev/null > "$TMPD/override.out"
+bash "$RENDER" --result "$E_RESULT" < /dev/null > "$TMPD/e.out"
 
-for label in a b c d abs override; do
+for label in a b c d abs override e; do
   assert_box_widths "$TMPD/$label.out" "$label"
   assert_frame_lines "$TMPD/$label.out" "$label"
 done
+
+if grep -q 'Runtime persistence passed; render the canonical receipt.' "$TMPD/e.out" &&
+   grep -q 'To:    Oz' "$TMPD/e.out" &&
+   grep -q 'HANDOFF SENT.*Oz ·' "$TMPD/e.out" &&
+   ! grep -q 'fa355df3-b588-4102-a7ef-f2bd3d33c322' "$TMPD/e.out"; then
+  pass "runtime artifact fallback: claim renders with canonical actor names"
+else
+  fail "runtime artifact fallback lost claim or leaked stable actor IDs" "$(cat "$TMPD/e.out")"
+fi
 
 assert_no_warnings "$TMPD/a.out" "a"
 assert_no_warnings "$TMPD/b.out" "b"
@@ -299,7 +349,7 @@ else
   fail "b: full links line mismatch" "$(tail -n 1 "$TMPD/b.out")"
 fi
 
-if awk 'NR == 1 && $0 == "⚠ graph indexing failed — will sync on next /save" { g = 1 }
+if awk 'NR == 1 && $0 == "⚠ optional hosted indexing failed — will sync on next /save" { g = 1 }
         NR == 2 && $0 == "⚠ memory push failed — commits are local" { m = 1 }
         NR == 3 && $0 == "Notification unavailable — no message was sent." { n = 1 }
         END { exit (g && m && n) ? 0 : 1 }' "$TMPD/c.out"; then
@@ -314,7 +364,7 @@ else
   fail "absFile fallback: briefing section missing"
 fi
 
-if extract_box "$TMPD/d.out" | sed 's/^│  //; s/[[:space:]]*│$//' | tr -d '\n' | grep -q "$LONG_URL"; then
+if extract_box "$TMPD/d.out" | sed 's/^│  //; s/[[:space:]]*│$//' | tr -d '\n' | grep "$LONG_URL" >/dev/null; then
   pass "d: 90-char URL preserved across wrapped lines"
 else
   fail "d: long URL not preserved across wrapped lines"

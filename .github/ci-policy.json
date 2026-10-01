@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "reuse_hours": 6,
+  "workflows": {
+    "baseline": {
+      "path": ".github/workflows/ci.yml",
+      "reuse": false,
+      "jobs": {
+        "baseline": [
+          "Suite baseline \u2014 shard 0",
+          "Suite baseline \u2014 shard 1",
+          "Suite baseline \u2014 shard 2",
+          "Suite baseline \u2014 shard 3"
+        ]
+      }
+    },
+    "tests": {
+      "path": ".github/workflows/ci.yml",
+      "reuse": false,
+      "jobs": {
+        "shell_contracts": [
+          "Strict shell contracts"
+        ],
+        "multiplayer": [
+          "multiplayer-poc-tests"
+        ],
+        "artifacts": [
+          "artifacts-tests"
+        ]
+      },
+      "reuse_groups": [
+        "artifacts",
+        "multiplayer"
+      ]
+    },
+    "runtime": {
+      "path": ".github/workflows/ci.yml",
+      "reuse": false,
+      "jobs": {
+        "runtime": [
+          "Runtime contracts"
+        ]
+      }
+    },
+    "api": {
+      "path": ".github/workflows/ci.yml",
+      "reuse": false,
+      "push_groups": [
+        "api_postgres"
+      ],
+      "jobs": {
+        "api_core": [
+          "test"
+        ],
+        "api_emissary": [
+          "Emissary CLI (Node 18)",
+          "Emissary CLI (Node 22)",
+          "Exact-SHA respond-loop proof",
+          "MCP resource server",
+          "Handoff schema and publication contracts"
+        ],
+        "api_site": [
+          "Emissary site routing and build"
+        ],
+        "api_postgres": [
+          "Emissary PostgreSQL 16 proofs"
+        ],
+        "api_image": [
+          "API production image"
+        ]
+      }
+    },
+    "shellcheck": {
+      "path": ".github/workflows/ci.yml",
+      "reuse": false,
+      "jobs": {
+        "shellcheck": [
+          "shellcheck"
+        ]
+      }
+    }
+  },
+  "rules": [
+    {
+      "name": "planning prose",
+      "patterns": [
+        "docs/plans/**/*.md",
+        "docs/research/**/*.md"
+      ],
+      "groups": []
+    },
+    {
+      "name": "shared artifact renderer and design system",
+      "patterns": [
+        "packages/egregore-artifacts/**",
+        "packages/design-system/**"
+      ],
+      "groups": [
+        "api_core",
+        "api_emissary",
+        "api_image",
+        "api_postgres",
+        "api_site",
+        "artifacts",
+        "baseline",
+        "multiplayer",
+        "runtime",
+        "shell_contracts",
+        "shellcheck"
+      ]
+    },
+    {
+      "name": "multiplayer experiment",
+      "patterns": [
+        "threads/experiments/multiplayer-poc/**"
+      ],
+      "groups": [
+        "baseline",
+        "multiplayer"
+      ]
+    },
+    {
+      "name": "API implementation",
+      "patterns": [
+        "api/**"
+      ],
+      "groups": [
+        "baseline",
+        "api_core",
+        "api_emissary",
+        "api_site",
+        "api_postgres",
+        "api_image"
+      ]
+    }
+  ],
+  "baseline_owners": [
+    "artifacts",
+    "shell_contracts",
+    "runtime",
+    "api_postgres"
+  ]
+}

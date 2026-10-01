@@ -1,13 +1,28 @@
 # External notification consent
 
 This protocol applies to every Telegram, Teams, or other external notification
-in every harness. It applies even when the user asked to announce, notify,
+in every harness, except the configured issue system-event feed below. It applies even when the user asked to announce, notify,
 handoff, invite, or message someone, and even when the harness is running with
 broad tool permissions.
 
+## Configured issue system events
+
+The hosted Archive feed is an approved automatic system-event channel only for
+repositories explicitly listed in an org's `PR_FEED_CONFIG.issue_repos` with
+`issue_feed_policy: "issue-feed/v1"`. It reuses that feed's bot and archive
+channel. Allowed events: issue opened/reopened/closed, assignment changes,
+severity label changes, and newly created strict v1 observation comments.
+Only bounded sanitized metadata and validated links may leave; never report
+bodies, comment text, transcripts or logs. HMAC authentication, repository
+allowlisting and service-role transport receipts are required. Known rejected
+sends can be retried; uncertain sends require operator Archive reconciliation.
+Disabling the configuration revokes this exception. No other repository,
+destination, authored message, DM, announcement or background agent is approved.
+The remaining protocol applies unchanged to all agent-composed notifications.
+
 ## Invariant
 
-Never dispatch an external notification until the human has approved that one
+Outside the configured issue-feed exception, never dispatch an external notification until the human has approved that one
 exact delivery in a dedicated checkpoint. The checkpoint must show:
 
 - the organization;

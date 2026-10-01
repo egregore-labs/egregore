@@ -101,7 +101,7 @@ Use the right format for the right job:
 ### Hierarchy / tree
 ```
   egregore/
-  ├── bin/            Shell scripts (graph, notify, telemetry)
+  ├── bin/            Shell scripts (Runtime, notifications, telemetry)
   ├── skills/         Cognitive skill definitions
   │   ├── harvest/
   │   └── tui-design/

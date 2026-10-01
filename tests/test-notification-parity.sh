@@ -11,7 +11,7 @@ bad() { echo "  ✗ $1" >&2; FAIL=$((FAIL + 1)); }
 echo "test-notification-parity"
 
 for spec in CLAUDE.md AGENTS.md .pi/APPEND_SYSTEM.md .prime/agent/APPEND_SYSTEM.md; do
-  if grep -q 'Every external notification requires a separate' "$ROOT/$spec" &&
+  if grep -qi 'every external notification requires a separate' "$ROOT/$spec" &&
      grep -q 'Background jobs and automation may only' "$ROOT/$spec"; then
     ok "$spec carries the explicit-consent invariant"
   else
@@ -23,7 +23,7 @@ for runtime in codex pi prime; do
   bundle="$ROOT/packages/create-egregore/runtime/$runtime"
   if cmp -s "$ROOT/bin/notify.sh" "$bundle/bin/notify.sh" &&
      test -f "$bundle/.claude/context/notification-consent.md" &&
-     grep -q 'Every external notification requires a separate' \
+     grep -qi 'every external notification requires a separate' \
        "$bundle/AGENTS.md"; then
     ok "$runtime runtime bundle carries the transport and consent protocol"
   else
@@ -81,7 +81,7 @@ else
   bad "handoff consent status or no-fallback contract regressed"
 fi
 
-if grep -q 'separate exact Send / Edit / Cancel checkpoint' \
+if grep -q 'Send / Edit / Cancel checkpoint' \
   "$ROOT/.codex/skills/answer/SKILL.md" &&
    bash "$ROOT/bin/codex-sync-skills.sh" --check >/dev/null; then
   ok "generated Codex adapters carry and pass the consent contract"

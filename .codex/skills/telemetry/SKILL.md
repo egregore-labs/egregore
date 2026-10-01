@@ -1,14 +1,14 @@
 ---
 name: telemetry
-description: 'Manage your own telemetry settings — check status, opt in/out, view or clear the buffered events. Use for /telemetry, ''turn off telemetry'', or ''what data do you collect''.'
+description: 'Manage local-first telemetry — status, inspect, export, opt in/out, clear, or explicitly share a disclosed dataset. Use for /telemetry, ''turn off telemetry'', or ''what data do you collect''.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore telemetry Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `telemetry`. Its one
+maintained body is `.claude/skills/telemetry/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

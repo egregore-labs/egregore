@@ -14,10 +14,10 @@ grep -Fq "$BEAT" "$ROOT/CLAUDE.md" ||
   fail "Claude behavioral contract is missing the retrieval beat"
 grep -Fq "$GRAPH_BEAT" "$ROOT/CLAUDE.md" ||
   fail "Claude behavioral contract is missing graph attribution"
-grep -Fq 'standalone assistant message before the first Bash, Grep, Glob, Read' "$ROOT/CLAUDE.md" ||
+grep -Fq 'message before the first tool call that performs the organizational recall' "$ROOT/CLAUDE.md" ||
   fail "Claude contract does not require a visible pre-tool beat"
-grep -Fq 'Shell/tool output does not satisfy this requirement' "$ROOT/CLAUDE.md" ||
-  fail "Claude contract still permits a collapsed tool-output beat"
+grep -Fq 'Tool output does not satisfy it' "$ROOT/CLAUDE.md" ||
+  fail "Claude contract permits a collapsed tool-output beat"
 grep -Fq 'Do not paraphrase the line' "$ROOT/CLAUDE.md" ||
   fail "Claude contract permits generic retrieval narration"
 grep -Fq "$BEAT" "$ROOT/AGENTS.md" ||
@@ -28,19 +28,51 @@ grep -Fq 'local line="⌕ ${product} · ${surface}' "$ROOT/bin/search.sh" ||
   fail "search output is not product-attributed"
 grep -Fq 'Never name `Egregore Connect` unless a graph read will actually run.' "$ROOT/CLAUDE.md" ||
   fail "graph attribution truthfulness guard is missing"
-grep -Fq 'organizational recall starts with `bash bin/search.sh query`' "$ROOT/CLAUDE.md" ||
-  fail "global routing contract does not require the Egregore search entry point"
+grep -Fq 'Organizational recall always enters Egregore Runtime' "$ROOT/CLAUDE.md" &&
+grep -Fq 'model is' "$ROOT/CLAUDE.md" &&
+grep -Fq 'semantic intent authority' "$ROOT/CLAUDE.md" &&
+grep -Fq 'Prompt hooks attach identity and guidance only; they never retrieve evidence.' "$ROOT/CLAUDE.md" ||
+  fail "global routing contract does not make model-led Runtime recall authoritative"
+grep -Fq '/activity`, `/dashboard`, and `/project`' "$ROOT/CLAUDE.md" ||
+  fail "status surfaces may still hijack specific continuation recall"
+grep -Fq 'Explained syntheses of current organizational work' "$ROOT/CLAUDE.md" ||
+  fail "analytical team questions may still be routed to a status card"
+grep -Fq 'Do not run retrieval on unrelated prompts' "$ROOT/CLAUDE.md" ||
+  fail "global routing contract does not preserve unrelated-prompt latency"
+grep -Fq 'reuse its authorized evidence' "$ROOT/CLAUDE.md" ||
+  fail "global contract does not retain precompiled evidence"
+grep -Fq 'Never relax the date boundary' "$ROOT/CLAUDE.md" ||
+  fail "global contract permits date-boundary relaxation"
+grep -Fq 'Never infer graph' "$ROOT/CLAUDE.md" ||
+  fail "global routing contract still permits intent-inferred graph retrieval"
+! grep -Fq 'current work addressed to someone → `bash bin/graph-op.sh open-handoffs' "$ROOT/CLAUDE.md" ||
+  fail "common handoff recall still routes directly to graph"
+grep -Fq 'bash "$SCRIPT_DIR/bin/activity-data.sh"' "$ROOT/bin/lib/context.sh" &&
+! grep -Fq 'graph-op.sh" open-handoffs' "$ROOT/bin/lib/context.sh" ||
+  fail "startup handoff hydration still bypasses canonical Runtime status"
+for skill in "$ROOT/.claude/skills/search/SKILL.md"; do
+  grep -Fq 'reuse evidence already in context' "$skill" &&
+  grep -Fq '8 discoveries, 20 source windows' "$skill" &&
+  grep -Fq 'bin/search.sh find' "$skill" ||
+    fail "canonical search workflow lacks retained, bounded Runtime investigation"
+done
+grep -Fq 'model decides from meaning, not trigger phrases' "$ROOT/.claude/skills/search/SKILL.md" ||
+  fail "canonical search workflow still relies on phrase matching for semantic recall"
+grep -Fq 'maintained body is `.claude/skills/search/SKILL.md`' "$ROOT/.codex/skills/search/SKILL.md" ||
+  fail "search adapter does not run the canonical workflow"
 grep -Fq 'Do not `cd` into the sibling memory repository.' "$ROOT/CLAUDE.md" ||
   fail "global routing contract still permits absolute sibling-memory traversal"
-grep -Fq 'Do not resolve `memory/` to its sibling Git repository' "$ROOT/.claude/skills/search/SKILL.md" ||
-  fail "Claude search skill does not prohibit raw sibling-memory traversal"
-grep -Fq 'bash bin/search.sh query "your query" -n 6' "$ROOT/.codex/skills/search/SKILL.md" ||
-  fail "Codex search skill does not use the cross-runtime search entry point"
+grep -Fq 'or direct QMD' "$ROOT/.claude/skills/search/SKILL.md" ||
+  fail "Claude search skill permits a raw retrieval bypass"
 
 jq -e '.permissions.additionalDirectories | index("memory") != null' "$ROOT/.claude/settings.json" >/dev/null ||
   fail "Claude does not register memory as an additional working directory"
-jq -e '.permissions.allow | index("Bash(bash bin/search.sh query:*)") != null' "$ROOT/.claude/settings.json" >/dev/null ||
+jq -e '.permissions.allow | index("Bash(bash bin/search.sh investigate:*)") != null' "$ROOT/.claude/settings.json" >/dev/null ||
   fail "Claude auto mode is missing a narrow permission for Egregore search"
+jq -e '.hooks.UserPromptSubmit[].hooks[].command | select(contains("bin/observe-context.sh claude"))' "$ROOT/.claude/settings.json" >/dev/null ||
+  fail "Claude normal prompts do not enter the Observe context adapter"
+jq -e '.hooks.UserPromptSubmit[].hooks[].command | select(contains("bin/observe-context.sh") and contains("codex"))' "$ROOT/.codex/hooks.json" >/dev/null ||
+  fail "Codex normal prompts do not enter the Observe context adapter"
 
 grep -Fq 'function claudeLaunchArgs(egregoreDir)' "$ROOT/packages/create-egregore/assets/egregore-launcher.js" ||
   fail "installed launcher does not build Claude memory-workspace arguments"
@@ -53,21 +85,12 @@ grep -Fq 'claude_args+=("--add-dir" "$target_path/memory")' "$ROOT/packages/crea
 grep -Fq 'CLAUDE_ARGS+=("--add-dir" "$HOME/egregore/memory")' "$ROOT/bin/workspace-init.sh" ||
   fail "hosted workspace launcher does not declare memory with --add-dir"
 
-fixture=$(mktemp -d)
-trap 'rm -rf "$fixture"' EXIT
-mkdir -p "$fixture/bin"
-touch "$fixture/bin/search.sh"
-printf 'retrieval-beat-test-%s\n' "$$" > "$fixture/.egregore-session-id"
-rm -f "/tmp/egregore-search-hint-retrieval-beat-test-$$"
-hint=$(printf '%s\n' '{"prompt":"what are our paid and free tiers?"}' |
-  CLAUDE_PROJECT_DIR="$fixture" bash "$ROOT/.claude/hooks/search-hint.sh")
-printf '%s' "$hint" | grep -Fq 'FIRST action: `bash bin/search.sh query' ||
-  fail "Claude prompt hook does not route pricing/tier recall through Egregore search"
-rm -f "/tmp/egregore-search-hint-retrieval-beat-test-$$"
-codex_hint=$(printf '%s\n' '{"prompt":"what are our paid and free tiers?"}' |
-  CLAUDE_PROJECT_DIR="$fixture" node "$ROOT/.codex/hooks/search-hint.js")
-printf '%s' "$codex_hint" | grep -Fq 'FIRST action: `bash bin/search.sh query' ||
-  fail "Codex prompt hook does not route pricing/tier recall through Egregore search"
+grep -Fq 'bin/observe-context.sh' "$ROOT/.claude/hooks/search-hint.sh" &&
+  ! grep -Fq 'FIRST action:' "$ROOT/.claude/hooks/search-hint.sh" ||
+  fail "Claude compatibility hook still injects a duplicate search instruction"
+grep -Fq 'bin", "observe-context.sh' "$ROOT/.codex/hooks/search-hint.js" &&
+  ! grep -Fq 'FIRST action:' "$ROOT/.codex/hooks/search-hint.js" ||
+  fail "Codex compatibility hook still injects a duplicate search instruction"
 
 for runtime in codex pi prime; do
   test -f "$ROOT/packages/create-egregore/runtime/$runtime/bin/search.sh" ||
@@ -81,9 +104,15 @@ for runtime in codex pi prime; do
     echo "  ○ $runtime bundle ships no search skill (queued in capability-distribution) — beat assertions skipped"
     continue
   fi
+  grep -Fq 'generated-by: bin/codex-sync-skills.sh' "$packaged_search" &&
+    grep -Fq 'maintained body is `.claude/skills/search/SKILL.md`' "$packaged_search" ||
+    fail "packaged $runtime search adapter does not run the canonical workflow"
+  # Runtime bundles may omit the canonical tree: installed instances are
+  # framework clones and resolve this pointer in their framework checkout.
+  packaged_search="$ROOT/.claude/skills/search/SKILL.md"
   grep -Fq "$BEAT" "$packaged_search" ||
     fail "packaged $runtime search skill is missing the retrieval beat"
-  grep -Fq 'command output does not satisfy this requirement' "$packaged_search" ||
+  grep -Fq 'assistant line' "$packaged_search" ||
     fail "packaged $runtime search skill permits a hidden retrieval beat"
 done
 

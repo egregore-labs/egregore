@@ -47,11 +47,11 @@ grep -q 'Local mode:.*GITHUB_TOKEN.*only' "$CLAUDE_MD" \
   || fail ".env local-mode description missing"
 
 # Knowledge Graph + Notifications must be prefixed connected-mode-only
-grep -A2 '^## Knowledge Graph$' "$CLAUDE_MD" | grep -q 'Connected mode only' \
+grep -A3 '^## Optional Knowledge Graph Projection$' "$CLAUDE_MD" | grep 'Connected mode only' >/dev/null \
   && pass "Knowledge Graph marked Connected mode only" \
   || fail "Knowledge Graph not gated"
 
-grep -A2 '^## Notifications$' "$CLAUDE_MD" | grep -q 'Connected mode only' \
+sed -n '/^## Notifications$/,/^## /p' "$CLAUDE_MD" | grep 'Connected mode only' >/dev/null \
   && pass "Notifications marked Connected mode only" \
   || fail "Notifications not gated"
 
@@ -65,13 +65,13 @@ grep -q 'Never surface `api_url`' "$CLAUDE_MD" \
   || fail 'Mode section missing api_url rule'
 
 # Regression safety: connected-mode paragraph must still instruct graph/notify usage
-grep -q 'Neo4j knowledge graph via `bin/graph.sh`' "$CLAUDE_MD" \
-  && pass 'connected-mode paragraph still instructs bin/graph.sh usage' \
-  || fail 'connected-mode paragraph lost graph.sh instruction'
+grep -q 'Use `bin/graph.sh` for unsupported Neo4j queries' "$CLAUDE_MD" \
+  && pass 'graph section still instructs bin/graph.sh usage' \
+  || fail 'graph section lost graph.sh instruction'
 
-grep -q 'Telegram notifications via `bin/notify.sh`' "$CLAUDE_MD" \
-  && pass 'connected-mode paragraph still instructs bin/notify.sh usage' \
-  || fail 'connected-mode paragraph lost notify.sh instruction'
+grep -q '`bin/graph.sh` and `bin/notify.sh` route through the API gateway' "$CLAUDE_MD" \
+  && pass 'connected-mode paragraph still routes graph.sh and notify.sh through the gateway' \
+  || fail 'connected-mode paragraph lost the gateway routing instruction'
 
 echo ""
 
@@ -80,84 +80,45 @@ echo ""
 echo ".claude/skills/checkup/SKILL.md"
 
 # Mode detection block must exist and match canonical helper semantics
-grep -q "jq -r '.mode // empty' egregore.json" "$CHECKUP" \
-  && pass "mode detection uses jq on egregore.json" \
+grep -Fq 'bash bin/config-get.sh mode' "$CHECKUP" \
+  && pass "mode detection uses the canonical config reader" \
   || fail "mode detection missing"
 
-grep -q '\[ "$MODE" = "local" \] || \[ -z "$API_URL" \]' "$CHECKUP" \
-  && pass "mode detection falls back to local when api_url empty" \
-  || fail "mode detection fallback logic missing"
+grep -Fq 'If it prints `local`, skip Connected' "$CHECKUP" \
+  && grep -Fq 'if it prints `connected`, include them after the local checks.' "$CHECKUP" \
+  && pass "mode prose gates Connected checks on the printed value" \
+  || fail "mode prose does not gate on the printed local/connected value"
 
-# Each connected-only check must be wrapped in an explicit MODE guard.
-# Count the guards — we expect exactly 4 (one per check 3b/4/5/6).
-GUARD_COUNT=$(grep -c 'if \[ "\$MODE" = "connected" \]; then' "$CHECKUP")
-[ "$GUARD_COUNT" -eq 4 ] \
-  && pass "all 4 connected-only checks wrapped in MODE guard ($GUARD_COUNT found)" \
-  || fail "expected 4 MODE guards, found $GUARD_COUNT"
+# Runtime health must enter through the typed Egregore Runtime surface.
+grep -q 'egregore_runtime.harness_cli status --json' "$CHECKUP" \
+  && pass "checkup reads typed Runtime health" \
+  || fail "checkup bypasses typed Runtime health"
 
-# Each connected-only check must also have the plain-language skip instruction
-grep -c 'In local mode, skip this check entirely' "$CHECKUP" \
-  | grep -q '^4$' \
-  && pass "all 4 connected-only checks have skip instruction" \
-  || fail "missing skip instruction on one or more checks"
+for field in canonical_state_ready runtime_state runtime_pid runtime_endpoint collection index_path; do
+  grep -q "$field" "$CHECKUP" \
+    && pass "Runtime health includes $field" \
+    || fail "Runtime health omits $field"
+done
 
-# Check 1 must accept both connected and local pass criteria
-grep -q 'Pass (connected mode).*api_url' "$CHECKUP" \
-  && pass "Check 1 has connected-mode pass criterion" \
-  || fail "Check 1 missing connected-mode pass criterion"
+# QMD is owned behind Runtime; no direct lifecycle or status commands belong here.
+grep -Eq '^[[:space:]]*(qmd|npx .*qmd)[[:space:]]' "$CHECKUP" \
+  && fail "checkup calls QMD directly" \
+  || pass "checkup keeps QMD behind Runtime"
 
-grep -q 'Pass (local mode).*api_url.*not required' "$CHECKUP" \
-  && pass "Check 1 has local-mode pass criterion" \
-  || fail "Check 1 missing local-mode pass criterion"
+grep -q 'bash bin/search.sh start' "$CHECKUP" \
+  && pass "checkup repairs through Runtime lifecycle adapter" \
+  || fail "checkup missing Runtime lifecycle repair"
 
-# Check 2 must distinguish modes for .env requirements
-grep -q 'Pass (local mode).*GITHUB_TOKEN.*EGREGORE_API_KEY.*not required' "$CHECKUP" \
-  && pass "Check 2 has local-mode pass criterion (only GITHUB_TOKEN)" \
-  || fail "Check 2 missing local-mode pass criterion"
+# Connected integrations are explicit and do not define canonical readiness.
+for marker in 'CONNECTED INTEGRATIONS' 'bash bin/graph-projection.sh verify --enable' 'bash bin/notification.sh status' 'local memory ready'; do
+  grep -q "$marker" "$CHECKUP" \
+    && pass "connected contract includes $marker" \
+    || fail "connected contract missing $marker"
+done
 
-# Auto-fix must mark api-key and graph fixes as connected-only
-grep -q 'API key mismatch.*connected mode only' "$CHECKUP" \
-  && pass "Auto-fix: API key mismatch marked connected-only" \
-  || fail "Auto-fix: API key mismatch not gated"
-
-grep -q 'Graph/Telegram down.*connected mode only' "$CHECKUP" \
-  && pass "Auto-fix: Graph/Telegram marked connected-only" \
-  || fail "Auto-fix: Graph/Telegram not gated"
-
-# Two rendering boxes must exist (connected + local)
-grep -c '^\*\*Connected mode format:\*\*$' "$CHECKUP" | grep -q '^1$' \
-  && pass "connected-mode rendering format present" \
-  || fail "connected-mode rendering format missing"
-
-grep -c '^\*\*Local mode format:\*\*$' "$CHECKUP" | grep -q '^1$' \
-  && pass "local-mode rendering format present" \
-  || fail "local-mode rendering format missing"
-
-# Extract connected-mode and local-mode rendering sections.
-# Connected section: from "**Connected mode format:**" to "**Local mode format:**"
-# Local section: from "**Local mode format:**" to "Symbols:"
-CONNECTED_BOX=$(awk '/\*\*Connected mode format:\*\*/{flag=1} /\*\*Local mode format:\*\*/{flag=0} flag' "$CHECKUP")
-LOCAL_BOX=$(awk '/\*\*Local mode format:\*\*/{flag=1} /^Symbols:/{flag=0} flag' "$CHECKUP")
-
-# Local-mode box must not contain the SERVICES section
-echo "$LOCAL_BOX" | grep -q 'SERVICES' \
-  && fail "local-mode rendering still contains SERVICES section" "should be omitted" \
-  || pass "local-mode rendering correctly omits SERVICES"
-
-# Local-mode box must not contain the Person row
-echo "$LOCAL_BOX" | grep -q 'Person —' \
-  && fail "local-mode rendering still contains Person row" "should be omitted" \
-  || pass "local-mode rendering correctly omits Person row"
-
-# Connected-mode box MUST still contain SERVICES (regression canary)
-echo "$CONNECTED_BOX" | grep -q 'SERVICES' \
-  && pass "connected-mode rendering preserves SERVICES section" \
-  || fail "connected-mode rendering lost SERVICES section" "REGRESSION"
-
-# Connected-mode box MUST still contain the Person row (regression canary)
-echo "$CONNECTED_BOX" | grep -q 'Person —' \
-  && pass "connected-mode rendering preserves Person row" \
-  || fail "connected-mode rendering lost Person row" "REGRESSION"
+grep -q 'Skip this batch completely in local mode' "$CHECKUP" \
+  && pass "local mode skips Connected probes" \
+  || fail "Connected probes are not explicitly local-gated"
 
 # Must not contain "ask team admin" text (that was the reporter bug)
 grep -qi 'ask.*team admin' "$CHECKUP" \

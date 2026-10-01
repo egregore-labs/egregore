@@ -351,7 +351,7 @@ cmd_ensure() {
   local _spawn_lock="$STATE_DIR/$KEY.spawn-lock"
   if ! mkdir "$_spawn_lock" 2>/dev/null; then
     local _lock_age
-    _lock_age=$(( $(date +%s) - $(stat -f %m "$_spawn_lock" 2>/dev/null || stat -c %Y "$_spawn_lock" 2>/dev/null || echo 0) ))
+    _lock_age=$(( $(date +%s) - $(stat -c %Y "$_spawn_lock" 2>/dev/null || stat -f %m "$_spawn_lock" 2>/dev/null || echo 0) ))
     # Stale reap by atomic rename, never rmdir+mkdir: two reapers doing
     # remove-then-recreate can alternately delete each other's FRESH lock and
     # both spawn. Exactly one mv succeeds; losing the mv or the follow-up

@@ -1,82 +1,49 @@
 ---
 name: activity
-description: Show Egregore team activity, pending handoffs, and open questions when the user invokes /activity or $activity, or asks what is happening in an Egregore checkout.
+description: 'Explicit Activity card only. Use when the user names /activity or directly asks to show, open, or render the Activity dashboard/card. Never use it to answer or synthesize what the team is focused on, busy with, prioritizing, or doing; analytical organizational questions use Search/Runtime QMD.'
 ---
 
-# Egregore Activity
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. Use this only inside an Egregore checkout.
+# Egregore activity Adapter
 
-Show the live team activity view without sending the user through Claude Code.
-The graph API is useful when reachable, but the filesystem and memory repo must
-remain enough to render a useful answer.
+This adapter runs the canonical Egregore workflow for `activity`. Its one
+maintained body is `.claude/skills/activity/SKILL.md`; read that file completely and follow it here.
 
-## Flow
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-1. Verify `bin/agent.sh` exists. If it does not, say this is not an Egregore
-   checkout.
-2. If the request is `activity done N`, `activity expire N`, or
-   `activity reopen N`, fetch `bin/activity-data.sh` to a temporary JSON file,
-   map `N` to the corresponding `handoffs_to_me[N-1].sessionId`, and run:
+## Structured UX parity
 
-```bash
-bash bin/activity-action.sh <done|expire|reopen> "<session-id>"
-```
+This workflow has a Claude skill with user-visible structured output. After
+reading `.claude/skills/activity/SKILL.md`, reproduce the same visible UX in Codex:
 
-Report the resulting topic and state. Never accept a raw session ID from the
-visible command when a numbered activity item is available; the number keeps
-the mutation tied to what the user just saw. In local mode, preserve the
-script's explicit unavailable result.
-3. Run `bin/agent.sh sync`.
-4. Resolve the requested handle:
-   - If the user named a person, match it against `memory/people/*.md`.
-   - Otherwise use `.egregore-state.json` `github_username`, then git user
-     fallback.
-5. Run `bash bin/activity-data.sh [handle]` with network escalation and capture
-   stdout as JSON. This command performs the graph API call internally; a
-   normal sandboxed Codex shell can make a healthy graph look unreachable.
-6. Classify the graph status:
+- Preserve TUI boxes, markdown tables, rich cards, browser artifact rendering,
+  exact confirmation blocks, and "no preamble" rules from the source skill.
+- Use the source skill's frame width, section order, labels, status footer,
+  and examples as the contract for the final response.
+- Never replace a required box/table/card/artifact view with a prose summary
+  unless the user explicitly asks for a summary.
+- When the source says to output a TUI box directly, paste that box as the
+  visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
+- Never show raw JSON, raw command output, or unformatted script output when
+  the source skill requires formatted status or rendered output.
 
-```bash
-node bin/codex-skill-render.mjs classify-graph --mode connected
-```
-
-If the network-enabled command still returns `retry` because `graph_reason` is
-`unreachable`, render the filesystem fallback and mention that the graph service
-was unreachable after a network-enabled attempt. If network escalation is denied
-or unavailable, run the command without escalation, render the fallback, and
-say Codex graph network access was not granted; do not claim the graph itself
-was unreachable. Do not retry for `missing_config`, `auth_error`, or
-`server_error`; render the clear reason instead.
-
-7. Render the card with:
-
-```bash
-node bin/codex-skill-render.mjs activity-card <json-file>
-```
-
-Paste the rendered card exactly in the visible response, preferably in a
-`text` fenced block. Do not paraphrase the card into bullets unless the user
-asks for a summary.
-
-8. Offer one compact focus prompt:
-   - `Handoffs` - open pending handoffs.
-   - `Questions` - answer or inspect pending questions.
-   - `Recent work` - inspect sessions and wraps.
-   - `Dashboard` - switch to the personal dashboard.
-   - `Done` - stop.
-
-Use structured Codex question tooling when it is available. Otherwise render a
-numbered list plus `Other:` and wait for the user.
-
-## Rules
-
-- Never show raw JSON.
-- Do not narrate each command step unless something blocks the workflow; the
-  final visible response should lead with the rendered card.
-- Structured UX parity is required: preserve the rendered activity TUI card,
-  no preamble, no prose-only replacement, and no raw collector output.
-- Do not call `egregore-handoff`.
-- Do not use Claude Code commands.
-- Keep graph, pull request, and publish data best-effort; local memory remains
-  the source of truth when connected services are down.
+1. Read `.claude/skills/activity/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: graph-witness.sh [mode]"
   echo ""
-  echo "Read-only quality evaluator for the knowledge graph."
+  echo "Read-only quality evaluator for the optional hosted index."
   echo "Measures structural health without modifying anything."
   echo ""
   echo "Modes:"

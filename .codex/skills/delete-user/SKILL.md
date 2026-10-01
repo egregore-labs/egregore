@@ -7,8 +7,8 @@ description: 'Remove a member from this Egregore, revoking access across GitHub,
 
 # Egregore delete-user Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `delete-user`. Its one
+maintained body is `.claude/skills/delete-user/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

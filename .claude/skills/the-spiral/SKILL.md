@@ -21,6 +21,14 @@ User says: "let's think through", "help me articulate", "pressure test this", "d
 
 ## Setup
 
+### Runtime context boundary
+
+Use any attached `EGREGORE_ORG_CONTEXT_V1` evidence as the organizational
+seed. Do not repeat its query or reopen its sources. When a later ring exposes
+a specific organizational knowledge gap, use one Runtime query/open episode
+for that gap and keep web research separate. Persistent spiral state is local
+working state; promoted organizational outputs use canonical writeback.
+
 When the skill triggers, initialize the game:
 
 ### Step 1: Gather Context
@@ -357,7 +365,7 @@ When ascending to a new ring, render a moment of transition:
   ✦ RING 2 COMPLETE — TERRITORY MAPPED
 
   3 loops · 2 artifacts · 4 domains emerged
-  
+
   Ascending to Ring 3: THE ENCOUNTER
   The claim meets reality.
 
@@ -373,9 +381,9 @@ When descending, mark it clearly:
 
   ↓ DESCENT — Ring 4 → Ring 2
 
-  Reason: "Business model assumption contradicts 
+  Reason: "Business model assumption contradicts
   seed claim about accessibility"
-  
+
   Revising territory with new understanding.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -476,7 +484,7 @@ Render a final TUI:
   Deliverables:
   ◆ [list of Ring 5 artifacts]
 
-  "The process of unfolding is, in the end, a way 
+  "The process of unfolding is, in the end, a way
    of creating things which are whole."
    — Christopher Alexander
 

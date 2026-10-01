@@ -1,44 +1,29 @@
 ---
 name: invite
-description: Invite a GitHub user into this Egregore instance from Codex when the user invokes /invite or $invite, or asks to invite someone without exposing credentials.
+description: 'Invite someone to this Egregore — repository access plus a setup link when Connected. Use for /invite <username>, ''invite <username>'', or ''add <username> to the org''; not member removal.'
 ---
 
-# Egregore Invite
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. Invite a GitHub username to the configured repos
-and, in connected mode, create the Egregore join link.
+# Egregore invite Adapter
 
-## Flow
+This adapter runs the canonical Egregore workflow for `invite`. Its one
+maintained body is `.claude/skills/invite/SKILL.md`; read that file completely and follow it here.
 
-1. Require a GitHub username. If missing, ask for it and stop.
-2. Read mode and config from `egregore.json`. Never print secrets from `.env`.
-3. Run credential-sensitive work in a single shell command that reads
-   `GITHUB_TOKEN` and `EGREGORE_API_KEY` internally and only prints sanitized
-   JSON.
-4. Connected mode:
-   - POST to the configured Egregore invite API with the GitHub username,
-     org, repo, slug, API key, and GitHub token.
-   - Parse the response and show invite status, memory access status, and the
-     returned invite URL.
-   - Best-effort graph record with `bin/graph.sh`.
-   - If a contact channel exists, follow
-     `.claude/context/notification-consent.md`: prepare a direct-message plan
-     and show the exact organization, recipient, channel, and message in a
-     separate Send / Edit / Cancel checkpoint. The invite request is not
-     notification consent.
-5. Local mode:
-   - Use GitHub API collaborator endpoints for the core repo, memory repo, and
-     managed repos.
-   - Create or update `memory/people/{username}.md`.
-   - Commit and push memory.
-   - Show the join command using `npx -y create-egregore@latest join`.
-6. If remote hosting is enabled, provision hosting best-effort in a detached
-   command and include the status only when it succeeds.
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-## Rules
-
-- Never expose tokens, request bodies containing tokens, or raw API JSON.
-- Only org admins can complete the connected invite flow; report API denial
-  clearly and give the manual GitHub access URL.
-- Do not use Claude Code commands.
-- Never fall back from an invite DM to a group or dispatch from detached work.
+1. Read `.claude/skills/invite/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

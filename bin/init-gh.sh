@@ -350,7 +350,7 @@ if [ "$IS_NEW_PROJECT" = "0" ]; then
   # picker. Offer the user's teams in this org as a narrower scope.
   TEAM_SLUG=""
   if [ "$IS_ORG" = "1" ]; then
-    TEAMS="$(run_with_spinner "Checking your teams in $GITHUB_ORG…" \
+    TEAMS="$(run_with_spinner "Checking your teams in $GITHUB_ORG..." \
         gh api 'user/teams?per_page=100' \
       | jq -c --arg org "$GITHUB_ORG" \
           '[.[] | select((.organization.login // "") | ascii_downcase == ($org | ascii_downcase)) | {name, slug}]' \
@@ -373,7 +373,7 @@ if [ "$IS_NEW_PROJECT" = "0" ]; then
 
   # Bounded, spinner-backed fetch (see fetch_org_repos). Big orgs no longer
   # block on hundreds of silent --paginate calls.
-  REPO_LIST_RAW="$(run_with_spinner "Fetching repos from ${TEAM_SLUG:-$GITHUB_ORG} (most recent first)…" \
+  REPO_LIST_RAW="$(run_with_spinner "Fetching repos from ${TEAM_SLUG:-$GITHUB_ORG} (most recent first)..." \
     fetch_org_repos "$GITHUB_ORG" "$IS_ORG" "$REPO_JQ" "$TEAM_SLUG")"
   if [ -n "$REPO_LIST_RAW" ]; then
     REPO_LIST="$(echo "$REPO_LIST_RAW" | jq -s '.' 2>/dev/null || echo '[]')"

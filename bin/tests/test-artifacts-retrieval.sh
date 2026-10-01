@@ -9,13 +9,15 @@
 #   bash bin/tests/test-artifacts-retrieval.sh
 
 set -uo pipefail
+# Live: reads this instance's live memory. Opt in with EGREGORE_LIVE_INTEGRATION=1; otherwise report a skip.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then echo "SKIP: reads this instance's live memory; set EGREGORE_LIVE_INTEGRATION=1 to run"; exit 0; fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 A="$ROOT/bin/artifacts.sh"
 Q="egregore"
 fails=0
 ok() { printf '  \033[0;32m✓\033[0m %s\n' "$1"; }
 no() { printf '  \033[0;31m✗\033[0m %s\n' "$1"; fails=$((fails + 1)); }
-has() { printf '%s' "$1" | grep -q -- "$2"; }
+has() { grep -q -- "$2" <<< "$1"; }
 
 MODE="$(jq -r '.mode // "connected"' "$ROOT/egregore.json" 2>/dev/null)"
 echo "egregore.json mode: $MODE"
@@ -26,7 +28,7 @@ OUT="$(bash "$A" find "$Q" 2>&1)"
 if [ "$MODE" = "local" ]; then
   has "$OUT" 'grep-rank' && ok "local → grep path" || no "local: expected grep path"
 else
-  has "$OUT" ' graph ' && ok "connected → graph path" || no "connected: expected graph path"
+  has "$OUT" ' relationships ' && ok "connected → graph path" || no "connected: expected graph path"
 fi
 has "$OUT" '●' && ok "returns results" || no "no results"
 echo

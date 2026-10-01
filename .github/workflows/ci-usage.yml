@@ -1,0 +1,40 @@
+name: CI usage estimate
+
+# A small observer, independent of test gates. Schedules run on the default branch.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-usage-report
+  cancel-in-progress: false
+
+jobs:
+  usage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/ci-usage.py
+          sparse-checkout-cone-mode: false
+      - name: Estimate yesterday's Actions usage
+        # Partial/error reports stay visible without blocking any test workflow.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci-usage.py --rate 0.006 --daily-target 2 --seconds 75
+      - name: Keep short-lived usage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-usage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-usage-report/
+          retention-days: 7
+          if-no-files-found: warn

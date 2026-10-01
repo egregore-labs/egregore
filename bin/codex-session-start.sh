@@ -24,6 +24,8 @@ rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch
 # Same for boundary-crossing consent — grants are session-scoped (AGENTS.md
 # environment-isolation protocol); durable grants belong in .egregore-boundary.local.json.
 rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
+# Prune abandoned scratch without blocking startup or fresh sibling work.
+( bash "$SCRIPT_DIR/bin/scratch-sweep.sh" --older-than 60 >/dev/null 2>&1 & ) 2>/dev/null
 
 if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
   source "$SCRIPT_DIR/bin/lib/worktree-links.sh" >/dev/null 2>/dev/null || true
@@ -32,6 +34,8 @@ fi
 
 HEALTH_GITHUB="skip"
 HEALTH_GIT="skip"
+HEALTH_MEMORY="skip"
+HEALTH_RETRIEVAL="skip"
 HEALTH_APIKEY="skip"
 HEALTH_GRAPH="skip"
 HEALTH_TELEGRAM="skip"
@@ -46,8 +50,14 @@ source "$SCRIPT_DIR/bin/lib/hash.sh"
 source "$SCRIPT_DIR/bin/lib/time.sh"
 source "$SCRIPT_DIR/bin/lib/identity.sh" >/dev/null 2>/dev/null
 
-# Keep the durable local identity current before gathering context, then project
-# it to Supabase + Neo4j in the background so startup is never network-blocked.
+# Resolve missing stable ids before gathering context. This is synchronous only
+# for a legacy instance; established identities keep the normal fast startup.
+if [ -f "$SCRIPT_DIR/bin/runtime-identity.sh" ]; then
+  bash "$SCRIPT_DIR/bin/runtime-identity.sh" ensure >/dev/null 2>&1 || true
+fi
+
+# Keep the durable local profile current, then refresh shared projections in
+# the background. Observe never waits on this once stable ids are persisted.
 if [ -f "$STATE_FILE" ] && [ -f "$SCRIPT_DIR/bin/person.py" ]; then
   python3 "$SCRIPT_DIR/bin/person.py" sync-local >/dev/null 2>&1 || true
 fi
@@ -68,6 +78,9 @@ if [ "$LOCAL_MODE" != "true" ]; then
 fi
 
 source "$SCRIPT_DIR/bin/lib/git-sync.sh" >/dev/null 2>/dev/null
+source "$SCRIPT_DIR/bin/lib/health-footer.sh"
+source "$SCRIPT_DIR/bin/lib/notices.sh"
+_notice_init
 # Warm-state parity with the Claude SessionStart path: hand context.sh the
 # pre-baked snapshot and route greeting reads through the warm graph cache.
 # The attendant daemon is deliberately NOT started from the Codex/Pi path —
@@ -121,18 +134,24 @@ ADDRESSED_COUNT="$(echo "$ADDRESSED_RICH" | jq 'length' 2>/dev/null || echo "0")
 PENDING_Q_COUNT="$(echo "$PENDING_Q" | jq 'length' 2>/dev/null || echo "0")"
 
 render_pending_line() {
+  # Same notice ledger as the Claude greeting (bin/lib/notices.sh): an open
+  # item that has not changed since a previous session says since when.
   if [ "$PENDING_Q_COUNT" -gt 0 ] 2>/dev/null; then
-    local senders noun
+    local senders noun line
     senders="$(echo "$PENDING_Q" | jq -r '[.[].from] | unique | join(", ")' 2>/dev/null)"
     [ "$PENDING_Q_COUNT" = "1" ] && noun="question" || noun="questions"
     if [ -n "$senders" ]; then
-      printf '  ◐ %s pending %s from %s - bin/agent.sh answer\n' "$PENDING_Q_COUNT" "$noun" "$senders"
+      line="$(printf '  ◐ %s pending %s from %s - bin/agent.sh answer' "$PENDING_Q_COUNT" "$noun" "$senders")"
     else
-      printf '  ◐ %s pending %s - bin/agent.sh answer\n' "$PENDING_Q_COUNT" "$noun"
+      line="$(printf '  ◐ %s pending %s - bin/agent.sh answer' "$PENDING_Q_COUNT" "$noun")"
     fi
+    _notice pending-questions open "questions" "$PENDING_Q_COUNT:$senders" "$line"
   fi
   if [ "$ADDRESSED_COUNT" -gt 0 ] 2>/dev/null; then
-    printf '  ◇ %s handoffs for %s - say "show my handoffs" to review or close\n' "$ADDRESSED_COUNT" "$AUTHOR"
+    local sig
+    sig="$(echo "$ADDRESSED_RICH" | jq -c '[.[] | (.name // .id // .)] | sort' 2>/dev/null || echo "$ADDRESSED_COUNT")"
+    _notice handoffs-for-you open "handoffs" "$sig" \
+      "$(printf '  ◇ %s handoffs for %s - say "show my handoffs" to review or close' "$ADDRESSED_COUNT" "$AUTHOR")"
   fi
 }
 
@@ -150,7 +169,7 @@ EOF
 }
 
 render_card() {
-  local separator identity_left identity_right line_width pad footer_left footer_right board_url has_failure failed_services
+  local separator identity_left identity_right line_width pad board_url
   separator="  ..................................................................."
   identity_left="  ${GITHUB_ORG:-$ORG_NAME}/${REPO_NAME} · ${MODE_BADGE}"
   identity_right="${DISPLAY_NAME} · ${BRANCH:-?}"
@@ -165,30 +184,9 @@ render_card() {
   render_pending_line
   printf '%s\n' "$separator"
 
-  has_failure="false"
-  failed_services=""
-  for pair in "github:$HEALTH_GITHUB" "git:$HEALTH_GIT" "api-key:$HEALTH_APIKEY" "graph:$HEALTH_GRAPH" "telegram:$HEALTH_TELEGRAM"; do
-    svc="${pair%%:*}"
-    svc_status="${pair#*:}"
-    if [ "$svc_status" = "fail" ]; then
-      has_failure="true"
-      failed_services="${failed_services} ${svc} ✗"
-    fi
-  done
-
-  if [ "$has_failure" = "true" ]; then
-    printf '  ⚠%s\n' "$failed_services"
-  else
-    footer_left="  ✓ ready"
-    if [ "${MEMORY_SYNCED:-false}" = "true" ]; then
-      footer_right="◆ memory synced"
-    else
-      footer_right="◆ memory not synced"
-    fi
-    pad=$((line_width - ${#footer_left} - ${#footer_right}))
-    [ "$pad" -lt 1 ] && pad=1
-    printf '%s%*s%s\n' "$footer_left" "$pad" "" "$footer_right"
-  fi
+  # Same renderer as the Claude greeting (bin/lib/health-footer.sh): a failed
+  # dimension names its cause and the action; stale recall is its own line.
+  LINE_WIDTH="$line_width" _render_health_footer || true
 
   # Autosave trail — background saves since the last greeting (same ledger
   # the Claude greeting reads; sweep rescues become visible here).
@@ -227,14 +225,12 @@ render_card() {
   # default board link — same contract as bin/lib/greeting.sh.
   pinned_links=$(jq -c '.pinned_links // []' "$CONFIG" 2>/dev/null || echo "[]")
   if [ "$(printf '%s' "$pinned_links" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
-    printf '%s' "$pinned_links" | jq -r '.[] |
-      if type == "string" then "  ◆ \(.)"
-      elif (.label // "") != "" then "  ◆ \(.label): \(.url)"
-      else "  ◆ \(.url)" end' 2>/dev/null
+    _notice_pinned_links "$pinned_links"
   elif [ -n "$SLUG" ]; then
     board_url="https://egregore.xyz/view/${SLUG}/board"
-    printf '  ◆ %s\n' "$board_url"
+    _notice board-link standing "board" "$board_url" "  ◆ $board_url"
   fi
+  _notice_flush
   printf '\nWhat are you working on?\n'
 }
 
@@ -243,6 +239,11 @@ case "${1:---card}" in
     render_card
     ;;
   --prompt|prompt)
+    native_tokens="$(bash "$SCRIPT_DIR/bin/codex-sync-skills.sh" --list-native | awk 'BEGIN { sep="" } NF { printf "%s$%s", sep, $0; sep=", " }')"
+    native_notice=""
+    if [ -n "$native_tokens" ]; then
+      native_notice=" Maintained native Codex skills: ${native_tokens}."
+    fi
     cat <<EOF
 You are Codex running inside Egregore for ${ORG_NAME} as ${AUTHOR}.
 The launcher already rendered the Egregore startup card using the shared identity, git-sync, graph, and filesystem context pipeline.
@@ -252,7 +253,7 @@ Follow AGENTS.md before code changes.
 After the user names what they are working on, use bin/agent.sh branch --topic "<work topic>" if you are not already in an appropriate task worktree, then continue file work from the printed worktree path.
 Use bin/agent.sh to update shared activity: handoff, ask, and answer write to memory/ and push when possible.
 Use bin/agent.sh handoff for internal team session-handoffs. Portable external capsules are emissaries; use egregore-emissary when installed, not the deprecated egregore-handoff CLI.
-Codex reserves leading slash commands for built-ins, so custom Egregore /activity-style commands will not reach the agent. Egregore native Codex skills are: \$activity, \$handoff, \$wrap, \$announce, \$harvest, \$the-spiral, \$dashboard, \$deep-reflect, \$quest, \$invite, \$ask, \$save, \$view, and \$scroll. Natural-language requests such as "show activity", "make a handoff", or "render this as a scroll" work too. Remaining mirrored workflows are adapter skills for long-tail coverage.
+Codex reserves leading slash commands for built-ins, so custom Egregore /activity-style commands will not reach the agent. Every Egregore workflow is a \$name skill whose adapter names the canonical workflow it runs.${native_notice} Natural-language requests such as "show activity", "make a handoff", or "render this as a scroll" work too.
 \$save is the user-facing abstraction for committing, pushing, opening or reusing pull requests, and syncing memory; do not make users manage the git workflow by hand.
 Egregore Codex workflows are skill invocations, not Claude Code slash commands. Do not rely on Claude Code-only command machinery.
 If onboarding_complete is false, use the memory protocol directly and make sure memory/people/${AUTHOR}.md exists before the first handoff.

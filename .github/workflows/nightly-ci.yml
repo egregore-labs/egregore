@@ -1,0 +1,132 @@
+name: Nightly CI dispatcher
+
+# GitHub schedules run from the default branch. Keep this small control plane
+# on main; the full suite and its source checkout come from current develop.
+# ci.yml must have registered through at least one run before activation.
+# Scheduled runs may reuse a full success for the exact develop SHA for seven
+# days. Expiry refreshes mutable dependencies at least weekly; manual runs force
+# fresh full CI. Missing or ambiguous evidence always requests a fresh run.
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: nightly-ci-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify recent full CI or request a fresh run on develop
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo 'Run the nightly dispatcher from the default branch.' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import time
+          from datetime import datetime, timedelta, timezone
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          prefix = f"repos/{repo}"
+          deadline = time.monotonic() + 45
+
+          def require(condition):
+              if not condition:
+                  raise ValueError("Full CI proof unavailable")
+
+          def get(endpoint):
+              remaining = deadline - time.monotonic()
+              require(remaining > 0)
+              response = subprocess.run(
+                  ["gh", "api", "--method", "GET", endpoint],
+                  capture_output=True, check=True, timeout=min(10, remaining),
+              )
+              require(len(response.stdout) <= 2 * 1024 * 1024)
+              return json.loads(response.stdout)
+
+          def recent_full_success():
+              head = get(f"{prefix}/git/ref/heads/develop")["object"]
+              sha = head["sha"]
+              require(head["type"] == "commit" and re.fullmatch(r"[0-9a-f]{40}", sha))
+              workflow = get(f"{prefix}/actions/workflows/ci.yml")
+              require(type(workflow["id"]) is int and workflow["id"] > 0
+                      and workflow["path"] == ".github/workflows/ci.yml")
+              listing = get(f"{prefix}/actions/workflows/ci.yml/runs"
+                            f"?event=workflow_dispatch&branch=develop&head_sha={sha}&per_page=20")
+              runs = listing["workflow_runs"]
+              require(isinstance(runs, list) and 0 < len(runs) <= 20
+                      and type(listing["total_count"]) is int and listing["total_count"] == len(runs)
+                      and all(type(run["id"]) is int and run["id"] > 0 for run in runs))
+              # Include later reruns of older run IDs when choosing the latest
+              # execution; a newer failure/pending attempt invalidates old green.
+              run = max(runs, key=lambda item: (
+                  datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00")), item["id"]))
+              repo_id = int(os.environ["GITHUB_REPOSITORY_ID"])
+              require(run["repository"]["id"] == repo_id == run["head_repository"]["id"]
+                      and run["workflow_id"] == workflow["id"] and run["path"] == workflow["path"]
+                      and run["head_sha"] == sha and run["head_branch"] == "develop"
+                      and run["event"] == "workflow_dispatch"
+                      and run["status"] == "completed" and run["conclusion"] == "success"
+                      and type(run["run_attempt"]) is int and run["run_attempt"] > 0)
+              age = datetime.now(timezone.utc) - datetime.fromisoformat(run["run_started_at"].replace("Z", "+00:00"))
+              require(timedelta(0) <= age < timedelta(days=7))
+              response = get(f"{prefix}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100")
+              jobs = response["jobs"]
+              require(isinstance(jobs, list) and 0 < len(jobs) <= 100
+                      and type(response["total_count"]) is int and response["total_count"] == len(jobs))
+              names = [job["name"] for job in jobs]
+              require(all(isinstance(name, str) for name in names) and len(set(names)) == len(names)
+                      and names.count(f"Full CI result — {sha}") == 1
+                      and all(job["run_id"] == run["id"] and job["run_attempt"] == run["run_attempt"]
+                              and job["status"] == "completed" and job["conclusion"] == "success" for job in jobs))
+              # The exact-SHA workflow's full-result job attests its complete
+              # owner census. Do not duplicate that census or use PR associations.
+              current = get(f"{prefix}/actions/runs/{run['id']}")
+              require(all(current[key] == run[key] for key in (
+                  "id", "run_attempt", "workflow_id", "path", "head_sha", "head_branch",
+                  "event", "status", "conclusion", "run_started_at", "updated_at"))
+                  and current["repository"]["id"] == repo_id == current["head_repository"]["id"])
+              require(get(f"{prefix}/git/ref/heads/develop")["object"] == head)
+              return sha, run, age
+
+          proof = None
+          if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+              try:
+                  proof = recent_full_success()
+              except (KeyError, ValueError, TypeError, AttributeError, OSError, subprocess.SubprocessError):
+                  print("Recent full CI could not be verified; requesting a fresh run.")
+          if proof:
+              sha, run, age = proof
+              summary = (
+                  "### Prior full develop CI verified\n"
+                  f"Skipped duplicate dispatch for `{sha}`: [run {run['id']}, attempt {run['run_attempt']}]"
+                  f"(https://github.com/{repo}/actions/runs/{run['id']}) passed full CI "
+                  f"{age.total_seconds() / 3600:.1f} hours ago.\n"
+                  "This reuses a prior result; no new tests ran. Proof expires after seven days; manual requests always run full CI.\n"
+              )
+          else:
+              subprocess.run(["gh", "api", "--method", "POST", f"{prefix}/actions/workflows/ci.yml/dispatches",
+                              "-f", "ref=develop", "-f", "inputs[mode]=full"], check=True, timeout=30)
+              summary = (
+                  "### Full develop CI requested\n"
+                  "The CI workflow will resolve develop at dispatch time and run every test owner.\n"
+                  "This receipt confirms dispatch only; inspect the separate CI run for its result.\n"
+              )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          PY

@@ -29,7 +29,13 @@ cat > "$SB/bin/publish-artifact.sh" <<'SHIM'
 printf '%s\n' "$*" >> "$PUBLISH_LOG"
 exit 4
 SHIM
-cat > "$TMP/shim/npx" <<'SHIM'
+# A local renderer: handoff-run.sh only publishes a directed emissary when the
+# checked-out egregore-artifacts CLI renders through bin/node-run.sh (no npx
+# fallback), so the sandbox carries a stub CLI and a node adapter that writes
+# the requested output file.
+mkdir -p "$SB/packages/egregore-artifacts/bin" "$SB/packages/egregore-artifacts/node_modules/react"
+: > "$SB/packages/egregore-artifacts/bin/cli.js"
+cat > "$SB/bin/node-run.sh" <<'SHIM'
 #!/bin/bash
 out=""
 while [ "$#" -gt 0 ]; do
@@ -57,7 +63,6 @@ run_handoff() {
   HOME="$TMP/home" \
     TMPDIR="$TMP/results" \
     PATH="$TMP/shim:$PATH" \
-    EGREGORE_USE_PUBLISHED=1 \
     EMISSARY_PAYLOAD_LOG="$TMP/payload.json" \
     PUBLISH_LOG="$TMP/publish.log" \
     bash "$SB/bin/handoff-run.sh" \

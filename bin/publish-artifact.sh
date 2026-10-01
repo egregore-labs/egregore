@@ -12,6 +12,11 @@ set -euo pipefail
 # --id <slug>: stable artifact ID — re-publishing with the same ID upserts the content
 #              at the same URL (e.g. egregore.xyz/view/{org}/board). Connected mode only;
 #              ignored in OSS mode. Must be 1-50 chars, alphanumeric/hyphen/underscore.
+#              An ID another org already holds is refused (HTTP 409, exit 6).
+#
+# --canonical-id <id>: the memory file's path-derived id (bin/lib/artifact-id.sh)
+#              when --id is the random hosted id publish-references.sh gave it.
+#              Recorded in the registry so the next publish reuses the hosted id.
 #
 # --raw-html:  Skip the egregore-artifacts render step and upload <file> directly.
 #              Use for already-rendered HTML attachments referenced from a handoff.
@@ -20,7 +25,8 @@ set -euo pipefail
 #              Set automatically when publish-references.sh invokes us for a child,
 #              preventing recursion.
 #
-# Outputs artifact URL on success, exits silently on soft failure.
+# Outputs artifact URL on success, exits silently on soft failure (the server
+# could not be reached).
 # Designed for fire-and-forget use: `bash bin/publish-artifact.sh handoff file.md &`
 #
 # Exit codes: 0 ok (or soft failure — no URL on stdout) · 1 usage/validation
@@ -28,6 +34,9 @@ set -euo pipefail
 #             4 nothing uploaded — public relay not enabled and no org API key,
 #               or egregore.json is missing/unreadable (fail closed)
 #             5 renderer/fidelity validation failed (nothing uploaded)
+#             6 the server answered but did not publish, for example 409 when
+#               another org already holds the --id; the reason is on stderr
+#               as "Not published: <reason>"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
@@ -39,8 +48,10 @@ TITLE=""
 AUTHOR=""
 DESCRIPTION=""
 ARTIFACT_ID=""
+CANONICAL_ID=""
 RAW_HTML=0
 SKIP_REFERENCES=0
+ALLOW_ADMIN=0
 PAIR=""
 VERIFY_FIDELITY=0
 FIDELITY_SOURCE=""
@@ -51,10 +62,12 @@ while [[ $# -gt 0 ]]; do
     --author) AUTHOR="$2"; shift 2 ;;
     --description) DESCRIPTION="$2"; shift 2 ;;
     --id) ARTIFACT_ID="$2"; shift 2 ;;
+    --canonical-id) CANONICAL_ID="$2"; shift 2 ;;
     --pair) PAIR="$2"; shift 2 ;;
     --verify-fidelity) VERIFY_FIDELITY=1; shift ;;
     --source) FIDELITY_SOURCE="$2"; shift 2 ;;
     --raw-html) RAW_HTML=1; shift ;;
+    --allow-admin) ALLOW_ADMIN=1; shift ;;
     --no-references) SKIP_REFERENCES=1; shift ;;
     *)
       if [ -z "$TYPE" ]; then
@@ -74,6 +87,10 @@ fi
 # Validate --id format if provided (matches API regex ^[a-zA-Z0-9_-]{1,50}$)
 if [ -n "$ARTIFACT_ID" ] && ! [[ "$ARTIFACT_ID" =~ ^[a-zA-Z0-9_-]{1,50}$ ]]; then
   echo "--id must be 1-50 chars, alphanumeric/hyphen/underscore only" >&2
+  exit 1
+fi
+if [ -n "$CANONICAL_ID" ] && ! [[ "$CANONICAL_ID" =~ ^[mh]-[0-9a-f]{12}$ ]]; then
+  echo "--canonical-id must be a memory file id (m- or h- and 12 hex characters)" >&2
   exit 1
 fi
 
@@ -149,6 +166,50 @@ if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
   fi
 fi
 
+# --- Admin-content gate (the refusal documented in bin/lib/permissions.sh) --
+# `admin: true` sources — including backtick-referenced memory files — are
+# refused before any render or upload. An authorized admin (stable identity,
+# github.username alias against egregore.json admins) may proceed only with
+# the explicit --allow-admin confirmation, which is separate from and never
+# replaces normal publication approval. This protects the Egregore surface;
+# repository members can still read raw Git files.
+# shellcheck source=bin/lib/permissions.sh
+source "$SCRIPT_DIR/bin/lib/permissions.sh"
+ADMIN_MARKED=()
+if _is_admin_only_file "$FILE"; then
+  ADMIN_MARKED+=("$FILE")
+fi
+if [ "$RAW_HTML" -eq 0 ]; then
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    rel="${ref#\`}"
+    rel="${rel%\`}"
+    if [ -f "$SCRIPT_DIR/$rel" ] && _is_admin_only_file "$SCRIPT_DIR/$rel"; then
+      ADMIN_MARKED+=("$rel")
+    fi
+  done < <(grep -Eo '`memory/[^`[:space:]]+\.(md|html)`' "$FILE" 2>/dev/null | sort -u)
+fi
+if [ "${#ADMIN_MARKED[@]}" -gt 0 ]; then
+  IS_ADMIN="false"
+  ADMIN_JSON=$(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m egregore_runtime.harness_cli admin-status 2>/dev/null) || true
+  IS_ADMIN=$(printf '%s' "$ADMIN_JSON" | jq -r '.admin // false' 2>/dev/null || echo "false")
+  if [ "$IS_ADMIN" != "true" ]; then
+    echo "publish refused: admin-marked content cannot be published by a non-admin member:" >&2
+    printf '  %s\n' "${ADMIN_MARKED[@]}" >&2
+    echo "(--allow-admin is available to organization admins only)" >&2
+    exit 5
+  fi
+  if [ "$ALLOW_ADMIN" -ne 1 ]; then
+    echo "publish refused: this content is admin-marked:" >&2
+    printf '  %s\n' "${ADMIN_MARKED[@]}" >&2
+    echo "re-run with --allow-admin to confirm publishing admin-marked content" >&2
+    echo "(this confirmation is separate from normal publication approval)" >&2
+    exit 5
+  fi
+fi
+
 # --- Prepare HTML ---
 TMP_HTML="/tmp/egregore-artifacts/publish-$$.html"
 mkdir -p /tmp/egregore-artifacts
@@ -191,13 +252,20 @@ else
   LOCAL_CLI="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
   RENDER_ERROR="/tmp/egregore-artifacts/render-error-$$.log"
   if [ "${EGREGORE_USE_PUBLISHED:-0}" != "1" ] && [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-    if ! node "$LOCAL_CLI" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
+    if ! bash "$SCRIPT_DIR/bin/node-run.sh" "$LOCAL_CLI" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
       sed -n '1,4p' "$RENDER_ERROR" >&2
       rm -f "$RENDER_ERROR"
       exit 5
     fi
   else
-    if ! npx -y egregore-artifacts@latest "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
+    # Installed published renderer only — never npx/@latest: a hidden
+    # registry fetch of a floating version is not an acceptable renderer.
+    PUBLISHED_CLI="$(command -v egregore-artifacts || true)"
+    if [ -z "$PUBLISHED_CLI" ]; then
+      echo "no artifact renderer available: the checked-out packages/egregore-artifacts is unusable and no installed egregore-artifacts was found" >&2
+      exit 5
+    fi
+    if ! bash "$SCRIPT_DIR/bin/node-run.sh" "$PUBLISHED_CLI" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
       sed -n '1,4p' "$RENDER_ERROR" >&2
       rm -f "$RENDER_ERROR"
       exit 5
@@ -208,6 +276,31 @@ fi
 
 if [ ! -f "$TMP_HTML" ]; then
   exit 0
+fi
+
+# --- Hosted ids for referenced memory files ---
+# The renderer links each backtick `memory/…` mention to the file's canonical
+# id, a hash of its path that anyone who knows the path can compute. Org pages
+# open for anyone with the URL, so the page each link opens is hosted under a
+# random id instead (bin/lib/hosted-ref-id.sh): the one the registry records
+# for the file, or, when this publish goes on to publish its references, a new
+# one that publish-references.sh then uses. Point the links there. A mention
+# with neither (on a page published with --no-references) keeps the canonical
+# link, which the server never serves: nothing is hosted at a computable URL.
+REF_IDS=""
+if [ "$RAW_HTML" -eq 0 ] && [ -n "$API_KEY" ] && [ -n "$ORG_SLUG" ]; then
+  # shellcheck source=bin/lib/artifact-id.sh
+  source "$SCRIPT_DIR/bin/lib/artifact-id.sh"
+  # shellcheck source=bin/lib/hosted-ref-id.sh
+  source "$SCRIPT_DIR/bin/lib/hosted-ref-id.sh"
+  MINT_REF_IDS=1
+  [ "$SKIP_REFERENCES" -eq 0 ] || MINT_REF_IDS=0
+  REF_IDS="$(hosted_ref_ids_for_source "$FILE" "$SCRIPT_DIR/memory/artifacts" "$ORG_SLUG" "$MINT_REF_IDS")"
+  if ! hosted_ref_rewrite_links "$TMP_HTML" "$VIEW_BASE/$ORG_SLUG" "$REF_IDS"; then
+    echo "Not published: could not point reference links at their hosted pages." >&2
+    rm -f "$TMP_HTML" "$TMP_HTML.links"
+    exit 5
+  fi
 fi
 
 # Default title from filename if not provided
@@ -246,7 +339,8 @@ rm -f "$TMP_HTML"
 # Output URL if successful
 URL=""
 if [ -n "$RESPONSE" ]; then
-  URL=$(echo "$RESPONSE" | jq -r '.url // empty' 2>/dev/null)
+  # An answer that is not JSON (a proxy error page) has no URL either.
+  URL=$(echo "$RESPONSE" | jq -r '.url // empty' 2>/dev/null || true)
   if [ -n "$URL" ]; then
     echo "$URL"
     # Register in the local artifact registry (memory/artifacts/) so this hosted
@@ -255,7 +349,14 @@ if [ -n "$RESPONSE" ]; then
     bash "$SCRIPT_DIR/bin/artifact-register.sh" \
       --id "$ARTIFACT_ID" --url "$URL" --type "$TYPE" --title "$TITLE" \
       --author "$AUTHOR" --source "$FILE" --description "$DESCRIPTION" \
+      --canonical-id "$CANONICAL_ID" \
       >/dev/null 2>&1 || true
+  else
+    # The server refused (409 for an id another org holds, 400, 413, 503…).
+    # A distinct exit code lets callers that report stderr on failure show why.
+    DETAIL=$(echo "$RESPONSE" | jq -r 'if (.detail | type) == "string" then .detail else empty end' 2>/dev/null || true)
+    echo "Not published: ${DETAIL:-the server answered without a URL.}" >&2
+    exit 6
   fi
 fi
 
@@ -266,6 +367,6 @@ fi
 #   - --raw-html (HTML attachments don't embed markdown refs we'd parse),
 #   - --no-references (caller explicitly opts out / recursion guard).
 if [ -n "$URL" ] && [ "$RAW_HTML" -eq 0 ] && [ "$SKIP_REFERENCES" -eq 0 ]; then
-  bash "$SCRIPT_DIR/bin/publish-references.sh" "$FILE" >/dev/null 2>&1 &
+  EGREGORE_REF_IDS="$REF_IDS" bash "$SCRIPT_DIR/bin/publish-references.sh" "$FILE" >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
