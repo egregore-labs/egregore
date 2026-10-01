@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "unknown": "full",
+  "domains": {
+    "framework-distribution": {
+      "patterns": [
+        "bin/capability-distribution.mjs",
+        "skill-references.json",
+        "docs/architecture/runtime-skill-migration.json",
+        "docs/architecture/2026-08-27-runtime-skill-migration.md",
+        "docs/specs/skill-v1.md",
+        ".claude/skills/qa/SKILL.md",
+        ".codex/skills/qa/SKILL.md",
+        "packages/create-egregore/test/capability-distribution.test.js",
+        "tests/test_capability_owned_skills.py",
+        "tests/test-runtime-skill-migration.sh",
+        "tests/test-qa-inventory.sh",
+        "bin/tests/test-sync-public-delivery.sh"
+      ],
+      "groups": [
+        "runtime",
+        "api_core"
+      ],
+      "shell_suites": [
+        "tests/test-runtime-skill-migration.sh",
+        "tests/test-qa-inventory.sh",
+        "bin/tests/test-sync-public-delivery.sh"
+      ],
+      "python_suites": [],
+      "rationale": "Runtime owns all four bundle freshness checks, skill contracts, package tests and Connect-pack freshness. API core owns the actual distribution-engine test test_capability_owned_skills.py. These three shell suites consume the real engine or reviewed QA skill. Other native skills, their executable resources and shared bin helpers remain unmapped."
+    },
+    "planning-prose": {
+      "patterns": [
+        "docs/plans/**/*.md",
+        "docs/research/**/*.md",
+        "docs/ci-cost-controls.md"
+      ],
+      "groups": [],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Planning/research prose and these three reviewed explanatory documents have no executable or test consumers. Other specs and goal directories contain contracts and fixtures, so are not broadly exempt. Unknown or deleted companion inputs still request full coverage."
+    },
+    "mcp-smoke-contracts": {
+      "patterns": [
+        "bin/tests/test-mcp-register-roundtrip.sh",
+        "bin/tests/test-mcp-register-smoke.sh"
+      ],
+      "groups": [
+        "shellcheck"
+      ],
+      "shell_suites": [
+        "bin/tests/test-mcp-register-smoke.sh"
+      ],
+      "python_suites": [],
+      "rationale": "The fake-curl shell contract executes the real registration smoke, including opt-in, request bounds, endpoint failures and private-output handling. No live registration is required. API implementation changes remain independently unmapped."
+    },
+    "mcp-api-tests": {
+      "patterns": [
+        "tests/test_mcp_register_api.py",
+        "tests/test_mcp_users.py"
+      ],
+      "groups": [
+        "api_core"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "API core collects the marked offline endpoint tests and explicitly runs the unmarked pure input-validation tests. These test files provide no fixtures to other owners. Shared API sources and dependencies remain unmapped."
+    },
+    "issue-assistance": {
+      "patterns": [
+        "egregore_runtime/issue_duplicates.py",
+        "egregore_runtime/issue_readiness.py",
+        "egregore_runtime/issue_triage.py",
+        "egregore_runtime/issue_triage_service.py",
+        "tests/test_issue_duplicates.py",
+        "tests/test_issue_duplicate_lookup.py",
+        "tests/test_issue_readiness.py",
+        "tests/test_issue_triage.py",
+        "tests/test_issue_triage_service.py"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Runtime owns ranking, GitHub lookup, readiness, advisory triage and the CLI paths calling these leaf modules, plus all generated bundles. Shared issue CLI, reporting, marker and GitHub adapter sources remain unmapped because they have broader consumers."
+    },
+    "runtime-contract-tests": {
+      "patterns": [
+        "tests/test_runtime_source_open.py",
+        "tests/test_runtime_artifacts.py",
+        "tests/test_runtime_threads_scrolls.py",
+        "tests/test_runtime_batch_recovery.py",
+        "tests/test_runtime_research_ingest.py",
+        "tests/test_runtime_contracts.py",
+        "tests/test_harness_observe.py",
+        "tests/test_runtime_continuity.py",
+        "tests/test_cache_readiness_cli.py",
+        "tests/test_save_preflight.py",
+        "tests/test_frozen_export.py",
+        "tests/test_eg_eval_m31b_isolation.py",
+        "tests/test_eg_eval_replay.py",
+        "tests/test_eg_eval_m31a_execv2.py",
+        "tests/test_eg_eval_m3_dryrun.py"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "These former satellite tests and their cross-test fixture consumers execute together in Runtime contracts. This maps test inputs only. Runtime-observe and QMD test fixtures also have consumers outside this owner and remain unmapped, as do shared sources and fixtures."
+    },
+    "runtime-bundles": {
+      "patterns": [
+        "packages/create-egregore/runtime/**"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Generated copies require Runtime's byte/mode/symlink freshness and packaged-runtime checks. They never make an unknown canonical source change eligible; all input paths must be mapped independently. Deleted copies fail full."
+    },
+    "issue-triage-eval": {
+      "patterns": [
+        "evals/issue-triage/**",
+        "tests/test_issue_triage_eval.py"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Runtime owns the offline fixture, scorer, failure and opt-in provider-boundary tests in tests/test_issue_triage_eval.py. Selecting this domain does not run live evaluations."
+    },
+    "issue-feed": {
+      "patterns": [
+        "api/services/issue_feed.py",
+        "api/services/pr_feed.py",
+        "api/issue_feed_operator.py",
+        "tests/test_issue_feed.py",
+        "tests/test_pr_feed.py",
+        "tests/test_issue_feed_api_backport.py",
+        "tests/test_issue_feed_sql.py"
+      ],
+      "groups": [
+        "api_core",
+        "api_image",
+        "api_postgres"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "API core owns the three marked feed suites, including webhook behavior, isolated feed imports, operator recovery and API/Runtime marker parity. API image verifies the deployed source imports; PostgreSQL explicitly runs test_issue_feed_sql.py against its disposable service. These exact feed inputs have no shell or generated Runtime consumers. Shared API entry points, marker/recovery helpers, dependency manifests and migrations remain unmapped."
+    },
+    "skill-parity-eval": {
+      "patterns": [
+        "evals/skill-parity/**",
+        "bin/tests/test-skill-parity.sh"
+      ],
+      "groups": [
+        "shellcheck"
+      ],
+      "shell_suites": [
+        "bin/tests/test-skill-parity.sh"
+      ],
+      "python_suites": [],
+      "rationale": "The existing deterministic shell suite owns the evaluation rig and fixture isolation; it skips its real-startup integration unless explicitly enabled. Historical outputs are conservatively included because the fixture copies the directory except runs and __pycache__."
+    }
+  },
+  "historical_replays": [
+    {
+      "pr": 1799,
+      "paths": [
+        "bin/tests/test-mcp-register-roundtrip.sh",
+        "bin/tests/test-mcp-register-smoke.sh",
+        "docs/ci-cost-controls.md",
+        "tests/test_mcp_register_api.py",
+        "tests/test_mcp_users.py"
+      ],
+      "domains": [
+        "mcp-api-tests",
+        "mcp-smoke-contracts",
+        "planning-prose"
+      ]
+    },
+    {
+      "pr": 1757,
+      "paths": [
+        "docs/architecture/runtime-skill-migration.json"
+      ],
+      "domains": [
+        "framework-distribution"
+      ]
+    },
+    {
+      "pr": 1759,
+      "paths": [
+        ".claude/skills/qa/SKILL.md",
+        "skill-references.json"
+      ],
+      "domains": [
+        "framework-distribution"
+      ]
+    },
+    {
+      "pr": 1781,
+      "paths": [
+        "bin/capability-distribution.mjs",
+        "docs/architecture/2026-08-27-runtime-skill-migration.md",
+        "docs/architecture/runtime-skill-migration.json",
+        "packages/create-egregore/test/capability-distribution.test.js"
+      ],
+      "domains": [
+        "framework-distribution"
+      ]
+    },
+    {
+      "pr": 1777,
+      "paths": [
+        ".claude/skills/qa/SKILL.md",
+        "bin/capability-distribution.mjs",
+        "docs/architecture/2026-08-27-runtime-skill-migration.md",
+        "docs/architecture/runtime-skill-migration.json",
+        "docs/specs/skill-v1.md",
+        "packages/create-egregore/test/capability-distribution.test.js"
+      ],
+      "domains": [
+        "framework-distribution"
+      ]
+    }
+  ]
+}

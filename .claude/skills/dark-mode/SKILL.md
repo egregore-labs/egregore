@@ -1,6 +1,6 @@
 ---
 name: dark-mode
-description: "Use when generating or modifying any visual output that renders in a browser or artifact viewer: HTML pages, CSS, React SSR components, Egregore artifacts, markdown renderers, web components, design-system tokens, Tailwind themes, or standalone demos. Triggers on requests involving dark mode, theme toggles, color systems, card surfaces, browser rendering, or visual polish. The load-bearing lesson: if React SSR emits an inline hex color through `style={}`, CSS dark-mode overrides cannot reach it, so every theme-sensitive color must be emitted as `var(--token)` rather than a resolved hex. Do not use for TUI output, plain markdown files, or non-visual code."
+description: "Use when authoring or modifying browser-rendered visual output: HTML, CSS, React SSR, artifact templates, markdown renderers, design tokens, themes, or composed pages. Do not invoke for an ordinary /view render—the checked-in renderer already owns its theme contract. The load-bearing rule is that theme-sensitive colors must be emitted as `var(--token)`, never resolved inline hex."
 ---
 
 # Dark Mode
@@ -44,6 +44,8 @@ Everything else is secondary.
 
 ## Not This
 
+- An ordinary deterministic `/view` render; the checked-in renderer already
+  owns and tests its theme contract
 - TUI terminal output; use `/tui-design`
 - Plain markdown files that do not render styled HTML
 - Backend or CLI code with no visual surface

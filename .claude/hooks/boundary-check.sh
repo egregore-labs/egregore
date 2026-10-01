@@ -81,6 +81,19 @@ if [ "$LOCKED" != "true" ] && [ "$PERM_MODE" = "bypassPermissions" ]; then
   RELAXED="true"
 fi
 
+# --- Helper: collapse /./ and component/../ sequences lexically ---
+# Used when the target does not exist on disk, so ../ escapes still normalize.
+normalize_lexical() {
+  local p="$1" prev=""
+  while [ "$p" != "$prev" ]; do
+    prev="$p"
+    p=$(printf '%s' "$p" | sed -E 's|/\./|/|g; s|/[^/]+/\.\./|/|; s|/[^/]+/\.\.$||' 2>/dev/null) || p="$prev"
+  done
+  while [[ "$p" == /../* ]]; do p="/${p#/../}"; done
+  [ -z "$p" ] && p="/"
+  printf '%s\n' "$p"
+}
+
 # --- Helper: resolve path ---
 resolve_path() {
   local path="$1"
@@ -89,14 +102,33 @@ resolve_path() {
   if [[ "$path" != /* ]]; then
     path="$PROJECT_DIR/$path"
   fi
-  realpath "$path" 2>/dev/null || echo "$path"
+  local resolved
+  resolved=$(realpath "$path" 2>/dev/null) && { echo "$resolved"; return; }
+  # Target may not exist yet (e.g. a write destination): resolve the nearest
+  # existing ancestor, then fall back to pure lexical normalization.
+  local dir base
+  dir=$(dirname "$path")
+  base=$(basename "$path")
+  resolved=$(realpath "$dir" 2>/dev/null) && { echo "$resolved/$base"; return; }
+  normalize_lexical "$path"
 }
 
 # --- Helper: HARD tier — another instance's path? ---
+# Self-scope carve-out, per entry: an ENCLOSING denied checkout (different or
+# unproven organization identity) never covers the project's own files — the
+# enclosing tree stays denied while the project stays usable. A denied entry
+# nested INSIDE the project is still enforced: residence under the project
+# proves nothing about identity.
 is_denied() {
-  local resolved="$1" denied
+  local resolved="$1" denied in_project=1
+  if [ -n "${B_PROJECT_DIR:-}" ] && [[ "$resolved" == "$B_PROJECT_DIR" || "$resolved" == "$B_PROJECT_DIR/"* ]]; then
+    in_project=0
+  fi
   for denied in $DENIED_PATHS; do
     if [[ "$resolved" == "$denied" || "$resolved" == "$denied/"* ]]; then
+      if [ "$in_project" = "0" ] && [[ "$B_PROJECT_DIR" == "$denied" || "$B_PROJECT_DIR" == "$denied/"* ]]; then
+        continue
+      fi
       return 0
     fi
   done
@@ -243,11 +275,35 @@ case "$TOOL_NAME" in
       exit 0
     fi
 
-    # HARD tier: denied instance paths anywhere in the command
+    # HARD tier — never relaxed by posture or bypassPermissions.
+    # Pass 1: denied instance paths as literals, matched on a path boundary so
+    # a denied path never matches a longer sibling name sharing its prefix.
     for denied in ${DENIED_PATHS:-}; do
-      if echo "$COMMAND" | grep -qF "$denied" 2>/dev/null; then
-        block_hard "$denied"
+      # When the project itself sits inside this denied checkout, a literal
+      # match cannot tell the enclosing tree's files from the project's own
+      # (the project path continues the denied prefix). Pass 2 resolves every
+      # path token and enforces these entries with the self-scope carve-out.
+      if [ -n "${B_PROJECT_DIR:-}" ] && [[ "$B_PROJECT_DIR" == "$denied" || "$B_PROJECT_DIR" == "$denied/"* ]]; then
+        continue
       fi
+      if echo "$COMMAND" | grep -qF "$denied" 2>/dev/null; then
+        DENIED_ESC=$(printf '%s' "$denied" | sed -E 's|[^A-Za-z0-9/_-]|\\&|g' 2>/dev/null) || DENIED_ESC=""
+        if [ -n "$DENIED_ESC" ] && echo "$COMMAND" | grep -qE "${DENIED_ESC}(\$|[^A-Za-z0-9._-])" 2>/dev/null; then
+          block_hard "$denied"
+        fi
+      fi
+    done
+
+    # Pass 2: resolve path-like tokens — absolute, ~, $HOME, ../ traversal,
+    # and plain relative tokens containing a slash (a denied entry can sit
+    # inside the project, so "relative stays inside the project" is not a
+    # safety argument) — and deny any that resolve into a foreign instance.
+    # Relative tokens resolve against the project dir (the tool's working
+    # directory), best effort.
+    HARD_CANDIDATES=$(echo "$COMMAND" | grep -oE '(~|\$HOME)?/[A-Za-z0-9._/-]+|[A-Za-z0-9._/-]*\.\./[A-Za-z0-9._/-]+|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+' 2>/dev/null | sort -u | head -40) || true
+    for c in $HARD_CANDIDATES; do
+      RESOLVED=$(resolve_path "$c")
+      is_denied "$RESOLVED" && block_hard "$RESOLVED"
     done
 
     # SOFT tier: best-effort. Only user-home-area path literals are checked —

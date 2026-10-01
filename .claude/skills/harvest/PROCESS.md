@@ -70,7 +70,7 @@ regardless of harvest shape (single / multi, present / async, preference
 1. **No hidden role stereotyping.** Every implicit role inference is
    inspectable in the manifest *and* surfaced into the interaction when
    confidence is below threshold.
-2. **No survey collapse.** AskUserQuestion (AUQ) options never exhaust
+2. **No survey collapse.** Structured-question options never exhaust
    the answer space. Every question carries a freeform escape hatch.
    Options are drawn from context, not prefab taxonomies.
 3. **No unmarked cascade contamination.** When prior respondents'
@@ -119,13 +119,13 @@ come back so far. Never from a predetermined list.
 Each question carries:
 - An articulable **`questionIntent`** the model can state to itself.
 - An answer shape selected from `QUESTION_PALETTE.md`.
-- A short **header** (≤12 chars) when AskUserQuestion (AUQ) is the
-  chosen interaction.
+- A short **header** (≤12 chars) when the chosen structured-question
+  interaction supports headers.
 - Options drawn from the actual context (seed quotes, prior answers,
   role-likely lenses) when the chosen shape uses options — never prefab
   taxonomies.
-- A **freeform escape hatch** for every closed shape (AUQ provides
-  "Other" by default).
+- A **freeform escape hatch** for every closed shape (use the harness's
+  built-in "Other" option when available and permitted in this session; otherwise offer it explicitly).
 
 Choose the move and answer shape from `QUESTION_PALETTE.md`. Its named
 conversational moves — ladder, critical incident, triad, best-worst,
@@ -134,7 +134,8 @@ choice — run inside this generate → evaluate rhythm; the palette owns
 their definitions and bans.
 
 **Round shape (affordance, not script)**:
-- One interaction per round. Use AUQ for structured choices and plain
+- One interaction per round. Ask with a structured question when available and permitted
+  in this session; otherwise ask in plain text. Use plain
   dialogue for conversational moves that need no widget.
 - 1–3 questions per round (model decides; usually 2).
 - Round count is not fixed. End when returns diminish or the respondent

@@ -5,10 +5,12 @@ name: PR Format
 # agent harness. Fails the check and posts a fix-it comment; exempts
 # drafts, release PRs, and bots. Commit subjects are reported against
 # .claude/context/commit-format.md as advisory only — never gated.
+# Prose reporting shares this runner, with advisory failures confined to
+# its steps. It uses the PR's checker and rules, and stays quiet when clean.
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, edited, reopened, synchronize, ready_for_review]
 
 permissions:
   contents: read
@@ -21,10 +23,11 @@ concurrency:
 jobs:
   pr-format:
     name: pr-format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: ${{ !github.event.pull_request.draft }}
     steps:
-      - uses: actions/github-script@v7
+      - name: Check PR format
+        uses: actions/github-script@v7
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -147,3 +150,102 @@ jobs:
 
             await upsert(fixit);
             core.setFailed(problems.join(' | '));
+
+      - name: Checkout prose checker
+        id: prose_checkout
+        if: ${{ !cancelled() && github.event.pull_request.user.type != 'Bot' && !startsWith(github.event.pull_request.title, 'release(') && !startsWith(github.event.pull_request.title, 'release:') }}
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          # A PR adding a rule is checked by that rule. The format gate above
+          # runs before checkout and never executes code from the PR tree.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node for prose checker
+        id: prose_node
+        if: ${{ !cancelled() && steps.prose_checkout.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Collect prose inputs
+        id: prose_inputs
+        if: ${{ !cancelled() && steps.prose_node.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const pr = context.payload.pull_request;
+            const inputs = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'prose-inputs-'));
+            fs.writeFileSync(path.join(inputs, 'pr-body.md'), (pr.body || '') + '\n');
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+            });
+            let n = 0;
+            for (const c of commits) {
+              if ((c.parents || []).length > 1) continue;
+              const msg = c.commit.message || '';
+              if (/^(Merge |Revert |fixup!|squash!)/.test(msg)) continue;
+              fs.writeFileSync(path.join(inputs, `commit-${c.sha.slice(0, 7)}.md`), msg + '\n');
+              n += 1;
+            }
+            core.info(`${n} commit message(s) collected`);
+            core.setOutput('directory', inputs);
+
+      - name: Render advisory prose
+        id: prose_report
+        if: ${{ !cancelled() && steps.prose_inputs.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          PROSE_INPUTS: ${{ steps.prose_inputs.outputs.directory }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Keep PR-head checker execution outside github-script: its action
+        # input environment contains the GitHub token used to post comments.
+        run: |
+          shopt -s nullglob
+          node bin/prose-check.mjs validate >/dev/null
+          node bin/prose-check.mjs report --surface git \
+            --meta "pr=$PR_NUMBER" --meta "sha=$HEAD_SHA" \
+            "$PROSE_INPUTS/pr-body.md" "$PROSE_INPUTS"/commit-*.md > "$PROSE_INPUTS/report.md"
+          cat "$PROSE_INPUTS/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish advisory prose
+        if: ${{ !cancelled() && steps.prose_report.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PROSE_INPUTS: ${{ steps.prose_inputs.outputs.directory }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const body = fs.readFileSync(path.join(process.env.PROSE_INPUTS, 'report.md'), 'utf8');
+            const marker = '<!-- prose-check -->';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const existing = comments.find(c => (c.body || '').includes(marker));
+            const dataMatch = body.match(/<!-- prose-check-data (\{.*\}) -->/);
+            const total = dataMatch ? (JSON.parse(dataMatch[1]).total || 0) : 0;
+            if (total > 0) {
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+              }
+              core.info(`prose check: ${total} finding(s), comment upserted (advisory).`);
+            } else if (existing) {
+              const resolved = body.replace('✅ prose check: no findings', '✅ prose check: resolved, no findings');
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: resolved });
+              core.info('prose check: clean, earlier comment marked resolved.');
+            } else {
+              core.info('prose check: clean, nothing to say.');
+            }

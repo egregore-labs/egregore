@@ -12,34 +12,22 @@ Not this: sharing your commit with others → `/push` · opening a pull request 
 
 Message (optional): $ARGUMENTS
 
-## Loom routing
+## Execution boundary
 
-**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
-
-1. Resolve: `ROUTE=$(bash bin/loom.sh route commit)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
-2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer commit --override` after the output and set `"override":true` in telemetry.
-3. Otherwise delegate: spawn the Agent tool with `subagent_type:
-   "loom-executor"`, `model` = the route's `tier`, prompt =
-   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
-   `LOOM-EXECUTOR: Execute .claude/skills/commit/SKILL.md`, plus the user's
-   arguments and any context the spec needs from the session. Print the
-   executor's final output **verbatim**, then print the output of
-   `bash bin/loom.sh footer commit`.
-4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
-   triage the reason: needs-user-interaction or a main-loop-only tool → take
-   over and finish this skill inline (no escalation); genuine uncertainty or
-   failure → reassign `ROUTE=$(bash bin/loom.sh escalate commit "<reason>")`,
-   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
-   carrying the returned decision ID
-   (sticky for this session).
-5. Telemetry (fire-and-forget):
-   `bash bin/telemetry.sh emit "command" '{"command":"commit","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+This is a deterministic Git operation. Run it inline through the shared Git
+mechanics; do not spend a Loom/model-routing call or delegate it to another
+agent. Judgment is limited to selecting relevant files and composing the
+message.
 
 ## Before anything else
 
-Resolve `BASE_BRANCH` through `bin/lib/config.sh` → `_get_base_branch` (pass the managed repo name when applicable). Check `git branch --show-current`. If on a protected branch (`$BASE_BRANCH`, `develop`, `main`, or `master`):
+Resolve the base with `bash bin/base-branch.sh` (add the managed repo name when
+applicable); it prints `{base}` or fails, in which case stop.
+Check `git branch --show-current`. If on a protected branch (`{base}`, `develop`,
+`main`, or `master`):
   → Use the resolved base branch (default `"develop"`)
-  → Create a working branch: `git fetch origin $BASE_BRANCH --quiet && git checkout --no-track -b dev/{author}/{topic-slug} origin/$BASE_BRANCH`
+  → Create a working branch: `git fetch origin "{base}" --quiet`, then
+    `git checkout --no-track -b dev/{author}/{topic-slug} "origin/{base}"`
   → Tell the user: "Creating a working branch for this..." — never mention git commands to the user.
   → Then proceed with the commit.
 
@@ -65,14 +53,14 @@ Full spec: `.claude/context/commit-format.md`. Wording:
   paragraph:
 
   ```bash
-  SID=$(cat .egregore-session-id 2>/dev/null)
-  git commit -m "feat(mcp): add API key authentication" -m "Egregore-Session: $SID
+  cat .egregore-session-id
+  git commit -m "feat(mcp): add API key authentication" -m "Egregore-Session: {session-id}
   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   ```
 
-  Omit the `Egregore-Session` line when the file is absent; use your
-  harness's own identity line. Humans committing by hand skip
-  trailers.
+  Read the id with the first command (a plain command) and paste it as
+  `{session-id}`. When the file is absent, omit the `Egregore-Session` line;
+  use your harness's own identity line. Humans committing by hand skip trailers.
 - One logical change per commit — split when the parts are
   independently revertable.
 

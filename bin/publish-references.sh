@@ -6,11 +6,16 @@ set -uo pipefail
 # Usage: publish-references.sh <source-markdown-file>
 #
 # Reads the source markdown, extracts backtick-wrapped references to
-# `memory/**/*.{md,html}` paths, and publishes each one in parallel with a
-# deterministic artifact id (see bin/lib/artifact-id.sh). The deterministic id
-# means the rendered parent view can construct a predictable link to each
-# referenced file *before* this script finishes — so even a slight delay
-# produces clickable links that resolve once the referenced publish completes.
+# `memory/**/*.{md,html}` paths, and publishes each one in parallel under a
+# random hosted id (see bin/lib/hosted-ref-id.sh), never the path-derived
+# canonical id: org pages open for anyone with the URL, and anyone who knows
+# a path can compute its canonical id. A file keeps the hosted id its
+# registry record carries, so republishing keeps links stable.
+#
+# publish-artifact.sh settles the ids before it renders the parent, so the
+# parent's links already point at them, and hands them over in
+# EGREGORE_REF_IDS ("<memory path> <hosted id>" lines). Without that list,
+# ids are looked up or minted here.
 #
 # Connected mode only. Skips silently if EGREGORE_API_KEY is missing, because
 # the OSS relay ignores artifact ids and would assign random slugs.
@@ -34,8 +39,13 @@ fi
 # --- Helpers ---
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/bin/lib/artifact-id.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/bin/lib/hosted-ref-id.sh"
 
 PARALLELISM="${EGREGORE_REF_PUBLISH_PARALLELISM:-8}"
+ORG_SLUG="$(jq -r '.slug // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null || true)"
+REGISTRY="$SCRIPT_DIR/memory/artifacts"
+REF_IDS="${EGREGORE_REF_IDS:-}"
 
 GIT_ROOT="$(git -C "$(dirname "$SOURCE_FILE")" rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR")"
 
@@ -93,18 +103,27 @@ publish_one() {
     return 0
   fi
 
+  local canonical
+  canonical="$(artifact_id_from_path "$ref")" || return 0
+  [ -n "$canonical" ] || return 0
+
+  # The id the parent page links to, else the recorded one, else a new one.
   local id
-  id="$(artifact_id_from_path "$ref")" || return 0
+  id="$(hosted_ref_id_from_list "$REF_IDS" "$ref")"
+  if ! hosted_ref_id_valid "$id" "$canonical"; then
+    id="$(hosted_ref_id_lookup "$REGISTRY" "$ORG_SLUG" "$canonical")"
+    [ -n "$id" ] || id="$(hosted_ref_id_mint "$canonical")" || return 0
+  fi
   [ -n "$id" ] || return 0
 
   case "$ref" in
     *.md)
       local type
       type="$(infer_type "$ref")"
-      bash "$SCRIPT_DIR/bin/publish-artifact.sh" "$type" "$resolved" --id "$id" --no-references >/dev/null 2>&1 || true
+      bash "$SCRIPT_DIR/bin/publish-artifact.sh" "$type" "$resolved" --id "$id" --canonical-id "$canonical" --no-references >/dev/null 2>&1 || true
       ;;
     *.html)
-      bash "$SCRIPT_DIR/bin/publish-artifact.sh" document "$resolved" --id "$id" --raw-html --no-references >/dev/null 2>&1 || true
+      bash "$SCRIPT_DIR/bin/publish-artifact.sh" document "$resolved" --id "$id" --canonical-id "$canonical" --raw-html --no-references >/dev/null 2>&1 || true
       ;;
   esac
 }

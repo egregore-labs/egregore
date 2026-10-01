@@ -1,387 +1,142 @@
 ---
 name: invite
-description: "Invite someone to this Egregore — GitHub org invitation plus setup link. Say '/invite <username>' or 'invite <username> to the org'. Not removing a member (/delete-user)."
+description: "Invite someone to this Egregore — repository access plus a setup link when Connected. Use for /invite <username>, 'invite <username>', or 'add <username> to the org'; not member removal."
 ---
 
-Invite someone to this Egregore. Handles GitHub org invitation + Egregore setup link.
+# Egregore invite
+
+Invite one future organization member through the Egregore Runtime. The
+GitHub username is a linked-provider alias used by today's access transport;
+it is not an Egregore account, actor, or membership identifier.
 
 ## When to invoke
 
-User says: "/invite <username>", "invite <username>", "add <username> to the org", or any request to invite a new person to this Egregore.
-Not this: removing a member → `/delete-user`.
+Invite someone to this Egregore — repository access plus a setup link when Connected. Use for /invite <username>, 'invite <username>', or 'add <username> to the org'; not member removal.
 
-Arguments: $ARGUMENTS (Required: GitHub username of the person to invite)
+## Input
 
-## Execution rules
+Require one GitHub username. If it is missing, show and stop:
 
-**Neo4j-first (connected mode only).** In connected mode, all queries via `bash bin/graph.sh query "..."`. No MCP. No direct curl to Neo4j. In local mode, Step 1b routes to Step 2L (GitHub API only) — Steps 2–4b (graph + notify) are skipped entirely. Do NOT show any graph-related messaging in local mode (no "Person node created", no "recorded in graph", no Neo4j references).
-**Notifications use the plan → approve → dispatch flow in
-`.claude/context/notification-consent.md` (connected mode only).** No direct
-curl to Telegram. Inviting the person is not notification consent.
-**CRITICAL: Suppress raw output.** Never show raw JSON to the user. All `bin/graph.sh` and `bin/notify.sh` calls MUST capture output in a variable and only show formatted status lines.
-
-**CRITICAL: Never expose credentials in tool output.**
-- Never read tokens in a separate bash call — always inline.
-- Never pass tokens as visible arguments — read from `.env` inside the script.
-- All credential handling happens inside a single bash call that only outputs the formatted result.
-
-## Step 1: Validate
-
-If `$ARGUMENTS` is empty, show usage and stop:
-```
+```text
 Usage: /invite <github-username>
 
 Example: /invite newuser
 ```
 
-## Step 1b: Local mode detection
+## Execute
 
-Check `api_url` from `egregore.json`:
-```bash
-API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
-```
-
-**If `api_url` is empty → use LOCAL INVITE FLOW (Step 2L below). Skip Steps 2-4b entirely.**
-**If `api_url` is set → use CONNECTED INVITE FLOW (Step 2 below).**
-
----
-
-## Step 2L: Local mode invite (GitHub API only)
-
-Run ONE bash call with description "Inviting {username} via GitHub":
+Use the supplied GitHub username as `{provider_username}`; quote placeholders
+in single quotes when you use them in a command, and write any single quote
+inside a value as `'\''`. Run exactly one invitation transaction and save its
+JSON receipt:
 
 ```bash
-bash -c '
-USERNAME="$1"
-GH_TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
-GITHUB_ORG=$(jq -r ".github_org" egregore.json)
-REPO_NAME=$(jq -r ".repo_name // empty" egregore.json)
-MEMORY_REPO=$(jq -r ".memory_repo // empty" egregore.json)
-MEMORY_NAME=$(basename "$MEMORY_REPO" .git)
-REPOS=$(jq -r ".repos[]? // empty" egregore.json)
-
-if [ -z "$GH_TOKEN" ]; then
-  echo "ERROR: No GitHub token. Run: bash bin/github-auth.sh"
-  exit 1
-fi
-if [ -z "$REPO_NAME" ]; then
-  echo "ERROR: repo_name not set in egregore.json"
-  exit 1
-fi
-
-# Add collaborator to core repo
-CORE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-  -H "Authorization: Bearer $GH_TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$GITHUB_ORG/$REPO_NAME/collaborators/$USERNAME" \
-  -d "{\"permission\":\"push\"}")
-
-# Add collaborator to memory repo
-MEM=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
-  -H "Authorization: Bearer $GH_TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$GITHUB_ORG/$MEMORY_NAME/collaborators/$USERNAME" \
-  -d "{\"permission\":\"push\"}")
-
-# Add to managed repos
-for REPO in $REPOS; do
-  curl -s -o /dev/null -X PUT \
-    -H "Authorization: Bearer $GH_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/$GITHUB_ORG/$REPO/collaborators/$USERNAME" \
-    -d "{\"permission\":\"push\"}" 2>/dev/null || true
-done
-
-echo "{\"core\":\"$CORE\",\"memory\":\"$MEM\",\"username\":\"$USERNAME\",\"org\":\"$GITHUB_ORG\",\"repo\":\"$REPO_NAME\"}"
-' -- "$ARGUMENTS"
+mkdir -p tmp
 ```
 
-**Create person file in memory:**
 ```bash
-INVITE_USER="$ARGUMENTS"
-INVITER=$(jq -r '.display_name // .github_username' .egregore-state.json 2>/dev/null)
-TODAY=$(date -u +%Y-%m-%d)
-cat > "memory/people/${INVITE_USER}.md" << EOF
----
-name: ${INVITE_USER}
-person_id: github-login:$(printf '%s' "$INVITE_USER" | tr '[:upper:]' '[:lower:]')
-github: ${INVITE_USER}
-invited_by: ${INVITER}
-joined: ${TODAY}
----
-EOF
-cd memory && git add -A && git commit -m "Invite ${INVITE_USER}" && git push 2>/dev/null && cd -
+bash bin/invite.sh '{provider_username}' > tmp/invite-receipt.json
 ```
 
-**Display result:**
+Read the fields needed to render the receipt:
 
-If core HTTP status is 201 or 204:
+```bash
+jq -r '{status, provider_username, org_name, provider_status, memory_status, invite_url, join_command, group_link, manual_access_url, warnings} | to_entries[] | "\(.key): \(.value)"' tmp/invite-receipt.json
 ```
-Invited {username} to {org_name}.
 
-  Core repo access:    ✓ added
-  Memory repo access:  ✓ added
-  Person file:         ✓ created
+Use each printed field as its correspondingly named placeholder below.
+
+The adapter resolves `ActorContext`, keeps `AccountIdentity`, `ActorIdentity`,
+and `OrgMembership` separate, authorizes `ADMINISTER` before external effects,
+and selects the current GitHub or Connected control-plane transport. It owns
+credentials, repository grants, the provisional canonical invitation record,
+path-scoped Git provenance, and sanitized error mapping. Do not call GitHub,
+the Egregore API, graph, storage providers, or Git directly.
+
+Connected service permission denials are authoritative. Explain that an
+organization admin must invite the person and show `manual_access_url` when
+the receipt contains one. Never infer permission from a GitHub username.
+
+## Render
+
+For an accepted Connected invite with `invite_url`:
+
+```text
+Inviting {provider_username} to {org_name}...
+
+  Repository access: {provider_status}
+  Memory access:     {memory_status}
+  Invite link:       created
+
+Share this link with {provider_username}:
+
+  {invite_url}
+
+They'll authenticate, accept the access invitation, and receive
+the install command.
+```
+
+For an accepted Local invite:
+
+```text
+Invited {provider_username} to {org_name}.
+
+  Repository access: {provider_status}
+  Memory record:     {memory_status}
 
 Tell them to run:
 
-  npx -y create-egregore@latest join {github_org}/{repo_name}
+  {join_command}
 ```
 
-**Telegram group link:** After the join command, check `egregore.json` for `telegram_group_link`. If present, append:
+Append the returned group link when present. Render warnings truthfully and
+use the returned manual access URL for failed repository grants. Never show
+raw JSON, tokens, request bodies, or internal identity IDs.
+
+## Optional direct notification — separate consent
+
+The invite action never authorizes a message. Only when a direct destination
+exists and the user wants Egregore to deliver the link, create a fresh
+actor-bound notification plan for this exact message:
+
+```text
+You've been invited to {org_name} on Egregore! Join here: {invite_url-or-command}
 ```
-Telegram group: {telegram_group_link}
-```
 
-If core HTTP status is 422: user was already a collaborator — show "already has access."
-
-If core HTTP status is 403 or other error:
-```
-Could not add {username} as a collaborator.
-You may need org admin permissions. Add them manually:
-  https://github.com/{github_org}/{repo_name}/settings/access
-```
-
-**After local invite, STOP.** Do not proceed to Steps 3-5 (they require the API).
-
----
-
-## Step 2: Send invite (single call — credentials stay hidden)
-
-Run ONE bash call with description "Sending invite to {username}":
+Write it to `tmp/invite-message.md`, make the file
+mode 0600, then run:
 
 ```bash
-bash -c '
-USERNAME="$1"
-GH_TOKEN=$(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)
-API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
-GITHUB_ORG=$(jq -r ".github_org" egregore.json)
-API_URL=$(jq -r ".api_url" egregore.json)
-ORG_NAME=$(jq -r ".org_name" egregore.json)
-REPO_NAME=$(jq -r ".repo_name // empty" egregore.json)
-if [ -z "$REPO_NAME" ]; then echo "ERROR: repo_name not set in egregore.json"; exit 1; fi
-SLUG=$(jq -r ".slug" egregore.json)
-
-if [ -z "$GH_TOKEN" ]; then
-  echo "ERROR: No GitHub token found. Run: bash bin/github-auth.sh"
-  exit 1
-fi
-
-if [ -z "$API_KEY" ]; then
-  echo "ERROR: No Egregore API key found. Check .env for EGREGORE_API_KEY"
-  exit 1
-fi
-
-RESP=$(curl -s -X POST "$API_URL/api/org/invite" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d "{\"github_org\": \"$GITHUB_ORG\", \"github_username\": \"$USERNAME\", \"repo_name\": \"$REPO_NAME\", \"slug\": \"$SLUG\", \"github_token\": \"$GH_TOKEN\"}")
-
-# Output structured JSON for parsing
-echo "$RESP" | jq -c "{
-  ok: (if .invite_url then true else false end),
-  invite_url: .invite_url,
-  invite_token: .invite_token,
-  github_invite: .github_invite,
-  memory_access: .memory_access,
-  org_name: \"$ORG_NAME\",
-  github_org: \"$GITHUB_ORG\",
-  username: \"$USERNAME\",
-  error: .detail
-}"
-' -- "$ARGUMENTS"
+chmod 600 tmp/invite-message.md
 ```
-
-## Step 3: Display result
-
-Parse the JSON output from Step 2. **Never show raw JSON to the user.**
-
-**Success** (ok=true):
-```
-Inviting {username} to {org_name}...
-
-  GitHub org invitation: sent
-  Memory repo access:    added
-  Invite link:           created
-
-Share this link with {username}:
-
-  {invite_url}
-
-They'll authenticate with GitHub, accept the org invite,
-and get a one-line install command.
-```
-
-**Telegram group link:** After the invite link block, check `egregore.json` for `telegram_group_link`. If present, append:
-```
-Telegram group: {telegram_group_link}
-```
-
-**GitHub invite failed** (github_invite.status == "collaborator_failed"):
-```
-Inviting {username} to {org_name}...
-
-  GitHub org invitation: failed ({reason})
-  Invite link:           created
-
-You'll need to invite {username} to the GitHub org manually:
-  https://github.com/orgs/{github_org}/people
-
-Then share this link:
-
-  {invite_url}
-```
-
-**Already an org member** (github_invite.status == "already_org_member"):
-```
-Inviting {username} to {org_name}...
-
-  GitHub: {username} is already a member of {github_org} — access via org role
-  Invite link:           created
-
-Share this link with {username}:
-
-  {invite_url}
-```
-
-**Org invite pending** (github_invite.status == "org_invite_pending"):
-```
-Inviting {username} to {org_name}...
-
-  GitHub: org invitation already pending for {username} — they need to accept it
-  Invite link:           created
-
-Share this link with {username}:
-
-  {invite_url}
-```
-
-**API error** (ok=false):
-```
-Failed to invite {username}: {error}
-```
-
-## Step 4: Record in graph, then separately offer notification
-
-Record the invite first. Do not combine this with notification approval.
-
-**Create Person node + sync to Supabase:**
-```bash
-bash bin/graph.sh query "MERGE (p:Person {github: \$github}) ON CREATE SET p.personId = 'github-login:' + toLower(\$github), p.name = \$github, p.identityStatus = 'invited', p.invited = date(), p.invitedBy = \$inviter RETURN p.name" '{"github": "USERNAME", "inviter": "INVITER"}'
-```
-
-Then sync to Supabase (non-fatal):
-```bash
-API_URL=$(jq -r '.api_url // empty' egregore.json)
-API_KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d'=' -f2-)
-curl -sf "${API_URL}/api/user/ensure" \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"github_username":"USERNAME"}' \
-  --max-time 5 >/dev/null 2>&1 || true
-```
-
-Get the inviter name from `git config user.name` (derive short handle: lowercase first word).
-
-**Check Telegram + notify:**
-```bash
-bash bin/graph.sh query "MATCH (p:Person) WHERE p.github = \$username OR p.name = \$username RETURN p.telegramId" '{"username": "USERNAME"}'
-```
-
-If they have a telegramId, prepare the exact invite notification without
-sending:
-```bash
-PLAN_JSON=$(bash bin/notify.sh plan send "USERNAME" "You've been invited to ORG_NAME on Egregore! Join here: INVITE_URL")
-```
-
-Show the organization, recipient, channel, and exact message in a dedicated
-Send / Edit / Cancel checkpoint. Dispatch only after the user approves that
-preview. If no direct destination exists, say so; never fall back to the group.
-
-## Step 4b: Provision Coder user (if remote hosting enabled)
-
-Check if the org has remote hosting enabled. Run ONE bash call (fire-and-forget, must not delay response):
 
 ```bash
-bash -c '
-API_URL=$(jq -r ".api_url" egregore.json)
-API_KEY=$(grep "^EGREGORE_API_KEY=" .env | cut -d"=" -f2-)
-ORG_SLUG=$(jq -r ".slug" egregore.json)
-USERNAME="$1"
-
-# Check if hosting is enabled for this org
-HOSTING=$(curl -sf "${API_URL}/api/hosting/info/${ORG_SLUG}" \
-  -H "Authorization: Bearer $(grep "^GITHUB_TOKEN=" .env | cut -d"=" -f2-)" \
-  --max-time 5 2>/dev/null || echo "{}")
-ENABLED=$(echo "$HOSTING" | jq -r ".hosting_enabled // false")
-
-if [ "$ENABLED" = "true" ]; then
-  # Create Coder user (non-fatal, fire-and-forget)
-  curl -sf -X POST "${API_URL}/api/hosting/user/${ORG_SLUG}" \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\": \"$USERNAME\"}" \
-    --max-time 10 >/dev/null 2>&1 || true
-  echo "coder_user_created"
-else
-  echo "no_hosting"
-fi
-' -- "USERNAME"
+bash bin/notification.sh plan --kind send \
+  --recipient '{provider_username}' --message-file tmp/invite-message.md > tmp/invite-plan.json
 ```
 
-If the output is `coder_user_created`, include in the summary:
-```
-  Coder workspace:     user created
-```
-
-## Step 5: Summary line
-
-After all steps complete, show one truthful final status:
-```
-  Notification sent via Telegram
-```
-or
-```
-  Notification not sent — share the link manually
+```bash
+jq -r '.plan_id, .digest' tmp/invite-plan.json
 ```
 
-## Example
+Use the printed values as `{plan_id}` and `{digest}`, respectively, for the
+notification Runtime's approve/cancel commands. Read the preview fields:
 
-```
-> /invite newuser
-
-Inviting newuser to Acme Org...
-
-  GitHub org invitation: sent
-  Memory repo access:    added
-  Invite link:           created
-
-Share this link with newuser:
-
-  https://egregore.xyz/join?invite=inv_a1b2c3d4e5f6
-
-They'll authenticate with GitHub, accept the org invite,
-and get a one-line install command.
-
-  Notified via Telegram
+```bash
+jq -r '.org, .recipient, .channels, .deliveries, .message' tmp/invite-plan.json
 ```
 
-## If already a member
-
-```
-> /invite newuser
-
-newuser is already a member of acme-org.
-They can join Egregore directly at: https://egregore.xyz/setup
-```
+Show the exact organization, recipient, every channel, and message in a
+dedicated **Send / Edit / Cancel** checkpoint. Dispatch only after fresh exact
+approval using the notification Runtime's approve/dispatch commands. Never
+fall back from direct delivery to a group, reuse old approval, retry from a
+detached task, or treat sharing the invite link as notification consent.
 
 ## Rules
 
-- **Only org admins can invite** — the API verifies this
-- **GitHub invitation + Egregore invite are bundled** — one command does both
-- **Invite links expire in 7 days** — if expired, just run `/invite` again
-- **Memory repo access is granted automatically** — invitee gets push access
-- **Never expose tokens** — all credential reads happen inside bash scripts, never as separate tool calls
-- Always use `bin/graph.sh` for Neo4j — never MCP
-- Always use the exact consent flow in `bin/notify.sh` — never construct API
-  calls directly or treat the invite request as notification approval
+- Local works without graph or Connected infrastructure.
+- Connected preserves the existing seven-day setup-link behavior.
+- An invite is provisional authority to create a future membership. Do not
+  mint an AccountIdentity, ActorIdentity, or OrgMembership for the invitee.
+- Existing onboarded profiles are never overwritten by an invitation stub.
+- Notification consent and membership-invite authorization are separate.

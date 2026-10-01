@@ -15,7 +15,7 @@ Not this: user wants a **team session-handoff** (recap of what happened this ses
 
 The framework-level `egregore-emissary` skill (installed via `npx egregore-emissary install`, lives at `~/.claude/skills/egregore-emissary/SKILL.md`) owns the compose / publish / run flow end-to-end. This project skill is a **thin Egregore overlay** on top of it:
 
-1. **Delegate the compose/run** to the framework skill — its full procedure (interview via AskUserQuestion, shape decision, answers JSON, self-check, `npx egregore-emissary@latest new --answers ...`) is the source of truth. Do not duplicate it here. Follow it.
+1. **Delegate the compose/run** to the framework skill — its full procedure (interview, shape decision, answers JSON, self-check, `npx egregore-emissary@latest new --answers ...`) is the source of truth. For the interview, ask with structured questions when available and permitted in this session; otherwise ask in plain text. Do not duplicate the procedure here. Follow it.
 2. **Add the Egregore overlay** — see Step 6 below — once the framework skill has produced a URL.
 
 If the framework skill is missing (path above does not exist), tell the user: "the `egregore-emissary` skill isn't installed — run `npx egregore-emissary@latest install`" and stop. Do not try to reconstruct it from memory.
@@ -51,7 +51,7 @@ set — smoke rigs point this at a local stub server).
 3. **Match by name.** Resolve the user's phrase against each star's
    `slug`, `address`, and `topic` (case-insensitive substring is fine —
    e.g. "deep research" matches `@cem/deep-research`). One match →
-   proceed. Several → AskUserQuestion with the candidate addresses.
+   proceed. Several → ask with a structured question when available and permitted in this session; otherwise ask in plain text with the candidate addresses.
    None → show the starred addresses, stop.
 
 4. **Resolve per mode.** The endpoint already resolved for you:
@@ -62,7 +62,7 @@ set — smoke rigs point this at a local stub server).
      `updated_since_star` is true, STOP and re-consent before enacting:
      "**@{owner}/{slug} has updated since you starred it** (you
      evaluated v{evaluated}, head is now v{current}). Enact the new
-     version?" — AskUserQuestion: Enact new head / Show what changed
+     version?" — ask with a structured question when available and permitted in this session; otherwise ask in plain text. Options: Enact new head / Show what changed
      (`GET {base}/api/v1/platform/@{owner}/{slug}/versions`) / Cancel.
      Only proceed on explicit yes.
 
@@ -131,45 +131,54 @@ Then prepend a one-line entry to `memory/handoffs/index.md`:
 - YYYY-MM-DD — <author>: emissary — <topic> → <url>
 ```
 
-Commit and push:
+Write it through the Runtime. Use the pointer's memory-relative path as
+`{pointer_path}` and the emissary topic as `{topic}`, single-quoted below;
+write an embedded single quote as `'\''`. Adopt the pointer first, then commit
+the updated ledger; stop if either command fails:
 
 ```bash
-cd memory && git add handoffs/outbound/ handoffs/index.md && \
-  git commit -m "emissary pointer: <topic>" >/dev/null 2>&1 && \
-  git pull --rebase --no-edit >/dev/null 2>&1 && \
-  git push >/dev/null 2>&1 &
+bash bin/artifact-writeback.sh adopt '{pointer_path}' --replace --no-push
 ```
 
-Detached. Do not block the user on the push.
+The Runtime rewrites the pointer with a provenance header above the rendered
+body — the same text, now carrying its canonical identity, authorship, and
+digest — and `--replace` lets a republished emissary re-render its own pointer.
+Check the adoption receipt's `git_revision` before continuing. If it is absent,
+surface the warnings and stop; a `partial` receipt can still have exit status 0.
+
+```bash
+bash bin/artifact-writeback.sh commit --path 'handoffs/index.md' --message 'docs(memory): record emissary pointer {topic}'
+```
+
+Use the Runtime receipts to confirm local provenance and surface any warnings.
+The adopted pointer stays local; the ledger commit's push is synchronous, so it
+delivers both commits and its receipt names the outcome — including a remote
+that moved first and was rebased — before the command returns. Do not add a
+separate wait or a second push of your own.
 
 ### 6b: Neo4j index (connected mode only)
 
 Mode detection:
 
 ```bash
-MODE=$(jq -r '.mode // "local"' egregore.json 2>/dev/null)
+bash bin/config-get.sh mode
 ```
 
-If `MODE == "connected"`, fire-and-forget a minimal index call:
+Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`. If it prints `connected`, fire-and-forget a minimal index call:
 
 ```bash
-SESSION_ID="$(cat .egregore-session-id 2>/dev/null)"
-bash bin/graph.sh query "
-  MERGE (e:Emissary {id: \$emissaryId})
-  ON CREATE SET e.created = datetime(), e.topic = \$topic, e.kind = \$kind, e.url = \$url
-  WITH e
-  MATCH (p:Person {github: \$author})
-  MERGE (p)-[:SENT_EMISSARY]->(e)
-  WITH e
-  OPTIONAL MATCH (s:Session {id: \$sessionId})
-  FOREACH (_ IN CASE WHEN s IS NOT NULL THEN [1] ELSE [] END |
-    MERGE (s)-[:PRODUCED]->(e))
-  RETURN e.id" >/dev/null 2>&1 &
+cat .egregore-session-id 2>/dev/null
 ```
 
-Pass `emissaryId`, `topic`, `kind`, `url`, `author`, `sessionId` via the standard `bin/graph.sh` parameter mechanism (whatever the project uses for $-substituted Cypher; if unsure, read another graph-using script — `bin/index-handoff.sh` is the canonical example).
+Use the printed value as `{session_id}` for the named registration operation below.
 
-If `bin/graph.sh` is unavailable, skip silently. Local mode skips entirely. This is best-effort; the artifact and the memory pointer are the source of truth.
+```bash
+bash bin/graph-op.sh register-emissary --id '{emissary_id}' --topic '{topic}' --kind '{kind}' --url '{url}' --author '{author}' --session-id '{session_id}'
+```
+
+Pass the published emissary ID, topic, kind, URL, author GitHub handle, and session ID as the single-quoted arguments above. The adapter owns parameterization and the author/session links.
+
+If `bin/graph-op.sh` is unavailable, skip silently. Local mode skips entirely. This is best-effort; the artifact and the memory pointer are the source of truth.
 
 ## Step 7: Render the receipt
 
@@ -208,7 +217,8 @@ If natural, add one short sentence of sign-off — what the recipient should do 
 | Framework skill missing | Stop, tell the user to run `npx egregore-emissary@latest install`. Do not reimplement. |
 | User has no emissary identity (publish fails with auth error) | Stop, surface the framework skill's error verbatim. Do not run `emissary install` for them — it's their identity. |
 | `npx egregore-emissary` returns non-zero | Surface stderr, do not write the memory pointer (no URL = nothing to point at). |
-| Memory push fails in 6a | Stay silent. The file is on disk locally; next `/save` or `/handoff` pushes it. |
+| Runtime reports a warning in 6a | Surface the warning from the receipt. Local provenance remains available when `git_revision` is present; a later Runtime sync retries an unsuccessful background push. |
+| `adopt` fails in 6a (no `git_revision`, non-zero exit) | Do not run the ledger commit — the index line would point at an unversioned pointer. Remove the line you prepended to `memory/handoffs/index.md`, say so, and surface the receipt's warnings. |
 | Connected-mode graph query fails | Silent. The pointer file is the source of truth. |
 | User wants to receive ↦ a link is in $ARGUMENTS | Skip Step 6 entirely. Runs don't get an overlay. |
 

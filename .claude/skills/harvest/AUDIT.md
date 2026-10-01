@@ -125,7 +125,7 @@ must pass). Not restated here.
 
 | Failure mode | What it looks like | Mitigation |
 |---|---|---|
-| **Survey collapse** | AUQ options bias answers; nuance flattens to picked labels | Options drawn from context; freeform escape hatch always; questions can be open-ended where AUQ would constrain |
+| **Survey collapse** | Structured-question options bias answers; nuance flattens to picked labels | Options drawn from context; freeform escape hatch always; questions can be open-ended where structured choices would constrain |
 | **Role calcification** | Inferred role becomes stereotype; respondent can't see or correct it | RoleSheet shows evidence + confidence; low-confidence inferences are surfaced into the question itself |
 | **Cascade contamination** | Later respondents over-shaped by earlier ones | Disclosure mode (blind/disclosed/comparative) is chosen per harvest, recorded on the manifest, and visible to respondents |
 | **Script drift** | Protocol becomes a flowchart the model rotely executes | Invariants over procedure; `questionIntent` is mandatory and reviewed; round count and shape are model decisions |
@@ -142,7 +142,7 @@ Five artifacts under `.claude/skills/harvest/`:
 2. **`PROCESS.md`** — the cognitive protocol. Authored fresh from
    `AUDIT.md`; consult the old harvest spec only for the six reusable
    elicitation moves (seed, generate, evaluate, checkpoint, cascade,
-   synthesize). Covers role asymmetry, AUQ round protocol, async bridge,
+   synthesize). Covers role asymmetry, question round protocol, async bridge,
    and resume.
 3. **`QUESTION_PALETTE.md`** — the canonical intent → question move →
    answer shape rubric, conversational-move definitions, and hard bans.
@@ -166,7 +166,7 @@ spec *prescribes*, what the system *provides*, and what the model *decides*.
 | Guidance (model reads, qualitative) | Tooling (system provides, concrete) | Discretion (model decides) |
 |---|---|---|
 | Role asymmetry — sender vs. receiver | RoleSheet schema and resolution helpers | How much context to include with each question |
-| Anti-bias — when to disclose, when to withhold | AskUserQuestion (AUQ) rounds (1 call/round, headers ≤12 chars) | Round count; question count per round |
+| Anti-bias — when to disclose, when to withhold | Ask with a structured question when available and permitted in this session; otherwise ask in plain text (1 interaction/round, headers ≤12 chars when available and permitted in this session) | Round count; question count per round |
 | Cascade disclosure choices | `questionIntent` + `evaluation` recorded per turn | Disclosure setting (`context_mode`: blind/disclosed/comparative) |
 | Synthesis grammar (layers + blocks) | Async question metadata (`harvest_id`, `harvest_session_id`, `turn`, `context_mode`, `status`) | Which synthesis layers and blocks to emit |
 | Failure mode awareness | Markdown/session state (local mode), graph nodes (connected mode) | When to checkpoint, deepen, pivot, synthesize |
@@ -220,7 +220,7 @@ The vector matters. `cem-asks-renc-about-pricing` ≠
 
 ---
 
-## 7. AUQ round protocol
+## 7. Question round protocol
 
 Normative in `PROCESS.md` §3.2 (round shape, forbidden-in-round-1,
 always-permitted) and §3.3 (evaluation vocabulary). Not restated here.

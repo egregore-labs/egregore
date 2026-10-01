@@ -13,11 +13,57 @@ set -euo pipefail
 #   bash bin/handoff-lifecycle-job.sh run
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ACTION="${1:-scan}"
+USE_LEGACY_GRAPH=false
+ARGS=()
+for argument in "$@"; do
+  if [[ "$argument" == "--graph" ]]; then
+    USE_LEGACY_GRAPH=true
+  else
+    ARGS+=("$argument")
+  fi
+done
+ACTION="${ARGS[0]:-scan}"
 case "$ACTION" in
   scan|run) ;;
   *) jq -n '{error:"action must be scan or run"}'; exit 2 ;;
 esac
+
+# Canonical Markdown and append-only lifecycle events are authoritative. The
+# default job never queries graph state and never sends notifications. It may
+# only apply typed, snapshot-bound attention expiry; age cannot complete work.
+if [[ "$USE_LEGACY_GRAPH" != true ]]; then
+  PLAN="$(bash "$SCRIPT_DIR/bin/handoff-lifecycle.sh" scan --managed-only)"
+  if [[ "$ACTION" == "scan" ]]; then
+    printf '%s\n' "$PLAN" | jq '{
+      schema:"egregore-handoff-lifecycle-job/v2",
+      mode:"scan",
+      authority:"canonical_markdown",
+      graph_dependency:false,
+      applied:false,
+      plan:.
+    }'
+    exit 0
+  fi
+  SNAPSHOT="$(printf '%s\n' "$PLAN" | jq -r '.snapshot_id')"
+  TRANSITIONS="$(bash "$SCRIPT_DIR/bin/handoff-lifecycle.sh" apply \
+    --managed-only \
+    --snapshot "$SNAPSHOT" \
+    --confirm APPLY_SAFE_HANDOFF_LIFECYCLE)"
+  jq -n \
+    --argjson transitions "$TRANSITIONS" \
+    --argjson review "$(printf '%s\n' "$PLAN" | jq '.review_candidates')" \
+    '{
+      schema:"egregore-handoff-lifecycle-job/v2",
+      mode:"run",
+      authority:"canonical_markdown",
+      graph_dependency:false,
+      applied:true,
+      transitions:$transitions.transitions,
+      review_candidates:$review,
+      notifications:[]
+    }'
+  exit 0
+fi
 
 MODE="$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo connected)"
 if [[ "$MODE" != "connected" ]]; then

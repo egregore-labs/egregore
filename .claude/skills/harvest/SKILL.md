@@ -1,209 +1,102 @@
 ---
 name: harvest
-description: "Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people think about a topic. Say 'harvest', 'run a harvest', 'align the team on'. Not a casual question or unstructured chat."
+description: "Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people think about a topic. Use for 'harvest', 'run a harvest', 'align the team on', or a structured interview; not for a casual question or fixed survey."
 ---
 
-Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people actually think about a topic.
+# Harvest
+
+Elicit tacit preferences, positions, constraints, and knowledge, then preserve
+an attributed synthesis. A harvest maps choices; it does not force convergence.
 
 ## When to invoke
 
-User says: "harvest", "run a harvest", "I want to understand what the team thinks about", "elicit", "let's do a structured interview about", "harvest the team on", "I need to align the team on"
+Run an adaptive harvest — directed elicitation that extracts, deepens, and synthesizes what people think about a topic. Use for 'harvest', 'run a harvest', 'align the team on', or a structured interview; not for a casual question or fixed survey.
 
-Not this: casual question → just answer · survey/form → different tool · unstructured chat → just talk
+## Load the cognitive contracts
 
-Arguments: $ARGUMENTS (Optional: [topic] [--respondents name1,name2] [--seed path])
+Read these completely before questioning:
 
-**Rendered surface:** `/harvest` is the only command. When a round's findings are decision-shaped (each a real fork with 2–4 distinct options), `/harvest` renders them as an interactive Meridian **decision surface** the respondent decides *on* and pastes back, instead of asking inline. *Decision surface* is the rendered format `/harvest` produces — not a separate command. See the rendered-surface section below.
+- `.claude/skills/harvest/PROCESS.md` — adaptive elicitation rhythm
+- `.claude/skills/harvest/QUESTION_PALETTE.md` — intent, move, answer shape
+- `.claude/skills/harvest/FORMAT.md` — evidence-bound synthesis grammar
 
-## What to do
+Use `AUDIT.md` §14 only when a pasted decision-surface return requires its
+review grammar. Its historical graph/file persistence recipes are not an
+execution contract; Runtime adapters below own persistence.
 
-**This command is a thin entry point.** The intelligence lives in the sibling contracts next to this file — `.claude/skills/harvest/PROCESS.md` (the cognitive process), `.claude/skills/harvest/QUESTION_PALETTE.md` (question intent → move → answer shape), `.claude/skills/harvest/FORMAT.md` (synthesis format), `.claude/skills/harvest/AUDIT.md` (persistence contracts + design audit; §14 owns the rendered-surface absorb machine). Load and apply them.
+## Seed
 
-### Step 0: Parse invocation
+Parse topic plus optional `--respondents`, `--seed`, `--resume`, and
+`--mode blind|disclosed|comparative`. Reuse attached
+`EGREGORE_ORG_CONTEXT_V1`; do not repeat retrieval or reopen supplied sources.
+If a named gap remains, make one `bin/search.sh query` episode and open only
+the missing canonical evidence. Do not query infrastructure directly.
 
-From `$ARGUMENTS`, extract:
-- **topic** — what the harvest is about (freeform text, everything that isn't a flag)
-- **respondents** — if `--respondents` provided, parse comma-separated names. Otherwise, determine from context or ask.
-- **seed** — if `--seed` provided, read the file as seed context
+Make low-confidence RoleSheet assumptions visible. In blind mode, other
+respondents' answer content neither appears nor shapes their questions. For a
+blind shared-artifact round, dispatch the frozen question set unchanged.
 
-Get current user:
-```bash
-git config user.name
-```
+## Elicit
 
-### Step 0.5: Check graph availability
+Apply PROCESS.md's seed → generate → evaluate → checkpoint → cascade →
+synthesize rhythm:
 
-```bash
-GRAPH_OK=$(bash bin/graph.sh test 2>/dev/null | jq -r '.status // "offline"')
-```
+- Ask one interaction at a time and always allow freeform correction.
+- Record a `questionIntent` and evidence-bound evaluation for each answer.
+- Watch for satisficing and sycophancy; name real tensions.
+- Offer checkpoints at natural transitions and respect “I'm done.”
+- Attribute disclosed positions. Never turn a majority into anonymous team
+  alignment.
+- While collection is open, a respondent may correct their answer. After the
+  declared completion condition seals the evidence, a changed position starts
+  a new round; there is no automatic second pass.
 
-If not `"ok"`: note "Graph offline — running solo harvest." All graph-op calls below are non-fatal — skip them and continue conversationally. The synthesis file is the canonical record.
-
-### Step 1: Seed context
-
-Run in parallel (all queries are non-fatal — continue without graph context if they fail):
-```bash
-# Who exists in the graph
-bash bin/graph.sh query "MATCH (p:Person) RETURN p.name AS name, p.role AS role, p.domain AS domain" 2>/dev/null || true
-
-# Prior harvests on this topic (if any)
-bash bin/graph.sh query "MATCH (h:Harvest) WHERE h.topic CONTAINS \$topic RETURN h.id, h.status, h.created ORDER BY h.created DESC LIMIT 3" '{"topic":"$TOPIC"}' 2>/dev/null || true
-
-# Recent artifacts related to topic
-bash bin/graph.sh query "MATCH (a:Artifact) WHERE a.title CONTAINS \$topic OR \$topic IN a.topics RETURN a.title, a.type, a.created ORDER BY a.created DESC LIMIT 5" '{"topic":"$TOPIC"}' 2>/dev/null || true
-```
-
-If `--seed` path provided, read the file.
-
-### Step 2: Create harvest in graph
+For an absent respondent, create one authorized canonical question per turn:
 
 ```bash
-bash bin/graph-op.sh create-harvest "$HARVEST_ID" "$TOPIC" "$INTENT" "$INITIATOR" 2>/dev/null || true
+bash bin/question.sh create \
+  --from "{initiator}" --to "{respondent}" \
+  --topic "{topic}" --question "{question}" \
+  --harvest-id "{harvest_id}" \
+  --harvest-session-id "{harvest_session_id}" \
+  --turn "{turn}" --question-intent "{intent}" \
+  --context-mode "{blind|disclosed|comparative}"
 ```
 
-If this fails, continue — the synthesis file is the canonical record.
+This records the pending question; it does not notify anyone. Delivery requires
+a separate action permission and exact recipient/message consent.
 
-Where `$HARVEST_ID` = `harvest-{YYYY-MM-DD}-{topic-slug}`.
+## Decision-shaped rounds
 
-### Step 3: Clarify intent (if needed)
+For three or more genuine interrelated forks, use the existing Meridian
+decision-surface renderer and QUESTION_PALETTE modes. Self surfaces may remain
+local. Do not publish, share, or deliver a directed surface implicitly. A
+separate permitted, explicitly consented action is required. Absorb returned
+answers into the evidence set; keep `UNDECIDED` open. Do not write graph or
+event-log projections directly.
 
-If topic is clear and respondents are known, proceed. Otherwise, use AskUserQuestion to clarify:
-- What dimensions to explore
-- Who to harvest
-- What's already known vs. what needs discovering
+## Synthesize and write once
 
-### Step 4: Run the harvest
+Build the attributed layered synthesis from FORMAT.md. Every assertion must
+trace to a recorded answer or marked seed. Show the synthesis and wait for
+acceptance or edits. Then render one complete Markdown body to a temporary file under
+`tmp/` and make exactly one canonical synthesis write; `{synthesis-file}` is that file,
+`{synthesis-title}` is the accepted topic followed by ` — harvest synthesis`, and
+`{topic}` and `{workstream}` come from the accepted synthesis:
 
-**Apply `.claude/skills/harvest/PROCESS.md` from here.** It describes the cognitive process — seeding, question generation, evaluation, checkpoints, cascade, synthesis. Follow its rhythm.
-
-For each respondent, create a HarvestSession (non-fatal — continue if graph is unavailable). `$HARVEST_SESSION_ID` is the harvest's own session id (`{harvest_id}-{handle}`), distinct from the framework's `$SESSION_ID`:
 ```bash
-bash bin/graph-op.sh create-harvest-session "$HARVEST_ID" "$HARVEST_SESSION_ID" "$PERSON_NAME" 2>/dev/null || true
+bash bin/knowledge.sh create \
+  --type finding --subtype harvest-synthesis \
+  --title '{synthesis-title}' \
+  --input '{synthesis-file}' \
+  --topic harvest --topic '{topic}' \
+  --workstream '{workstream}'
 ```
 
-For each question-answer turn (non-fatal — continue if graph is unavailable):
-```bash
-bash bin/graph-op.sh record-harvest-turn "$HARVEST_SESSION_ID" "$TURN_NUMBER" "$QUESTION" "$QUESTION_INTENT" "$ANSWER" "$EVALUATION" 2>/dev/null || true
-```
+The Runtime owns ActorContext authorization, stable provenance, Markdown/Git,
+retrieval refresh, background embedding, and content-free telemetry. Do not
+run a second save, index, graph, publish, share, or notification action.
 
-### Step 5: Synthesize
-
-When all respondents are done (or solo harvest finishes), produce synthesis artifact.
-
-Write to `memory/knowledge/harvests/{YYYY-MM-DD}-{topic-slug}.md` using Bash:
-```bash
-cat > "memory/knowledge/harvests/{date}-{slug}.md" << 'HARVESTEOF'
-{synthesis content — format per skill guidance}
-HARVESTEOF
-```
-
-Create Artifact node and link (non-fatal — the synthesis file is the canonical record):
-```bash
-bash bin/graph-op.sh complete-harvest "$HARVEST_ID" "$ARTIFACT_PATH" 2>/dev/null || true
-```
-
-### Step 6: Confirm
-
-Show completion. Sigil: `⊙ HARVEST`.
-
-Footer varies based on graph availability:
-- **Graph available:** `✓ Harvested · synthesized · graphed · pushed`
-- **Graph offline:** `✓ Harvested · synthesized · saved to memory`
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ⊙ HARVEST                                        cem · Mar 10      │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Topic: Launch strategy alignment                                    │
-│  Respondents: cem, renc, oz                                          │
-│                                                                      │
-│  ◉ Synthesis: knowledge/harvests/2026-03-10-launch-st...             │
-│    3 decisions · 2 divergences · 1 pattern                           │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  ✓ Harvested · synthesized · graphed · pushed                        │
-│  Visible in /activity.                                               │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### Self-harvest (solo)
-
-When someone runs `/harvest` alone or on themselves — "I need to think through my position on X" — skip cascade logic. The model interviews them directly, goes deep, and produces a structured artifact of their thinking. Same process, one respondent.
-
-### Decision surface — harvest's rendered mode
-
-`/harvest` is the only command. When a round's findings are **decision-shaped** — each a real fork with 2–4 distinct options — render them as an interactive Meridian **decision surface** (the rendered format) instead of asking inline. The respondent decides *on* the page — clicking an option per card, noting reasoning — and hits **copy decisions**, which emits a stable paste-back block:
-
-```
-#{slug}-decisions:v1
-surface: {surface_id}
-harvest: {harvest_id}      # directed surfaces only
-date: {YYYY-MM-DD}
-
-Q1 {decision-id}: {option-key}  ("{label}")
-   note: {reasoning}
-Q2 {decision-id}: UNDECIDED
-Q3 {decision-id}: [{key-a}, {key-b}]  ("{Label A}" + "{Label B}")   # multi
-Q4 {decision-id}: {key-a} > {key-c} > {key-b}                      # rank
-Q5 {decision-id}: {position}  ({left-pole}→{right-pole})           # spectrum
-Q6 {decision-id}: {key-a}:60 {key-b}:40                            # weight
-```
-
-**Design the surface strategically — this is where harvest's craft shows.** A flat verdict form wastes the surface. Instead:
-- A card earns its place only as a genuine fork (≥3 interrelated forks → a surface; 1–2 quick choices → ask inline).
-- Each option carries a structural **visual** of what it *means* (mono mock / diagram / badges), honest `+/−` tradeoffs (every option needs ≥1 real minus — an option with no minus is propaganda), and at most one recommendation that's a position to push on.
-- **Order for cascade**: open with the choice that frames the rest; let later cards build on earlier ones. Surface the real tension instead of flattening it — the goal is to extract sharp judgment and its *why* (the note rides back), not collect a checklist.
-
-**Pick an answer mode per card — explicitly.** `QUESTION_PALETTE.md`
-is the canonical intent-to-shape rubric and owns the probe moves and
-hard bans. The renderer ships five modes; this table owns only their
-data fields and return shapes:
-
-| `mode` | Card fields | Returned answer |
-|---|---|---|
-| `single` | `options[]` | one option key |
-| `multi` | `options[]` + optional `max` | selected key array |
-| `rank` | `options[]` | ordered keys |
-| `weight` | `options[]` | `key:amount` allocations |
-| `spectrum` | `ends: ["{left}", "{right}"]` | position between the labeled poles |
-
-Absent `mode` falls back to `single` for backward compatibility only.
-Never rely on that default in a new surface.
-
-**Grouping (optional):** a top-level `sections: [{id, label, desc}]` plus a `section: "<id>"` per decision renders a category rail; without it the surface stays flat. Additive — old surfaces are unaffected.
-
-Each mode returns its own line shape in the paste-back block (examples above); `UNDECIDED` and an indented `note:` are valid under every mode. Absorb on `--resume` handles all five.
-
-**Render** the data model (JSON) — see `packages/egregore-artifacts/lib/parsers/decision-surface.js` for the shape:
-```bash
-node packages/egregore-artifacts/bin/cli.js decision-surface {surface}.json --output {out}.html
-# published form (post-publish): npx egregore-artifacts decision-surface {surface}.json
-```
-Renderer type: `decision-surface` (meridian-locked). Visuals use a **safe structured schema** (`mono`/`badges`/`diagram`) — never raw HTML/SVG, since directed surfaces are sent to others.
-
-- **Self** (no `--to`): render, open locally, fill, paste back into this session.
-- **Directed** (`--to <name>`): render + publish, deliver the link via `/ask` with the async-harvest frontmatter (`harvest_id`, `harvest_session_id`, `context_mode`); mark the HarvestSession `pending`. At dispatch, declare the **review gate**: **gated** (the default; the author reviews the return) or **trusted** (add this named respondent to the surface's `trusted` list for auto-absorb). Social-choice mechanisms such as voting and quorum are future work, not v1.
-
-**Absorb on `--resume`:** the canonical statement of the absorb & review machine — event grammar, author/trusted gate, accept / decline-with-required-reason / synthesize dispositions, idempotent `turn-applied` — is `AUDIT.md` §14 (*Absorb & review*). Apply it exactly; this file does not restate it. `UNDECIDED` lines stay open — never force a pick.
-
-The block is the **transport-agnostic return contract**: `/harvest --resume` absorbs it today; an emissary response (`kind: decision`) will carry the identical payload for people without egregore (designed, not built — AUDIT §14).
-
-### Async harvest (multi-person, not all present)
-
-When respondents aren't in the current session:
-1. Generate questions for each absent respondent from intent, seed context, RoleSheet, and only the prior-answer context allowed by `PROCESS.md` §3.5. In a blind shared-artifact round, dispatch the frozen question set unchanged.
-2. Deliver via `/ask [person]` with harvest context
-3. Mark HarvestSession as `pending`
-4. When answers arrive (via graph — QuestionSet answered), resume synthesis
-
-## Edge cases
-
-| Scenario | Handling |
-|----------|----------|
-| Neo4j unavailable | Run harvest conversationally, skip graph writes, save synthesis file only |
-| Respondent says "I'm done" mid-harvest | Respect it. Synthesize what you have. |
-| Topic overlaps prior harvest | Show prior results as seed context, ask if this is a continuation or fresh start |
-| Single respondent, clear topic | Skip cascade, go straight to deep elicitation |
-| No seed context at all | That's fine — generate from intent alone, first questions will be broader |
-| Initiator is not a respondent | They set up the harvest and receive the synthesis, but don't answer questions |
+Render the compact `⊙ HARVEST` completion with topic, respondents, disclosure
+mode, canonical path, and writeback status. Canonical Markdown wins over every
+optional projection.

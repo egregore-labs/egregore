@@ -20,7 +20,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "  Pass 2: Match to nearby topic'd session by author + date"
   echo ""
   echo "Options:"
-  echo "  --dry-run  Show what would change without modifying the graph"
+  echo "  --dry-run  Show what would change without modifying the hosted index"
   exit 0
 fi
 

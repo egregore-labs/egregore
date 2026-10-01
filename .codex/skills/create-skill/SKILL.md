@@ -7,8 +7,8 @@ description: 'Create a skill your org owns — scaffolded in this Egregore, prot
 
 # Egregore create-skill Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `create-skill`. Its one
+maintained body is `.claude/skills/create-skill/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

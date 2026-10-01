@@ -27,7 +27,9 @@ echo ""
 # when the instance lives in a throwaway directory (mktemp, the convention in
 # this suite): a real checkout is already registered, so registering it again
 # is a no-op, while a temp path is deleted on cleanup and strands the entry.
-RUN_RE='^[^#]*(bash|sh|source|\.)[[:space:]]+("?[^"[:space:]]*/)?[a-z-]*session-start\.sh'
+# The runner must be a whole word: "greeting.sh bin/codex-session-start.sh" in a
+# for-list ends in "sh" too, and that is a mention, not an execution.
+RUN_RE='^[^#]*(^|[[:space:];&|(])(bash|sh|source|\.)[[:space:]]+("?[^"[:space:]]*/)?[a-z-]*session-start\.sh'
 HOME_RE='(^|[[:space:]])(export[[:space:]]+)?HOME='
 
 LEAKY=""

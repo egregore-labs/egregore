@@ -15,8 +15,16 @@ fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; [ -n "${2:-}" ] && echo "    $2"; 
 setup_sandbox() {
   local dir="$1"
   rm -rf "$dir"
-  mkdir -p "$dir"
-  git -C "$dir" init -q
+  mkdir -p "$dir/memory"
+  git -C "$dir/memory" init -q
+  git -C "$dir/memory" config user.name "Harvest Fixture"
+  git -C "$dir/memory" config user.email "harvest@example.test"
+  cat > "$dir/egregore.json" <<'JSON'
+{"schema_version":"egregore-config/v1","org_id":"org_harvest_fixture","org_name":"Harvest Fixture","slug":"harvest-fixture","mode":"local","memory_repo":"fixture/memory"}
+JSON
+  cat > "$dir/.egregore-state.json" <<'JSON'
+{"account_id":"acct_harvest_fixture","actor_id":"actor_harvest_fixture","membership_id":"membership_harvest_fixture","github_username":"alice","display_name":"Alice"}
+JSON
 }
 
 extract_fm() {
@@ -26,25 +34,31 @@ extract_fm() {
 echo "Testing: harvest async-bridge primitives"
 echo ""
 
-# --- 1. backwards-compat: plain ask call output unchanged ---
-echo "# bin/agent.sh ask — backwards compatibility"
+# --- 1. plain ask enters the typed canonical question lifecycle ---
+echo "# bin/agent.sh ask — canonical question envelope"
 
 SANDBOX=/tmp/qa-harvest-bc
 setup_sandbox "$SANDBOX"
-EGREGORE_MEMORY_DIR="$SANDBOX" bash "$SCRIPT_DIR/bin/agent.sh" ask \
+EGREGORE_ROOT="$SANDBOX" EGREGORE_MEMORY_DIR="$SANDBOX/memory" \
+EGREGORE_CANONICAL_ONLY=1 EGREGORE_SESSION_ID=harvest-plain \
+bash "$SCRIPT_DIR/bin/agent.sh" ask \
   --from alice --to bob --topic plain --question "q?" >/dev/null 2>&1 || true
 
-PLAIN_FILE="$(find "$SANDBOX" -name '*.md' | head -1)"
+PLAIN_FILE="$(find "$SANDBOX/memory" -name '*.md' | head -1)"
 if [ -z "$PLAIN_FILE" ]; then
   fail "plain ask produced no file"
 else
   fm="$(extract_fm "$PLAIN_FILE")"
-  expected_keys="from to topic status created"
-  actual_keys="$(echo "$fm" | grep -oE '^[a-z_]+:' | tr -d ':' | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$actual_keys" = "$expected_keys" ]; then
-    pass "plain ask emits exactly: $expected_keys"
+  required_keys="schema_version id org type title created_at created_by status canonical_path revision content_hash question_schema from from_actor_id to topic created"
+  missing=""
+  for key in $required_keys; do
+    grep -qE "^${key}:" <<< "$fm" || missing="$missing $key"
+  done
+  if [ -z "$missing" ] && grep -q '^type: "question"$' <<< "$fm" \
+      && grep -q '^status: "pending"$' <<< "$fm"; then
+    pass "plain ask emits the typed canonical question envelope"
   else
-    fail "plain ask frontmatter drift" "expected '$expected_keys', got '$actual_keys'"
+    fail "plain ask canonical envelope drift" "missing:$missing"
   fi
 fi
 
@@ -53,15 +67,17 @@ echo "# bin/agent.sh ask — harvest-flavored call"
 
 SANDBOX=/tmp/qa-harvest-fl
 setup_sandbox "$SANDBOX"
-EGREGORE_MEMORY_DIR="$SANDBOX" bash "$SCRIPT_DIR/bin/agent.sh" ask \
+EGREGORE_ROOT="$SANDBOX" EGREGORE_MEMORY_DIR="$SANDBOX/memory" \
+EGREGORE_CANONICAL_ONLY=1 EGREGORE_SESSION_ID=harvest-flavored \
+bash "$SCRIPT_DIR/bin/agent.sh" ask \
   --from alice --to bob --topic flavored --question "q?" \
   --harvest-id h-1 --harvest-session-id h-1-bob --turn 3 \
   --question-intent "surface tradeoffs" --context-mode disclosed >/dev/null 2>&1 || true
 
-FL_FILE="$(find "$SANDBOX" -name '*.md' | head -1)"
+FL_FILE="$(find "$SANDBOX/memory" -name '*.md' | head -1)"
 fm="$(extract_fm "$FL_FILE")"
 for k in harvest_id harvest_session_id turn question_intent context_mode; do
-  if echo "$fm" | grep -qE "^${k}:"; then
+  if grep -qE "^${k}:" <<< "$fm"; then
     pass "harvest-flavored ask includes $k"
   else
     fail "harvest-flavored ask missing $k"
@@ -73,11 +89,13 @@ echo "# bin/agent.sh ask — YAML injection guard (--question-intent)"
 
 SANDBOX=/tmp/qa-harvest-inj
 setup_sandbox "$SANDBOX"
-EGREGORE_MEMORY_DIR="$SANDBOX" bash "$SCRIPT_DIR/bin/agent.sh" ask \
+EGREGORE_ROOT="$SANDBOX" EGREGORE_MEMORY_DIR="$SANDBOX/memory" \
+EGREGORE_CANONICAL_ONLY=1 EGREGORE_SESSION_ID=harvest-injection \
+bash "$SCRIPT_DIR/bin/agent.sh" ask \
   --from alice --to bob --topic injtest --question "q?" \
   --question-intent $'normal\nstatus: HIJACKED\nto: attacker' >/dev/null 2>&1 || true
 
-INJ_FILE="$(find "$SANDBOX" -name '*.md' | head -1)"
+INJ_FILE="$(find "$SANDBOX/memory" -name '*.md' | head -1)"
 if [ -z "$INJ_FILE" ]; then
   pass "newline in --question-intent rejected (no file produced)"
 else
@@ -97,10 +115,12 @@ echo "# bin/agent.sh ask — --turn validation"
 
 SANDBOX=/tmp/qa-harvest-turn
 setup_sandbox "$SANDBOX"
-if EGREGORE_MEMORY_DIR="$SANDBOX" bash "$SCRIPT_DIR/bin/agent.sh" ask \
+if EGREGORE_ROOT="$SANDBOX" EGREGORE_MEMORY_DIR="$SANDBOX/memory" \
+  EGREGORE_CANONICAL_ONLY=1 EGREGORE_SESSION_ID=harvest-turn \
+  bash "$SCRIPT_DIR/bin/agent.sh" ask \
     --from alice --to bob --topic turntest --question "q?" \
     --turn "not-a-number" >/dev/null 2>&1; then
-  TF="$(find "$SANDBOX" -name '*.md' | head -1)"
+  TF="$(find "$SANDBOX/memory" -name '*.md' | head -1)"
   if [ -n "$TF" ] && grep -q '^turn: not-a-number' "$TF"; then
     fail "--turn accepts non-numeric values" "wrote 'turn: not-a-number' verbatim"
   else
@@ -115,25 +135,25 @@ echo "# bin/graph-op.sh — create-harvest-session contract"
 
 CHS_BLOCK="$(awk '/^  create-harvest-session\)/,/^    ;;$/' "$SCRIPT_DIR/bin/graph-op.sh")"
 
-if echo "$CHS_BLOCK" | grep -q '"\${4:-active}"\|STATUS="\${4:-active}"'; then
+if grep -q '"\${4:-active}"\|STATUS="\${4:-active}"' <<< "$CHS_BLOCK"; then
   pass "create-harvest-session accepts [status] arg"
 else
   fail "create-harvest-session missing [status] arg"
 fi
 
-if echo "$CHS_BLOCK" | grep -qE 'pending\|active\|answered\|complete\|incorporated'; then
+if grep -qE 'pending\|active\|answered\|complete\|incorporated' <<< "$CHS_BLOCK"; then
   pass "create-harvest-session validates status enum"
 else
   fail "create-harvest-session missing status validation"
 fi
 
-if echo "$CHS_BLOCK" | grep -q "graph-wal.sh.*append"; then
+if grep -q "graph-wal.sh.*append" <<< "$CHS_BLOCK"; then
   pass "create-harvest-session is WAL-backed"
 else
   fail "create-harvest-session NOT WAL-backed (sibling ops are)"
 fi
 
-if echo "$CHS_BLOCK" | grep -q '\.results | length' && echo "$CHS_BLOCK" | grep -q "exit 3"; then
+if grep -q '\.results | length' <<< "$CHS_BLOCK" && grep -q "exit 3" <<< "$CHS_BLOCK"; then
   pass "create-harvest-session exits 3 on missing harvest/person"
 else
   fail "create-harvest-session does not detect empty-result no-op"

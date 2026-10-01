@@ -22,7 +22,7 @@ MAIN_REPO="$TEST_ROOT/main-repo"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 setup_test_repo() {
-  mkdir -p "$MAIN_REPO/bin" "$MAIN_REPO/.claude/worktrees" "$MAIN_REPO/memory"
+  mkdir -p "$MAIN_REPO/bin/lib" "$MAIN_REPO/.claude/worktrees" "$MAIN_REPO/memory"
   cd "$MAIN_REPO"
   git init --quiet
   git config user.email "test@test.com"
@@ -44,6 +44,7 @@ EOF
 
   # Copy the actual worktree.sh into the test repo
   cp "$WORKTREE_SH" bin/worktree.sh
+  cp "$SCRIPT_DIR/bin/lib/worktree-links.sh" bin/lib/worktree-links.sh
   chmod +x bin/worktree.sh
 
   git add -A
@@ -111,6 +112,22 @@ else
   fail "memory not created as symlink"
 fi
 
+# --- Test 1.1b: identical detached state is safely re-linked ---
+echo ""
+echo "Test 1.1b: shared-state self-heal preserves one identity spine"
+
+rm "$WT_PATH/.egregore-state.json"
+cp "$MAIN_REPO/.egregore-state.json" "$WT_PATH/.egregore-state.json"
+(
+  source "$MAIN_REPO/bin/lib/worktree-links.sh"
+  egregore_link_shared_state "$WT_PATH" "$MAIN_REPO"
+)
+if [ -L "$WT_PATH/.egregore-state.json" ]; then
+  pass "identical detached state repaired to shared symlink"
+else
+  fail "identical detached state remained a private file"
+fi
+
 # --- Test 1.2: setup symlinks egregore.json ---
 echo ""
 echo "Test 1.2: setup symlinks egregore.json"
@@ -163,7 +180,7 @@ fi
 
 # Verify git worktree list doesn't show it
 WT_LIST=$(git worktree list 2>/dev/null)
-if echo "$WT_LIST" | grep -q "cleanup-test"; then
+if grep -q "cleanup-test" <<< "$WT_LIST"; then
   fail "worktree still in git worktree list"
 else
   pass "worktree pruned from git worktree list"
@@ -219,9 +236,9 @@ else
 fi
 
 # Output should mention the worktree name or show removal instructions
-if echo "$STALE_OUTPUT" | grep -q "cleanup"; then
+if grep -q "cleanup" <<< "$STALE_OUTPUT"; then
   pass "cleanup-stale shows removal instructions"
-elif echo "$STALE_OUTPUT" | grep -q "No stale"; then
+elif grep -q "No stale" <<< "$STALE_OUTPUT"; then
   skip "cleanup-stale: could not backdate dir (platform limitation)"
 else
   # On some platforms touch -t format differs — treat as skip, not fail
@@ -239,7 +256,7 @@ WT_LIST_TEST="$MAIN_REPO/.claude/worktrees/list-test"
 git worktree add "$WT_LIST_TEST" list-branch --quiet 2>/dev/null
 
 LIST_OUTPUT=$(cd "$MAIN_REPO" && bash bin/worktree.sh list 2>/dev/null)
-if echo "$LIST_OUTPUT" | grep -q "list-test"; then
+if grep -q "list-test" <<< "$LIST_OUTPUT"; then
   pass "list shows worktree"
 else
   fail "list doesn't show worktree"
@@ -268,7 +285,7 @@ fi
 
 # Test health on non-worktree
 HEALTH_NON_WT=$(bash bin/worktree.sh health "$MAIN_REPO" 2>/dev/null)
-if echo "$HEALTH_NON_WT" | jq -r '.status' 2>/dev/null | grep -q "not_worktree"; then
+if HEALTH_STATUS=$(jq -r '.status' <<< "$HEALTH_NON_WT" 2>/dev/null) && grep -q "not_worktree" <<< "$HEALTH_STATUS"; then
   pass "health detects non-worktree"
 else
   fail "health didn't detect non-worktree: $HEALTH_NON_WT"
@@ -427,7 +444,7 @@ bash bin/worktree.sh setup "$WT_SYMLINK" "$MAIN_REPO" >/dev/null 2>&1
 
 # Read .env through symlink
 ENV_CONTENT=$(cat "$WT_SYMLINK/.env" 2>/dev/null || echo "UNREADABLE")
-if echo "$ENV_CONTENT" | grep -q "GITHUB_TOKEN"; then
+if grep -q "GITHUB_TOKEN" <<< "$ENV_CONTENT"; then
   pass ".env readable through symlink"
 else
   fail ".env not readable through symlink: $ENV_CONTENT"
@@ -631,7 +648,6 @@ else
 fi
 
 bash bin/worktree.sh cleanup "$WT_PERSIST" >/dev/null 2>&1
-
 
 # ============================================================
 # Results

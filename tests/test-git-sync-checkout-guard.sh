@@ -45,6 +45,9 @@ make_fixture() {
   cp "$ROOT/bin/lib/config.sh" "$repo/bin/lib/config.sh"
   cp "$ROOT/bin/lib/git-safe.sh" "$repo/bin/lib/git-safe.sh"
   cp "$ROOT/bin/lib/git-sync.sh" "$repo/bin/lib/git-sync.sh"
+  cp "$ROOT/bin/lib/framework-update.sh" "$repo/bin/lib/framework-update.sh"
+  cp "$ROOT/bin/lib/settings-drift.sh" "$repo/bin/lib/settings-drift.sh"
+  cp "$ROOT/bin/lib/runtime-owned.sh" "$repo/bin/lib/runtime-owned.sh"
   printf 'downstream framework\n' > "$repo/bin/framework.txt"
   jq -n --arg upstream "$upstream" \
     '{mode:"local", slug:"checkout-guard-test", upstream_url:$upstream, auto_update:true, repos:[]}' \
@@ -63,8 +66,10 @@ make_fixture() {
   git init --initial-branch=main --quiet "$upstream_work"
   git -C "$upstream_work" config user.name "Upstream Test"
   git -C "$upstream_work" config user.email "upstream@example.test"
-  mkdir -p "$upstream_work/bin"
+  mkdir -p "$upstream_work/bin" "$upstream_work/.pi" "$upstream_work/.prime/agent"
   printf 'upstream framework\n' > "$upstream_work/bin/framework.txt"
+  printf '{"fixture":"upstream pi"}\n' > "$upstream_work/.pi/settings.json"
+  printf 'upstream prime\n' > "$upstream_work/.prime/agent/AGENTS.md"
   git -C "$upstream_work" add -A
   git -C "$upstream_work" commit -m "New upstream framework" --quiet
   git -C "$upstream_work" remote add origin "$upstream"
@@ -81,6 +86,8 @@ run_sync() {
     SCRIPT_DIR="$repo"
     IS_WORKTREE="false"
     MAIN_PROJECT_DIR="$repo"
+    # Consumed by the sourced git-sync library and its dependencies.
+    # shellcheck disable=SC2034
     STATE_FILE="$repo/.egregore-state.json"
     ENV_FILE="$repo/.env"
     HEALTH_GIT="ok"
@@ -121,7 +128,7 @@ check "topic branch HEAD is untouched" \
 check "topic branch keeps its downstream framework file" \
   "downstream framework" "$(cat "$blocked_repo/bin/framework.txt")"
 check "no framework update commit lands on the topic branch" \
-  "0" "$(git -C "$blocked_repo" log --format=%s | grep -c '^Auto-update Egregore framework$' || true)"
+  "0" "$(git -C "$blocked_repo" log --format=%s | grep -c '^chore(sync): update framework from upstream$' || true)"
 
 # --- Defense in depth: updater rejects a direct wrong-branch call ------------
 direct_repo="$(make_fixture direct)"
@@ -151,10 +158,19 @@ check "framework updater runs after verified checkout" \
   "updated=true" "$(printf '%s\n' "$ready_result" | grep '^updated=')"
 check "base branch receives the upstream framework file" \
   "upstream framework" "$(cat "$ready_repo/bin/framework.txt")"
+check "base branch receives the upstream Pi settings" \
+  '{"fixture":"upstream pi"}' "$(cat "$ready_repo/.pi/settings.json")"
+check "base branch receives the upstream Prime instructions" \
+  "upstream prime" "$(cat "$ready_repo/.prime/agent/AGENTS.md")"
+ready_commit_paths="$(git -C "$ready_repo" show --name-only --format= HEAD)"
+check "framework update commit includes Pi settings" \
+  ".pi/settings.json" "$(printf '%s\n' "$ready_commit_paths" | grep -Fx '.pi/settings.json')"
+check "framework update commit includes Prime instructions" \
+  ".prime/agent/AGENTS.md" "$(printf '%s\n' "$ready_commit_paths" | grep -Fx '.prime/agent/AGENTS.md')"
 check "topic branch retains its original framework file" \
   "downstream framework" "$(git -C "$ready_repo" show feature/unique:bin/framework.txt)"
 check "framework update commit lands on the base branch" \
-  "Auto-update Egregore framework" "$(git -C "$ready_repo" log -1 --format=%s)"
+  "chore(sync): update framework from upstream" "$(git -C "$ready_repo" log -1 --format=%s)"
 
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

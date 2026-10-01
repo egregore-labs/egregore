@@ -2,38 +2,56 @@
 set -euo pipefail
 
 # Org-scoped intake plane. Shared manifests live in memory/; normalized bodies
-# stay in this checkout's gitignored cache; qmd uses a separate per-org index.
+# stay in this checkout's gitignored cache. Indexing is routed through the
+# Egregore Local Retriever; this compatibility shell contains no QMD details.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export NODE_NO_WARNINGS=1
 PY="$ROOT/bin/ingest.py"
 SURFACE="$ROOT/bin/ingest_surface.py"
 SLUG="$(jq -r '.slug // "egregore"' "$ROOT/egregore.json")"
-INDEX="${SLUG}-ingest"
-COLLECTION="${SLUG}-ingest"
 INGEST_ROOT="${EGREGORE_INGEST_ROOT:-$ROOT/.egregore/ingest}"
 INGEST_META_ROOT="${EGREGORE_INGEST_META_ROOT:-$ROOT/memory/ingest}"
-QMD_VERSION="2.5.3"
 GRAPH_PROJECTOR="${EGREGORE_INGEST_GRAPH_PROJECTOR:-$ROOT/bin/ingest-graph.sh}"
 
-_qmd() {
-  if command -v qmd >/dev/null 2>&1; then
-    qmd --index "$INDEX" "$@"
-  else
-    npx -y "@tobilu/qmd@${QMD_VERSION}" --index "$INDEX" "$@"
-  fi
+_retriever() {
+  EGREGORE_ROOT="$ROOT" \
+    EGREGORE_INGEST_ROOT="$INGEST_ROOT" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m egregore_runtime.ingest_index_cli "$@"
 }
 
 _ensure_index() {
   mkdir -p "$INGEST_ROOT"
-  if ! _qmd collection list 2>/dev/null | grep -q "^${COLLECTION} "; then
-    _qmd collection add "$INGEST_ROOT" --name "$COLLECTION" >/dev/null
-  fi
-  _qmd update >/dev/null
+  _retriever update --background-embed >/dev/null
+}
+
+_register_manifest() {
+  local source="$1" source_root manifest source_record
+  source_root="$INGEST_META_ROOT/sources/$source"
+  manifest="$source_root/manifest.json"
+  source_record="$source_root/source.json"
+  case "$(cd "$INGEST_META_ROOT" 2>/dev/null && pwd -P)/" in
+    "$(cd "$ROOT/memory" 2>/dev/null && pwd -P)/"*) ;;
+    *)
+      # Explicit test/custom metadata roots are not canonical organizational
+      # state and therefore cannot be committed by the Runtime.
+      printf '%s\n' '{"status":"external-metadata-root","warnings":["manifest was not registered as canonical state"]}'
+      return 0
+      ;;
+  esac
+  EGREGORE_ROOT="$ROOT" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m egregore_runtime.ingest_cli register \
+      --source "$source" --manifest "$manifest" --source-record "$source_record"
 }
 
 _graph_sync() {
-  local source="${1:-}" manifest result status
+  local source="${1:-}" force="${2:-0}" manifest result status
+  if [ "${EGREGORE_GRAPH_PROJECTION:-0}" != "1" ] && [ "$force" != "1" ]; then
+    printf '%s\n' '{"status":"disabled","enabled":false,"reason":"canonical Markdown is authoritative; optional hosted indexing requires explicit opt-in","replayable":true}'
+    return 0
+  fi
   local total=0 succeeded=0 failed=0 stored=0 queries=0
   local manifests=()
   if [ -n "$source" ]; then
@@ -98,38 +116,44 @@ PY
 }
 
 cmd_add() {
-  local source="" summary graph final qmd_status
+  local source="" summary graph final qmd_status canonical_status
   local args=("$@")
   local i
   for ((i=0; i<${#args[@]}; i++)); do
     if [ "${args[$i]}" = "--source" ] && [ $((i+1)) -lt ${#args[@]} ]; then source="${args[$((i+1))]}"; fi
   done
   summary="$(python3 "$PY" add "$@")"
+  source="$(printf '%s' "$summary" | jq -r '.source')"
   _journal "$source" "normalized" "$(printf '%s' "$summary" | jq -c '{ingested,unchanged,metadata_updated,skipped,pruned}')"
+  if ! canonical_status="$(_register_manifest "$source")"; then
+    _journal "$source" "canonical_failed" '{"status":"failed"}'
+    printf '%s\n' "$summary" | jq '. + {status:"failed",canonical:{status:"failed"},qmd:{status:"not-attempted"},graph:{status:"not-attempted"}}'
+    return 1
+  fi
   if ! _ensure_index; then
     qmd_status='{"status":"failed"}'
     _journal "$source" "index_failed" "$qmd_status"
-    printf '%s\n' "$summary" | jq --argjson qmd "$qmd_status" '. + {status:"failed",qmd:$qmd,graph:{status:"not-attempted"}}'
+    printf '%s\n' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" '. + {status:"failed",canonical:$canonical,qmd:$qmd,graph:{status:"not-attempted"}}'
     return 1
   fi
   qmd_status='{"status":"indexed"}'
   if graph="$(_graph_sync "$source")"; then :; else :; fi
   if [ "$(printf '%s' "$summary" | jq -r .skipped)" -gt 0 ]; then
     _journal "$source" "extraction_attention" "$(printf '%s' "$summary" | jq -c '{skipped}')"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"attention",qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"attention",canonical:$canonical,qmd:$qmd,graph:$graph}')"
   elif [ "$(printf '%s' "$graph" | jq -r .status)" = "partial" ]; then
     _journal "$source" "graph_pending" "$graph"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"attention",qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"attention",canonical:$canonical,qmd:$qmd,graph:$graph}')"
   else
     _journal_clear "$source"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"complete",qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" '. + {status:"complete",canonical:$canonical,qmd:$qmd,graph:$graph}')"
   fi
   printf '%s\n' "$final"
 }
 
 cmd_add_selection() {
   local manifest="${1:?usage: bin/ingest.sh add-selection MANIFEST}"
-  local source receipt_url receipt_token summary graph qmd_status outcome final message contract
+  local source receipt_url receipt_token summary graph qmd_status canonical_status outcome final message contract
   contract="$(python3 - "$manifest" <<'PY'
 import json, sys
 value = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -144,8 +168,13 @@ PY
     _notify_receipt "$receipt_url" "$receipt_token" "$final"
     return 2
   fi
+  source="$(printf '%s' "$summary" | jq -r '.source')"
   _journal "$source" "normalized" "$(printf '%s' "$summary" | jq -c '{ingested,unchanged,metadata_updated,skipped,pruned}')"
-  if _ensure_index; then
+  if ! canonical_status="$(_register_manifest "$source")"; then
+    canonical_status='{"status":"failed"}'
+    qmd_status='{"status":"not-attempted"}'
+    _journal "$source" "canonical_failed" "$canonical_status"
+  elif _ensure_index; then
     qmd_status='{"status":"indexed"}'
   else
     qmd_status='{"status":"failed"}'
@@ -158,23 +187,23 @@ PY
   fi
   if [ "$(printf '%s' "$qmd_status" | jq -r .status)" != "indexed" ]; then
     outcome="index failed"
-    message="The normalized source was retained, but QMD did not finish indexing it. Run bin/ingest.sh reindex to repair it."
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"failed",outcome:$outcome,message:$message,qmd:$qmd,graph:$graph}')"
+    message="The normalized source was retained, but the Local retrieval index did not finish updating. Run bin/ingest.sh reindex to repair it."
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"failed",outcome:$outcome,message:$message,canonical:$canonical,qmd:$qmd,graph:$graph}')"
   elif [ "$(printf '%s' "$summary" | jq -r '.skipped')" -gt 0 ]; then
     outcome="indexed with skipped files"
     message="Searchable files were indexed, but one or more files still need a compatible extractor. Their staging bytes were retained."
     _journal "$source" "extraction_attention" "$(printf '%s' "$summary" | jq -c '{skipped,selection_path}')"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"attention",outcome:$outcome,message:$message,qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"attention",outcome:$outcome,message:$message,canonical:$canonical,qmd:$qmd,graph:$graph}')"
   elif [ "$(printf '%s' "$graph" | jq -r .status)" = "partial" ]; then
     outcome="indexed · graph pending"
     message="The source is searchable now. Graph projection was incomplete and is recorded for retry."
     _journal "$source" "graph_pending" "$graph"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"attention",outcome:$outcome,message:$message,qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"attention",outcome:$outcome,message:$message,canonical:$canonical,qmd:$qmd,graph:$graph}')"
   else
     outcome="indexed · org-scoped · unverified"
     message="The files were validated, normalized, and added to this organization’s retrieval index."
     _journal_clear "$source"
-    final="$(printf '%s' "$summary" | jq --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"complete",outcome:$outcome,message:$message,qmd:$qmd,graph:$graph}')"
+    final="$(printf '%s' "$summary" | jq --argjson canonical "$canonical_status" --argjson qmd "$qmd_status" --argjson graph "$graph" --arg outcome "$outcome" --arg message "$message" '. + {status:"complete",outcome:$outcome,message:$message,canonical:$canonical,qmd:$qmd,graph:$graph}')"
   fi
   _notify_receipt "$receipt_url" "$receipt_token" "$final"
   printf '%s\n' "$final"
@@ -193,7 +222,7 @@ cmd_search() {
     esac
   done
   _ensure_index
-  raw="$(_qmd search "$query" -c "$COLLECTION" -n "$qmd_n" --all --json 2>/dev/null || echo '[]')"
+  raw="$(_retriever query --query "$query" --limit "$qmd_n" 2>/dev/null || echo '[]')"
   if [ ${#filter_args[@]} -gt 0 ]; then
     filtered="$(printf '%s' "$raw" | python3 "$PY" filter-results "${filter_args[@]}" --limit "$limit")"
   else
@@ -265,8 +294,8 @@ case "${1:-}" in
     fi
     printf '%s\n' "$graph"
     ;;
-  graph-sync) shift; _graph_sync "${1:-}" ;;
-  status) python3 "$PY" status; _qmd status 2>/dev/null || true ;;
+  graph-sync) shift; _graph_sync "${1:-}" 1 ;;
+  status) python3 "$PY" status; _retriever status 2>/dev/null || true ;;
   *)
     echo 'usage: bash bin/ingest.sh {select|add|add-selection|register-extraction|search|reindex|graph-sync|status}' >&2
     echo '  select [--no-open] [--timeout SECONDS]' >&2

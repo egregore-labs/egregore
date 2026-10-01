@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Index a single handoff file into the Neo4j graph.
+# Add a single handoff file to the optional hosted index.
 # Usage: bash bin/index-handoff.sh <file-path>
 # Returns: {"sessionId":"...","resolved":0} or {"error":"..."}.
 # `resolved` remains for compatibility; lifecycle reconciliation is queued by
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: index-handoff.sh <handoff-file-path>"
   echo ""
-  echo "Index a single handoff file into the Neo4j graph."
+  echo "Add a single handoff file to the optional hosted index."
   echo "Parses metadata (author, date, topic, recipients) from"
   echo "markdown headers or YAML front matter, creates Session"
   echo "and relationship nodes. Lifecycle completion is queued separately."
@@ -279,7 +279,7 @@ BATCH_JSON=$(jq -n \
 
 # --- Execute ---
 RESPONSE=$(bash "$SCRIPT_DIR/bin/graph-batch.sh" "$BATCH_JSON" 2>/dev/null) || {
-  echo '{"error":"graph-batch.sh failed"}'
+  echo '{"error":"hosted indexing failed"}'
   exit 1
 }
 

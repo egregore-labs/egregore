@@ -34,21 +34,22 @@ This skill ships to every Egregore, but Teams notifications run on the
 Connected tier. **Before anything else**, detect the tier:
 
 ```bash
-MODE=$(jq -r '.mode // empty' egregore.json 2>/dev/null)
-API_URL=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
+bash bin/config-get.sh mode
 ```
 
-The tier predicate is exactly the canonical `_detect_mode` truth table
-(`bin/lib/config.sh`): the instance is on the **local (OSS) tier** when
-`MODE` is `local` **or** `API_URL` is empty. (A hand-set `mode: "connected"`
-without an `api_url` is still local — never treat it as an unlock.)
+Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`. If it prints `local`, the instance is on
+the **local (OSS) tier**; if it prints `connected`, continue with setup.
+The command uses exactly the canonical `_detect_mode` truth table
+(`bin/lib/config.sh`): explicit local mode or an empty API URL means local.
+(A hand-set `mode: "connected"` without an `api_url` is still local — never
+treat it as an unlock.)
 
 On the local tier, deliver exactly this message, then the question — do not
 paraphrase the message:
 
 > You can expand your knowledge base with connections to Notion, Google Drive, Docs, Sheets, and many more. Upgrade to Connected Tier to accelerate.
 
-AskUserQuestion:
+Ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 - **Upgrade to Connected Tier** — tell them the one sanctioned path: run
   `egregore connect` in a terminal (the launcher walks the whole upgrade:
   registers your org with the platform, provisions the key, replays your
@@ -98,24 +99,43 @@ az rest --method get --url "https://graph.microsoft.com/v1.0/subscribedSkus" \
 
 ## Step 2: Azure infrastructure (agent, ~2 min)
 
-Run these; capture every id/secret as you go:
+Use the app ID printed here as `{app_id}`, the tenant ID from Step 1 as
+`{tenant_id}`, and the chosen Azure region (for example `westeurope`) as
+`{region}`; single-quote substituted values as shown and write any embedded
+single quote as `'\''`.
+
+1. App registration (single-tenant — deliberate; Microsoft is deprecating new multi-tenant bots):
 
 ```bash
-# 1. App registration (single-tenant — deliberate; Microsoft is deprecating new multi-tenant bots)
 az ad app create --display-name "Egregore Notifications" --sign-in-audience AzureADMyOrg \
   --query "{appId:appId}" -o json
+```
 
-# 2. Client secret (2 years)
-az ad app credential reset --id <APP_ID> --display-name "teams-notify" --years 2 -o json
+2. Client secret (2 years):
 
-# 3. Service principal — az ad app create does NOT make one; skipping this
-#    yields token 401 AADSTS7000229 later
-az ad sp create --id <APP_ID>
+```bash
+az ad app credential reset --id '{app_id}' --display-name "teams-notify" --years 2 -o json
+```
 
-# 4. Resource group + free Azure Bot + Teams channel
-az group create -n egregore-bots -l <their-region, e.g. westeurope>
+3. Service principal — `az ad app create` does NOT make one; skipping this
+   yields token 401 AADSTS7000229 later:
+
+```bash
+az ad sp create --id '{app_id}'
+```
+
+4. Resource group + free Azure Bot + Teams channel, one command at a time:
+
+```bash
+az group create -n egregore-bots -l '{region}'
+```
+
+```bash
 az bot create --resource-group egregore-bots --name egregore-notifications \
-  --app-type SingleTenant --appid <APP_ID> --tenant-id <TENANT_ID> --sku F0
+  --app-type SingleTenant --appid '{app_id}' --tenant-id '{tenant_id}' --sku F0
+```
+
+```bash
 az bot msteams create --name egregore-notifications --resource-group egregore-bots
 ```
 
@@ -137,7 +157,13 @@ curl -sS -X POST "https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/toke
 
 Build and reveal the zip:
 ```bash
-bash teams-app/build-package.sh <APP_ID> && open teams-app/build/
+bash teams-app/build-package.sh '{app_id}'
+```
+
+After the build succeeds:
+
+```bash
+open teams-app/build/
 ```
 (If this instance doesn't carry `teams-app/`, fetch it from the framework repo.)
 
@@ -170,24 +196,52 @@ Result must look like `19:…@thread.tacv2`.
 ## Step 6: Persist
 
 ```bash
-API_URL=$(jq -r '.api_url' egregore.json)
-KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d= -f2-)
-curl -sS -X POST "$API_URL/api/org/teams" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"conversation_id":"<CONV_ID>","app_id":"<APP_ID>","app_secret":"<SECRET>","tenant_id":"<TENANT_ID>"}'
+mkdir -p tmp
 ```
+
+Only read the response with `jq` after the helper succeeds. If it fails, show
+its error and stop;
+the helper leaves no response file after a failure.
+
+Write the file `tmp/teams-connect-bind.json` with
+`{"conversation_id":"<CONV_ID>","app_id":"<APP_ID>","app_secret":"<SECRET>","tenant_id":"<TENANT_ID>"}`,
+substituting the channel and Azure registration values. Non-default region:
+the bot's service URL may differ from the EMEA default — include `"service_url"`
+too (Azure portal → the bot → Channels → Teams shows it). The helper reads
+`EGREGORE_API_KEY` internally.
+
+```bash
+bash bin/api-call.sh POST /api/org/teams --auth egregore --json-file tmp/teams-connect-bind.json --out tmp/teams-connect-bind-response.json
+```
+
+```bash
+jq '.' tmp/teams-connect-bind-response.json
+```
+
 Expect `{"status":"connected", …}`. The per-org creds matter: a single-tenant
 bot only works in its home tenant, so each org brings its own registration.
-
-Non-default region: their bot's service URL may differ from the EMEA default —
-pass `"service_url"` too (Azure portal → the bot → Channels → Teams shows it).
 
 ## Step 7: Verify with separate exact notification consent
 
 Follow `.claude/context/notification-consent.md`. Connecting Teams is not
 consent to send a test message. Prepare after configuration is final:
 ```bash
-PLAN_JSON=$(bash bin/notify.sh plan group "Teams channel connected — this message reached you through Egregore.")
+mkdir -p tmp
+```
+
+```bash
+bash bin/notify.sh plan group "Teams channel connected — this message reached you through Egregore." > tmp/teams-connect-plan.json
+```
+
+```bash
+jq -r '.plan_id, .digest' tmp/teams-connect-plan.json
+```
+
+Use the printed values as `{plan_id}` and `{digest}`, respectively, for the
+notification consent flow. Read the exact preview fields:
+
+```bash
+jq -r '.org, .recipient, .channels, .deliveries, .message' tmp/teams-connect-plan.json
 ```
 
 Show every resolved receiving channel—potentially both Telegram and Teams—and
@@ -201,7 +255,7 @@ app icons) — cosmetic, self-heals.
 | Symptom | Cause → fix |
 |---|---|
 | "can't find the tenant region" (PLS) in Teams admin center | No M365/Teams license on the tenant → Step 1 licensing |
-| Token 401 `AADSTS7000229` | Missing service principal → `az ad sp create --id <APP_ID>` |
+| Token 401 `AADSTS7000229` | Missing service principal → `az ad sp create --id '{app_id}'` |
 | Send 403 `BotNotInConversationRoster` | Bot not added to the team → Step 4 |
 | Send 404 | Wrong conversation id or wrong `service_url` region |
 | "already an app with the same app ID" on upload | Use the app detail page → Upload file to update |

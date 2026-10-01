@@ -18,22 +18,24 @@ Summon a spirit — a persistent agent that runs on a schedule or watches for co
 ## Mode detection
 
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+bash bin/config-get.sh mode
 ```
 
-**Local mode** (`mode === "local"`): Skip ALL `bin/graph.sh`, `bin/graph-batch.sh`, and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging.
+Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`.
+
+**Local mode** (`{mode}` is `local`): Skip ALL `bin/graph-op.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging.
 
 Local-mode adjustments:
 - **Phase 1**: Skip the graph scan. Generate options from conversation context, `memory/quests/` files, and `.spirits/` directory instead of the graph.
-- **Phase 5**: Skip Spirit node creation in Neo4j. Write the spec file to `.spirits/{name}.json` and create the CronCreate schedule — these work without the graph.
+- **Phase 5**: Skip Spirit node creation in Neo4j. Write the spec file to `.spirits/{name}.json`. **Claude Code:** create the scheduled job — this works without the graph.
 - **Phase 6**: Skip LoopReport creation in Neo4j. The TUI report still renders, but the graph artifact is not created.
-- **Managing Spirits**: Read from `.spirits/` directory instead of querying the graph. Suspend/resume only uses CronDelete/CronCreate, not graph updates.
+- **Managing Spirits**: Read from `.spirits/` directory instead of querying the graph. **Claude Code:** suspend/resume only deletes or creates the scheduled job, without graph updates.
 
 ## Instructions
 
 ### Phase 1: Intent Discovery
 
-Start with one open question via AskUserQuestion:
+Start with one open question: ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 
 ```
 What should this spirit do?
@@ -42,13 +44,20 @@ What should this spirit do?
 **Connected mode:** Options should be derived from current graph context — not hardcoded. Before asking, run a lightweight graph scan to understand what's happening:
 
 ```bash
-# Get active quests, recent sessions, health signals
-CONTEXT=$(bash bin/graph-batch.sh '[
-  {"statement": "MATCH (q:Quest) WHERE q.status IN [\"active\", \"in-progress\"] RETURN q.id, q.title LIMIT 10", "parameters": {}},
-  {"statement": "MATCH (s:Session)-[:BY]->(p:Person) RETURN s.topic, p.name, toString(s.date) AS date ORDER BY s.date DESC LIMIT 5", "parameters": {}},
-  {"statement": "MATCH (s:Spirit) RETURN s.name, s.type, s.status LIMIT 10", "parameters": {}}
-]')
+mkdir -p tmp
 ```
+
+```bash
+bash bin/graph-op.sh spirit-context > tmp/summon-context.json
+```
+
+Read the active quests, recent sessions, and spirit health signals:
+
+```bash
+jq '.values[0][0] // {}' tmp/summon-context.json
+```
+
+Use the printed results as `{context}` for the options below.
 
 Use this context to generate options that are relevant — e.g. if there are dormant quests, offer "reconcile dormant work"; if there's a PR-heavy period, offer "watch PRs". Always include a free-text option.
 
@@ -63,7 +72,7 @@ The agent has full discretion to decide what context is relevant given the user'
 
 ### Phase 2: Adaptive Convergence
 
-Ask questions iteratively. Each round is informed by previous answers AND graph context. The questioning is non-linear — the agent decides what to ask based on where the interesting tension is, not a fixed script.
+Ask questions iteratively with a structured question when available and permitted in this session; otherwise ask in plain text. Each round is informed by previous answers AND graph context. The questioning is non-linear — the agent decides what to ask based on where the interesting tension is, not a fixed script.
 
 **Dimensions to explore** (not necessarily in order — the agent picks what matters):
 
@@ -87,9 +96,9 @@ Produce a spirit spec as JSON. Write to `.spirits/{name}.json`:
 
 ```json
 {
-  "name": "graph-gardener",
+  "name": "memory-gardener",
   "type": "recurring",
-  "purpose": "Maintain knowledge graph health — fix structural issues, infer new relationships, report drift",
+  "purpose": "Maintain the optional relationship index — fix structural issues, infer new relationships, report drift",
   "cadence": "0 3 * * *",
   "cadence_human": "Daily at 3:03 AM",
   "scope": {
@@ -130,9 +139,9 @@ For watchdog spirits, the `watchdog` field contains:
 Present the spec as a TUI box:
 
 ```
-┌ Spirit: graph-gardener ───────────────────────────┐
+┌ Spirit: memory-gardener ───────────────────────────┐
 │                                                    │
-│  Purpose:  Maintain knowledge graph health         │
+│  Purpose:  Maintain the relationship index         │
 │  Type:     Recurring                               │
 │  Cadence:  Daily at 3:03 AM                        │
 │                                                    │
@@ -141,7 +150,7 @@ Present the spec as a TUI box:
 │  Suggest:  duplicate persons, disconnected arts     │
 │  Flag:     ghosts, orphans                         │
 │                                                    │
-│  Reporting: TUI + Graph artifact each cycle        │
+│  Reporting: TUI + saved report each cycle        │
 │  Boundaries: No person/quest deletion              │
 │                                                    │
 └────────────────────────────────────────────────────┘
@@ -151,23 +160,23 @@ Ask: "Launch this spirit?" with options: Launch, Edit (back to questioning), Can
 
 ### Phase 5: Launch
 
+Use scheduling only when available and permitted in this session;
+otherwise write the spec file `.spirits/{name}.json`, report that no job was
+scheduled, and stop before the remaining launch steps.
+**Claude Code:** use the native session scheduler for the scheduling steps
+below.
+
 1. **Write spec file**: `.spirits/{name}.json`
 2. **Create Spirit node in graph** — **CONNECTED MODE ONLY**:
-   **Skip this step in local mode.** Do not run `bin/graph.sh`.
+   **Skip this step in local mode.** Use the spec fields with the named operation:
    ```bash
-   bash bin/graph.sh query "
-     MERGE (sp:Spirit {name: \$name})
-     SET sp.type = \$type, sp.purpose = \$purpose, sp.cadence = \$cadence,
-         sp.status = 'active', sp.createdAt = datetime(), sp.createdBy = \$author,
-         sp.version = 1
-     RETURN sp.name
-   " '{"name":"...","type":"...","purpose":"...","cadence":"...","author":"..."}'
+   bash bin/graph-op.sh spirit-create --name '{name}' --type '{type}' --purpose '{purpose}' --cadence '{cadence}' --status 'active' --author '{author}'
    ```
-3. **Schedule via CronCreate**:
+3. **Create the scheduled job**:
    - Prompt is the spirit's execution prompt (constructed from spec)
    - For recurring: standard cron
    - For watchdog: polling cron + condition check prefix
-4. **Confirm**: Show job ID, how to cancel, 3-day auto-expiry note.
+4. **Confirm**: Show job ID and how to cancel. **Claude Code:** include the 3-day auto-expiry note.
 
 ### Phase 6: Cycle Reporting (attached to each execution)
 
@@ -176,7 +185,7 @@ When a spirit runs (via `/loop` invoking its prompt), each cycle MUST:
 1. **Run the work** defined in the spec
 2. **Produce TUI report**:
    ```
-   ┌ graph-gardener · Cycle 4 · 2026-03-09 ─────────┐
+   ┌ memory-gardener · Cycle 4 · 2026-03-09 ─────────┐
    │                                                   │
    │  ✦ Fixed: 3 stale handoffs resolved              │
    │  ✦ Fixed: 12 date types migrated                 │
@@ -195,18 +204,9 @@ When a spirit runs (via `/loop` invoking its prompt), each cycle MUST:
    ```
 
 3. **Write LoopReport to graph** — **CONNECTED MODE ONLY**:
-   **Skip this step in local mode.** Do not run `bin/graph.sh`. The TUI report still renders but is not persisted to the graph.
+   **Skip this step in local mode.** The named update records this cycle's report; the TUI report still renders locally.
    ```bash
-   bash bin/graph.sh query "
-     MATCH (sp:Spirit {name: \$name})
-     CREATE (lr:Artifact {
-       id: \$id, type: 'loop-report', title: \$title,
-       created: date(), origin: 'spirit',
-       metrics: \$metrics
-     })
-     CREATE (lr)-[:GENERATED_BY]->(sp)
-     RETURN lr.id
-   " '{"name":"...","id":"...","title":"...","metrics":"..."}'
+   bash bin/graph-op.sh spirit-update --name '{name}' --id '{id}' --title '{title}' --metrics '{metrics}'
    ```
 
 4. **Insights**: The report should include one model-generated insight per cycle — a pattern, question, or observation that emerges from the data but wasn't explicitly programmed. This is the inferential layer growing.
@@ -220,15 +220,15 @@ bash bin/telemetry.sh emit "command" '{"command":"summon"}' 2>/dev/null &
 ## Managing Spirits
 
 **Connected mode:**
-- **List active**: `bash bin/graph.sh query "MATCH (sp:Spirit {status: 'active'}) RETURN sp.name, sp.type, sp.cadence"`
-- **Suspend**: Set `sp.status = 'suspended'` + CronDelete
-- **Resume**: Set `sp.status = 'active'` + CronCreate
+- **List active**: `bash bin/graph-op.sh spirit-list`
+- **Suspend**: Set `sp.status = 'suspended'` and delete the scheduled job
+- **Resume**: Set `sp.status = 'active'` and create the scheduled job
 - **View history**: `MATCH (lr:Artifact {origin: 'spirit'})-[:GENERATED_BY]->(sp:Spirit {name: $name}) RETURN lr ORDER BY lr.created DESC`
 
 **Local mode:**
 - **List active**: Read `.spirits/*.json` files, filter by `"status": "active"`. Display name, type, cadence from each spec file.
-- **Suspend**: Update spec file `"status": "suspended"` + CronDelete
-- **Resume**: Update spec file `"status": "active"` + CronCreate
+- **Suspend**: Update spec file `"status": "suspended"` and delete the scheduled job
+- **Resume**: Update spec file `"status": "active"` and create the scheduled job
 - **View history**: Not available in local mode (no graph artifact storage). Show: `Spirit history requires connected mode.`
 
 ## Design Principles

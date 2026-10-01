@@ -73,6 +73,10 @@ class _Query:
         self._filters.append(("eq", column, value))
         return self
 
+    def neq(self, column, value):
+        self._filters.append(("neq", column, value))
+        return self
+
     def ilike(self, column, value):
         self._filters.append(("ilike", column, value))
         return self
@@ -127,6 +131,8 @@ class _Query:
         have = cls._value(row, col)
         if op == "eq":
             return have == val
+        if op == "neq":
+            return have is not None and have != val
         if op == "ilike":
             return str(have or "").lower() == str(val).lower()
         if op == "contains":
@@ -225,6 +231,13 @@ class _Table:
         self.rows = []
 
     def apply_defaults(self, row):
+        # Migration 039 generates these identifiers on identity inserts.
+        identity_key = {"users": "account_id", "actors": "actor_id",
+                        "memberships": "membership_id"}.get(self.name)
+        if identity_key:
+            row.setdefault(identity_key, str(uuid.uuid4()))
+        if self.name in {"users", "memberships"}:
+            row.setdefault("id", max((r.get("id", 0) for r in self.rows), default=0) + 1)
         if self.name in ("emissary_users", "emissary_emissaries",
                          "emissary_auth_tokens") and "id" not in row:
             row["id"] = str(uuid.uuid4())

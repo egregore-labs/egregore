@@ -76,7 +76,6 @@ function adapt(sourceSpec) {
     ["Codex-native", "Pi-native"],
     ["Codex sessions", "Pi sessions"],
     ["On Codex", "On Pi"],
-    ["Codex has no", "Pi has no built-in"],
     ["bin/codex-session-start.sh", "bin/pi-session-start.sh"],
     [".codex/hooks/branch-guard.js", ".pi/extensions/egregore.ts"],
     ["PreToolUse hook (launcher `--enable hooks`)", "`tool_call` gate (loaded after Pi project trust)"],
@@ -128,7 +127,7 @@ if (check) {
   const currentOutput = fs.existsSync(OUTPUT) ? fs.readFileSync(OUTPUT, "utf8") : "";
   const currentManifest = fs.existsSync(MANIFEST) ? fs.readFileSync(MANIFEST, "utf8") : "";
   if (currentOutput !== rendered || currentManifest !== manifest) {
-    console.error("pi spec out of date — run: node bin/pi-render-spec.mjs");
+    console.error("pi spec out of date — run: bash bin/node-run.sh bin/pi-render-spec.mjs");
     process.exit(1);
   }
   console.log("pi spec up to date");

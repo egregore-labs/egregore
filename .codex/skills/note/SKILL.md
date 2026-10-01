@@ -1,14 +1,14 @@
 ---
 name: note
-description: 'Use when the user says ''jot this down'', ''note to self'', ''just thinking out loud'', or ''park this thought'' — saves a private personal note, never shared or pushed until explicitly promoted.'
+description: 'Use when the user says ''jot this down'', ''note to self'', ''just thinking out loud'', or ''park this thought'' — saves an actor-owned private draft locally and promotes it to organizational knowledge only on an explicit request.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore note Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `note`. Its one
+maintained body is `.claude/skills/note/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

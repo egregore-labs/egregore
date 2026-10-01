@@ -15,14 +15,14 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; [ -n "${2:-}" ] && echo "    $2"; }
 
-echo "Testing: artifact dark mode (PR #556)"
-echo ""
-
 # Ensure deps are present
 if [ ! -d "$PKG_DIR/node_modules/react-dom" ]; then
-  echo "  ⊘ react-dom not installed in $PKG_DIR — skipping"
+  echo "SKIP: artifact dark mode requires react-dom in $PKG_DIR"
   exit 0
 fi
+
+echo "Testing: artifact dark mode (PR #556)"
+echo ""
 
 # --- Fixture ---
 cat > "$TMP/doc.md" << 'MD'
@@ -65,8 +65,18 @@ pass "document renders without error"
 OUT="$TMP/out.html"
 
 # --- 1. Theme scaffolding present ---
-grep -q 'data-theme="light"' "$OUT" && pass "html has data-theme attribute" || fail "missing data-theme"
-grep -q '\[data-theme="dark"\]' "$OUT" && pass "dark mode CSS override block present" || fail "missing dark override"
+if grep -Eq '<html[^>]*data-theme="vellum"' "$OUT" &&
+   grep -Eq '<html[^>]*data-theme-pair="meridian"' "$OUT" &&
+   grep -Eq '<html[^>]*data-theme-mode="auto"' "$OUT"; then
+  pass "document defaults to Meridian vellum in auto mode"
+else
+  fail "missing document theme, pair, or mode attribute"
+fi
+if grep -Fq '[data-theme="vellum"]{' "$OUT" && grep -Fq '[data-theme="nocturne"]{' "$OUT"; then
+  pass "Meridian light and dark palette CSS blocks present"
+else
+  fail "missing vellum or nocturne palette CSS"
+fi
 grep -q 'eg-theme-toggle' "$OUT" && pass "theme toggle button present" || fail "missing toggle button"
 grep -q 'eg-theme-mode' "$OUT" && pass "localStorage key referenced" || fail "missing localStorage persistence"
 grep -q 'prefers-color-scheme' "$OUT" && pass "OS preference detection present" || fail "missing prefers-color-scheme"

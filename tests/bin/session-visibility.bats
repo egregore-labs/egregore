@@ -11,6 +11,7 @@ setup() {
   # Copy bin/ scripts into test env
   cp -r "$SCRIPT_DIR/bin/"*.sh "$TEST_ENV/bin/"
   cp -r "$SCRIPT_DIR/bin/lib/" "$TEST_ENV/bin/lib/" 2>/dev/null || true
+  cp -r "$SCRIPT_DIR/egregore_runtime" "$TEST_ENV/egregore_runtime"
 
   # Add display_name to state for dual-identity matching
   jq '. + {"display_name": "tester"}' "$TEST_ENV/.egregore-state.json" > "$TEST_ENV/.egregore-state.json.tmp" \

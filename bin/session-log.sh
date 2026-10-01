@@ -75,8 +75,13 @@ if [ -n "$TRANSCRIPT_PATH" ]; then
   TRANSCRIPT_PATH="${TRANSCRIPT_PATH/#\~/$HOME}"
   TRANSCRIPT_PATH=$(realpath "$TRANSCRIPT_PATH" 2>/dev/null || echo "")
   if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-    STARTED_AT=$(head -1 "$TRANSCRIPT_PATH" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null || echo "")
-    ENDED_AT=$(tail -1 "$TRANSCRIPT_PATH" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null || echo "")
+    # First and last TIMESTAMPED lines. The transcript's first line is often a
+    # `last-prompt` or summary record without a timestamp, and reading only
+    # `head -1` / `tail -1` made every interactive session compute a duration
+    # of zero, trip the empty-session guard below, and lose its capture
+    # (no session record for any member between 2026-08-07 and 2026-09-23).
+    STARTED_AT=$(grep -m1 -o '"timestamp":"20[0-9][0-9]-[^"]*"' "$TRANSCRIPT_PATH" 2>/dev/null | cut -d'"' -f4 || echo "")
+    ENDED_AT=$(grep -o '"timestamp":"20[0-9][0-9]-[^"]*"' "$TRANSCRIPT_PATH" 2>/dev/null | tail -1 | cut -d'"' -f4 || echo "")
   fi
 fi
 

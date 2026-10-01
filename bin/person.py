@@ -104,6 +104,10 @@ def display_slug(value: str) -> str:
 
 
 def atomic_text(path: Path, text: str) -> None:
+    # Worktrees and transient harness clones share personal state through a
+    # symlink to the primary instance. Replace the target, never the link.
+    if path.is_symlink():
+        path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:

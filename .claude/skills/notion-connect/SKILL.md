@@ -66,8 +66,8 @@ If the tools do not appear after login, say:
 
 ### Codex
 
-The Egregore project config already declares the server. If it is absent in an
-older installation:
+Notion is optional and is not registered by a fresh Egregore installation.
+On an explicit connection request, register it if absent, then sign in:
 
 ```bash
 codex mcp get notion >/dev/null 2>&1 || \

@@ -54,19 +54,19 @@ Then the capture gate fires, writeback runs per the verdict, and the **TUI box r
 Body lines: `Q: {question truncated ~55 chars}` · `◆ N primary · ◇ N secondary findings · confidence: {overall}` · `{N} waves · {N} docs read · {N} cited · {N} claims cut in verification`.
 
 Footer after a separator — pick by ACTUAL outcome:
-- Saved, connected, graph writes succeeded: `✓ Saved · graphed · pushed`
-- Saved, local mode — or connected with a failed/offline graph write (add one line: `graph write failed — file is canonical` on capture-time failure): `✓ Saved · pushed`
+- Saved, connected, graph writes succeeded: `✓ Saved · indexed · pushed`
+- Saved, local mode — or connected with a failed/offline graph write (add one line: `Optional relationship index update failed — report saved in memory` on capture-time failure): `✓ Saved · pushed`
 - Skipped: `◦ Not saved — ledger at .egregore/research-runs/`
 
-Then `Visible in /activity.` (saved runs only). The word "graphed" appears ONLY when the artifact upsert call actually returned success.
+Then `Visible in /activity.` (saved runs only). The word "indexed" appears ONLY when the artifact upsert call actually returned success.
 
 **Output the TUI box directly as a code block. Do not narrate or explain it. DO NOT count characters — approximate padding is fine.**
 
 ## Capture gate
 
-One AskUserQuestion, always (unless `--no-capture`, which implies Skip):
+Ask one question, always (unless `--no-capture`, which implies Skip): ask with a structured question when available and permitted in this session; otherwise ask in plain text.
 
-- **Save** (default) — write the report, graph it (connected), push
+- **Save** (default) — write the report, update the optional relationship index when explicitly requested, push
 - **Edit first** — apply the user's edits, then Save
 - **File follow-ups** — for each verified gap: append a 2-3 line stub (`### Open: {gap}` / `Probes that came up empty: {probes}` / `From research run {run-id}`) to the matched quest file — matched = the `--quest` slug if given, else the quest lead most cited in the gap's source claims; no match → offer creating a quest. Gaps about what people think → draft a `/harvest` brief instead. Then re-offer Save/Skip for the report itself (this follow-up branch lives INSIDE the capture gate's dialogue budget)
 - **Skip** — nothing touches `memory/` or the graph; the local ledger is the only residue
@@ -133,7 +133,7 @@ topics: [{3-5 topics}]
    - `PART_OF` → Quest when `--quest` given or quest leads dominated the ledger
    - `BUILDS_ON` → each prior report in `builds_on`
    - **Cross-ref mode, verified claims only**: edges from the new report's Artifact node to each cited artifact — `RELATES_TO {signal_type: relation, confidence, weight, run_id}` for `supports`/`duplicates`/`depends-on`, `TENSION_WITH {signal_type: relation, confidence, weight, run_id}` for `contradicts`/`supersedes` — skeptic-surviving edges only, so the cross-reference web grows with quality control
-   - Progress: `[2/3] ✓ Indexed in knowledge graph ({N} edges)` on success; on failure print nothing here and use the local footer + failure note (omit this line entirely in local mode)
+   - Progress: `[2/3] ✓ Relationship index updated ({N} links)` on success; on failure print nothing here and use the local footer + failure note (omit this line entirely in local mode)
 4. **Auto-save**: full `/save` flow — commit memory repo, push to main (pull-rebase-push with retry); commit any egregore-repo changes, push working branch + PR to develop. Progress: `[3/3] ✓ Auto-saved`.
 5. **Telemetry** per `SKILL.md` §Telemetry.
 

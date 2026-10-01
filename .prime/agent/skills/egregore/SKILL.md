@@ -14,10 +14,17 @@ import egregore
 egregore.search("pricing decision")          # ranked shared-memory recall
 egregore.activity()                          # team activity JSON
 egregore.handoff(to="renc", topic="...", body="...")
-egregore.save(message="Save: topic", topic="topic")
+egregore.save(message="fix(runtime): correct behavior", topic="topic", draft=True)
 egregore.branch("new topic")                 # task branch + worktree
 egregore.notify_plan(recipient="renc", message="...")  # proposal ONLY
 ```
+
+Use `draft=True` while
+implementation or review continues. After local QA and review pass, use
+`draft=False` to push the final changes and mark the PR ready for CI. Omit
+`draft` for normal non-coding auto-merge; omitting it on an existing PR
+preserves that PR's readiness. These choices follow the work's state and do
+not require a separate permission checkpoint.
 
 Ground rules:
 

@@ -7,8 +7,8 @@ description: 'Explain concepts visually using ASCII diagrams, flow charts, table
 
 # Egregore visual-explain Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `visual-explain`. Its one
+maintained body is `.claude/skills/visual-explain/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -28,6 +28,10 @@ reading `.claude/skills/visual-explain/SKILL.md`, reproduce the same visible UX 
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 

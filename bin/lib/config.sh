@@ -104,6 +104,22 @@ _detect_mode() {
   fi
 }
 
+# Whether the optional derived graph projection may be used by compatibility
+# commands. An explicit environment value wins for bounded maintenance/tests.
+# Connected membership alone never enables this optional content projection.
+# Missing, malformed, and non-boolean configuration all remain disabled.
+_graph_projection_enabled() {
+  case "${EGREGORE_GRAPH_PROJECTION:-}" in
+    1|true|enabled) return 0 ;;
+    0|false|disabled) return 1 ;;
+  esac
+
+  local config="${CONFIG:-$SCRIPT_DIR/egregore.json}"
+  [ -r "$config" ] || return 1
+  jq -e '.features | type == "object" and .graph_projection == true' \
+    "$config" >/dev/null 2>&1
+}
+
 # Compact runtime identity shared by terminal surfaces. The sigils deliberately
 # distinguish an active hosted connection from the self-contained local mode
 # without implying that local Egregore is unhealthy.

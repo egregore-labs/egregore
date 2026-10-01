@@ -21,7 +21,7 @@ echo
 
 [ -f "$HOOK" ] && pass "memory-refresh.sh exists" || fail "memory-refresh.sh missing"
 [ -x "$HOOK" ] && pass "memory-refresh.sh is executable" || fail "memory-refresh.sh not executable"
-head -1 "$HOOK" | grep -q '^#!/bin/bash' && pass "bash shebang" || fail "bad shebang"
+head -1 "$HOOK" | grep '^#!/usr/bin/env bash' >/dev/null && pass "bash shebang" || fail "bad shebang"
 
 # ── bash 3.2 syntax ───────────────────────────────────────────────
 

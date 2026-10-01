@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Named graph operations — clean interface over raw Cypher.
+# Named operations for the optional hosted index.
 # Keeps implementation details out of the TUI.
 #
 # Usage: bash bin/graph-op.sh <operation> [args...]
+#
+# Session resolution: use the checkout-path receipt
+# ~/.egregore/session-<hash-of-SCRIPT_DIR>.id first, then the shared
+# .egregore-session-id file when the receipt has no usable id.
 #
 # Operations:
 #   mark-read <session-id> [user]     Mark a handoff as read
@@ -14,6 +18,17 @@ set -euo pipefail
 #   resolve-handoffs <user>     Resolve completed explicit implementation lineage
 #   set-topic <session-id> <topic> [branch]
 #                               Set topic (and optionally branch) on a Session node
+#   set-current-topic <topic> [branch]
+#                               set-topic for this session — reads the id from
+#                               the checkout receipt or .egregore-session-id,
+#                               so callers never need a $(cat …) substitution.
+#                               Worktree-isolated Claude Code sessions refuse
+#                               that shape.
+#   create-pr <session-id> <pr-number> <repo> <author> [title]
+#                               Record a PR and link it to its session
+#   record-pr <pr-number> [title]
+#                               create-pr for this session — resolves the session
+#                               id, repository, and author itself
 #   record-focus <session-id> <shown-json> <selected> [dismissed-json]
 #                               Track Focus option selection for adaptive options
 #   merge-person <keep-name> <alias-name>
@@ -31,6 +46,20 @@ set -euo pipefail
 #   complete-harvest <harvest-id> <artifact-path>
 #                               Mark harvest complete and link synthesis artifact
 #   catalog                     List bounded read operations and their contracts
+#   people                      Read every Person's name and github
+#   open-quests                 Read non-closed quests' name, description, status
+#   spirit-context              Read active quests, recent sessions, health signals
+#   spirit-list                 Read active spirits' name, type, cadence
+#   spirit-create --name <name> --type <recurring|watchdog> --purpose <purpose>
+#                 --cadence <cadence> --status <active|suspended> --author <author>
+#                               Create a Spirit (WAL-backed)
+#   spirit-update --name <name> --id <id> --title <title> --metrics <metrics>
+#                               Record a spirit's cycle report (WAL-backed)
+#   register-emissary --id <id> --topic <topic> --kind <kind> --url <url>
+#                     --author <author> --session-id <session-id>
+#                               Index an Emissary and its author/session (WAL-backed)
+#   register-eval-report --id <id> --title <title> --file-path <path> --author <author>
+#                               Index an eval report and its author (WAL-backed)
 #   open-handoffs <user> [limit] Read non-terminal handoffs addressed to a person
 #   pending-questions <user> [limit] Read active question sets awaiting a person
 #   lineage <topic> [limit]     Trace matching sessions, handoffs, implementations,
@@ -41,10 +70,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+resolve_session_id() {
+  local project_hash session_id="" receipt
+  # Match identity.sh's checkout spelling and hash, before the shared fallback
+  # that a later session in another worktree may have overwritten.
+  project_hash="$(printf '%s' "$SCRIPT_DIR" | md5 2>/dev/null || printf '%s' "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1 || true)"
+  if [ -n "$project_hash" ] && [ -n "${HOME:-}" ]; then
+    receipt="$HOME/.egregore/session-${project_hash}.id"
+    if [ -f "$receipt" ]; then
+      session_id="$(tr -cd 'A-Za-z0-9_.-' < "$receipt")"
+    fi
+  fi
+  if [ -z "$session_id" ] && [ -f "$SCRIPT_DIR/.egregore-session-id" ]; then
+    session_id="$(tr -cd 'A-Za-z0-9_.-' < "$SCRIPT_DIR/.egregore-session-id")"
+  fi
+  printf '%s' "$session_id"
+}
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: graph-op.sh <operation> [args...]"
   echo ""
-  echo "Named graph operations — clean interface over raw Cypher."
+  echo "Named operations for the optional hosted index."
   echo ""
   echo "Operations:"
   echo "  mark-read <sid> [user]       Mark handoff as read"
@@ -54,12 +100,22 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "  answer-question <qid>    Mark question set as answered"
   echo "  resolve-handoffs <user>  Resolve completed implementation lineage"
   echo "  set-topic <sid> <topic>  Set topic on a Session node"
+  echo "  set-current-topic <topic> [branch]  set-topic for this session (resolves checkout session id)"
   echo "  merge-person <keep> <alias> Reconcile a Person as a canonical alias"
   echo "  claim-handoff <sid> <ho> Link implementing session to handoff"
   echo "  create-pr <sid> <num> <repo> <author> [title]"
+  echo "  record-pr <pr-number> [title]  create-pr for this session (resolves session, repo, author)"
   echo "  register-artifact <id> <url> <title> <type> <author> <topics> <excerpt>"
+  echo "  register-emissary --id <id> --topic <topic> --kind <kind> --url <url> --author <author> --session-id <session-id>"
+  echo "  register-eval-report --id <id> --title <title> --file-path <path> --author <author>"
+  echo "  spirit-create --name <name> --type <recurring|watchdog> --purpose <purpose> --cadence <cadence> --status <active|suspended> --author <author>"
+  echo "  spirit-update --name <name> --id <id> --title <title> --metrics <metrics>  Record a cycle report"
   echo "  create-harvest / complete-harvest / record-harvest-turn"
   echo "  catalog                        List bounded read operation contracts"
+  echo "  people                      Read every Person's name and github"
+  echo "  open-quests                 Read non-closed quests' name, description, status"
+  echo "  spirit-context              Read active quests, recent sessions, health signals"
+  echo "  spirit-list                 Read active spirits' name, type, cadence"
   echo "  open-handoffs <user> [n]     Read recent non-terminal handoffs"
   echo "  pending-questions <user> [n] Read recent active question sets"
   echo "  lineage <topic> [n]          Trace handoff/implementation/PR evidence"
@@ -70,11 +126,21 @@ fi
 
 GS="$SCRIPT_DIR/bin/graph.sh"
 
+# Named reads are explicit projection requests by definition — they pass the
+# Runtime cutover gate that silences background graph callers.
+export EGREGORE_GRAPH_EXPLICIT=1
+
 OP="${1:-}"
 shift || true
 
 # --- Local mode gate: bail immediately ---
-_MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+# Read the mode explicitly: under set -e a jq failure on a missing config
+# used to end the script with exit 2 and no message.
+if [ ! -f "$SCRIPT_DIR/egregore.json" ]; then
+  echo "graph-op.sh: egregore.json not found at $SCRIPT_DIR — not an Egregore checkout?" >&2
+  exit 2
+fi
+_MODE=$(jq -r '.mode // "connected"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || echo "connected")
 
 # The catalog is static runtime metadata, not a graph read. Keep it available
 # in local mode so every harness can route correctly without opening this file
@@ -116,6 +182,39 @@ if [ "$OP" = "catalog" ]; then
         availability: "connected",
         maxResults: 15,
         evidence: "projected meeting relationships plus canonical file coverage"
+      },
+      {
+        name: "people",
+        intent: "names and GitHub handles for every projected person",
+        usage: "bash bin/graph-op.sh people",
+        availability: "connected",
+        fields: ["name", "github"],
+        evidence: "live graph state"
+      },
+      {
+        name: "open-quests",
+        intent: "names, descriptions and statuses of non-closed quests",
+        usage: "bash bin/graph-op.sh open-quests",
+        availability: "connected",
+        fields: ["name", "description", "status"],
+        evidence: "live graph state"
+      },
+      {
+        name: "spirit-context",
+        intent: "active quests, recent sessions and spirit health signals",
+        usage: "bash bin/graph-op.sh spirit-context",
+        availability: "connected",
+        maxResults: 1,
+        fields: ["context"],
+        evidence: "live graph state"
+      },
+      {
+        name: "spirit-list",
+        intent: "names, types and cadences of active spirits",
+        usage: "bash bin/graph-op.sh spirit-list",
+        availability: "connected",
+        fields: ["name", "type", "cadence"],
+        evidence: "live graph state"
       }
     ]
   }'
@@ -238,7 +337,179 @@ memory_file_candidates_for_terms() {
   printf '%s\n' "$combined"
 }
 
+named_usage_error() {
+  echo "$OP: $1" >&2
+  echo "Usage: graph-op.sh $OP $NAMED_USAGE" >&2
+  exit 2
+}
+
+# New flag-based writes share strict field parsing. Values remain data in the
+# parameter object; no caller-provided text is interpolated into Cypher.
+parse_named_fields() {
+  local expected="$1" allow_empty="$2" field value
+  shift 2
+  NAMED_PARAMS='{}'
+  while [ "$#" -gt 0 ]; do
+    field="$1"
+    case " $expected " in
+      *" $field "*) ;;
+      *) named_usage_error "unknown argument: $field" ;;
+    esac
+    [ "$#" -ge 2 ] || named_usage_error "missing value for $field"
+    value="$2"
+    if [ -z "$value" ]; then
+      case " $allow_empty " in
+        *" $field "*) ;;
+        *) named_usage_error "empty value for $field" ;;
+      esac
+    fi
+    case "$value" in --*) named_usage_error "missing value for $field" ;; esac
+    if jq -e --arg field "${field#--}" 'has($field)' <<< "$NAMED_PARAMS" >/dev/null; then
+      named_usage_error "duplicate argument: $field"
+    fi
+    NAMED_PARAMS="$(jq -c --arg field "${field#--}" --arg value "$value" '. + {($field): $value}' <<< "$NAMED_PARAMS")"
+    shift 2
+  done
+  for field in $expected; do
+    jq -e --arg field "${field#--}" 'has($field)' <<< "$NAMED_PARAMS" >/dev/null \
+      || named_usage_error "missing required argument: $field"
+  done
+}
+
 case "$OP" in
+
+  people)
+    NAMED_USAGE=""
+    [ "$#" -eq 0 ] || named_usage_error "this read takes no arguments"
+    bash "$GS" query "
+      MATCH (p:Person)
+      RETURN p.name AS name, p.github AS github
+      ORDER BY name, github
+    " '{}'
+    ;;
+
+  open-quests)
+    NAMED_USAGE=""
+    [ "$#" -eq 0 ] || named_usage_error "this read takes no arguments"
+    bash "$GS" query "
+      MATCH (q:Quest)
+      WHERE q.status <> 'closed'
+      RETURN q.name AS name, q.description AS description, q.status AS status
+      ORDER BY name
+    " '{}'
+    ;;
+
+  spirit-context)
+    NAMED_USAGE=""
+    [ "$#" -eq 0 ] || named_usage_error "this read takes no arguments"
+    bash "$GS" query "
+      CALL {
+        MATCH (q:Quest)
+        WHERE q.status IN ['active', 'in-progress']
+        WITH q ORDER BY q.id LIMIT 10
+        RETURN collect({id: q.id, title: q.title}) AS activeQuests
+      }
+      CALL {
+        MATCH (s:Session)-[:BY]->(p:Person)
+        WITH s, p ORDER BY s.date DESC, s.id, p.name LIMIT 5
+        RETURN collect({topic: s.topic, name: p.name, date: toString(s.date)}) AS recentSessions
+      }
+      CALL {
+        MATCH (sp:Spirit)
+        WITH sp ORDER BY sp.name LIMIT 10
+        RETURN collect({name: sp.name, type: sp.type, status: sp.status}) AS healthSignals
+      }
+      RETURN {activeQuests: activeQuests, recentSessions: recentSessions,
+              healthSignals: healthSignals} AS context
+    " '{}'
+    ;;
+
+  spirit-list)
+    NAMED_USAGE=""
+    [ "$#" -eq 0 ] || named_usage_error "this read takes no arguments"
+    bash "$GS" query "
+      MATCH (sp:Spirit {status: 'active'})
+      RETURN sp.name AS name, sp.type AS type, sp.cadence AS cadence
+      ORDER BY name
+    " '{}'
+    ;;
+
+  spirit-create)
+    NAMED_USAGE="--name <name> --type <recurring|watchdog> --purpose <purpose> --cadence <cadence> --status <active|suspended> --author <author>"
+    parse_named_fields "--name --type --purpose --cadence --status --author" "" "$@"
+    jq -e '.type == "recurring" or .type == "watchdog"' <<< "$NAMED_PARAMS" >/dev/null \
+      || named_usage_error "type must be recurring or watchdog"
+    jq -e '.status == "active" or .status == "suspended"' <<< "$NAMED_PARAMS" >/dev/null \
+      || named_usage_error "status must be active or suspended"
+    CYPHER="
+      MERGE (sp:Spirit {name: \$name})
+      SET sp.type = \$type, sp.purpose = \$purpose, sp.cadence = \$cadence,
+          sp.status = \$status, sp.createdAt = datetime(), sp.createdBy = \$author,
+          sp.version = 1
+      RETURN sp.name AS name
+    "
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$NAMED_PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$NAMED_PARAMS"
+    ;;
+
+  spirit-update)
+    # The cycle update records the report; it does not mutate Spirit settings.
+    NAMED_USAGE="--name <name> --id <id> --title <title> --metrics <metrics>"
+    parse_named_fields "--name --id --title --metrics" "" "$@"
+    CYPHER="
+      MATCH (sp:Spirit {name: \$name})
+      MERGE (lr:Artifact {id: \$id})
+      ON CREATE SET lr.type = 'loop-report', lr.title = \$title,
+          lr.created = date(), lr.origin = 'spirit', lr.metrics = \$metrics
+      MERGE (lr)-[:GENERATED_BY]->(sp)
+      RETURN lr.id AS id
+    "
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$NAMED_PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$NAMED_PARAMS"
+    ;;
+
+  register-emissary)
+    NAMED_USAGE="--id <id> --topic <topic> --kind <kind> --url <url> --author <author> --session-id <session-id>"
+    parse_named_fields "--id --topic --kind --url --author --session-id" "--session-id" "$@"
+    jq -e '.url | test("^https?://[^/[:space:]]+")' <<< "$NAMED_PARAMS" >/dev/null \
+      || named_usage_error "url must be an http or https URL"
+    PARAMS="$(jq -c '{emissaryId: .id, topic, kind, url, author, sessionId: .["session-id"]}' <<< "$NAMED_PARAMS")"
+    CYPHER="
+      MERGE (e:Emissary {id: \$emissaryId})
+      ON CREATE SET e.created = datetime(), e.topic = \$topic, e.kind = \$kind, e.url = \$url
+      WITH e
+      MATCH (p:Person {github: \$author})
+      MERGE (p)-[:SENT_EMISSARY]->(e)
+      WITH e
+      OPTIONAL MATCH (s:Session {id: \$sessionId})
+      WHERE \$sessionId <> ''
+      FOREACH (_ IN CASE WHEN s IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (s)-[:PRODUCED]->(e))
+      RETURN e.id AS id
+    "
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$PARAMS"
+    ;;
+
+  register-eval-report)
+    NAMED_USAGE="--id <id> --title <title> --file-path <path> --author <author>"
+    parse_named_fields "--id --title --file-path --author" "" "$@"
+    jq -e '.["file-path"] | (startswith("/") | not) and (split("/") | index("..") | not)' <<< "$NAMED_PARAMS" >/dev/null \
+      || named_usage_error "file-path must be a relative path without parent traversal"
+    PARAMS="$(jq -c '{id, title, filePath: .["file-path"], author}' <<< "$NAMED_PARAMS")"
+    CYPHER="
+      MERGE (a:Artifact {id: \$id})
+      SET a.title = \$title, a.type = 'eval-report', a.filePath = \$filePath,
+          a.created = datetime()
+      WITH a
+      OPTIONAL MATCH (p:Person {name: \$author})
+      FOREACH (_ IN CASE WHEN p IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (a)-[:CONTRIBUTED_BY]->(p))
+      RETURN a.id AS id
+    "
+    bash "$SCRIPT_DIR/bin/graph-wal.sh" append "$CYPHER" "$PARAMS" 2>/dev/null || true
+    bash "$GS" query "$CYPHER" "$PARAMS"
+    ;;
 
   mark-read)
     SID="${1:?missing session-id}"
@@ -377,6 +648,19 @@ case "$OP" in
         RETURN s.id AS id, s.topic AS topic
       " "$(jq -n --arg sid "$SID" --arg topic "$TOPIC" '{sid: $sid, topic: $topic}')"
     fi
+    ;;
+
+  set-current-topic)
+    # Same write as set-topic, preferring this checkout's session receipt.
+    # No session id (launcher-less shell) is a no-op.
+    TOPIC="${1:?missing topic}"
+    BRANCH="${2:-}"
+    SID="$(resolve_session_id)"
+    if [ -z "$SID" ]; then
+      echo "set-current-topic: no .egregore-session-id — nothing to update" >&2
+      exit 0
+    fi
+    exec bash "$0" set-topic "$SID" "$TOPIC" "$BRANCH"
     ;;
 
   record-focus)
@@ -569,11 +853,28 @@ case "$OP" in
     " "$(jq -n --arg sid "$SID" '{sid:$sid}')"
     ;;
 
+  record-pr)
+    PR_NUM="${1:-}"
+    TITLE="${2:-}"
+    if [[ ! "$PR_NUM" =~ ^[0-9]+$ ]]; then
+      echo "record-pr: pr-number must be numeric" >&2
+      exit 2
+    fi
+    SID="$(resolve_session_id)"
+    if [ -z "$SID" ]; then
+      echo "record-pr: no .egregore-session-id — nothing to record" >&2
+      exit 0
+    fi
+    REPO="$(jq -r '.repo_name // "egregore"' "$SCRIPT_DIR/egregore.json" 2>/dev/null || printf '%s' 'egregore')"
+    AUTHOR="$(jq -r '.github_username // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null || true)"
+    exec bash "$0" create-pr "$SID" "$PR_NUM" "$REPO" "$AUTHOR" "$TITLE"
+    ;;
+
   create-pr)
     SID="${1:?missing session-id}"
     PR_NUM="${2:?missing pr-number}"
     REPO="${3:?missing repo}"
-    AUTHOR_GH="${4:?missing author-github}"
+    AUTHOR_GH="${4?missing author-github}"
     TITLE="${5:-}"
     CYPHER="
       MERGE (pr:PR {number: toInteger(\$num), repo: \$repo})
@@ -1095,7 +1396,7 @@ case "$OP" in
     ;;
 
   *)
-    echo '{"error":"unknown operation: '"$OP"'","operations":["catalog","mark-read","mark-done","mark-expired","reopen-handoff","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","claim-handoff-nudge","mark-handoff-nudged","release-handoff-nudge","check-implements","create-pr","update-pr","my-merged-prs","my-implemented-handoffs","open-handoffs","pending-questions","lineage","meeting-history","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest"]}'
+    echo '{"error":"unknown operation: '"$OP"'","operations":["catalog","people","open-quests","spirit-context","spirit-list","spirit-create","spirit-update","register-emissary","register-eval-report","register-artifact","mark-read","mark-done","mark-expired","reopen-handoff","answer-question","resolve-handoffs","set-topic","record-focus","merge-person","claim-handoff","claim-handoff-nudge","mark-handoff-nudged","release-handoff-nudge","check-implements","create-pr","record-pr","update-pr","my-merged-prs","my-implemented-handoffs","open-handoffs","pending-questions","lineage","meeting-history","wal-status","create-harvest","create-harvest-session","record-harvest-turn","complete-harvest"]}'
     exit 1
     ;;
 

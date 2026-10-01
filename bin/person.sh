@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +vx
+umask 077
 
-# One identity spine for .egregore-state.json, memory/people, Supabase, and
-# Neo4j. GitHub's numeric id is the durable key when available.
+# Provider-independent identity spine for local state, canonical people files,
+# and the shared control plane. Neo4j is an optional derived projection.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_DIR="$ROOT"
 CONFIG="$ROOT/egregore.json"
 STATE="$ROOT/.egregore-state.json"
 PERSON_PY="$ROOT/bin/person.py"
+export PYTHONSAFEPATH=1 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 # shellcheck source=bin/lib/config.sh
 source "$ROOT/bin/lib/config.sh"
@@ -16,6 +19,13 @@ source "$ROOT/bin/lib/config.sh"
 usage() {
   echo 'usage: bash bin/person.sh {sync|onboard|set-name NAME|set-email EMAIL|show|backfill [--dry-run|--apply] [--include-removed]}' >&2
   exit 2
+}
+
+authorize_identity() {
+  permission="$1"
+  resource="$2"
+  EGREGORE_ROOT="$ROOT" python3 -m egregore_runtime.identity_cli \
+    authorize-self "$permission" "$resource" >/dev/null
 }
 
 remote_config() {
@@ -39,13 +49,21 @@ sync_remote_identity() {
       email,
       emails
     }')"
-    api_result="$(curl -sf "${api_url}/api/user/ensure" \
+    api_result="$(curl -q -sf "${api_url}/api/user/ensure" \
       -H "Authorization: Bearer ${api_key}" \
       -H "Content-Type: application/json" \
       -d "$api_payload" \
       --max-time 10 2>/dev/null || true)"
     api_status="$(printf '%s' "$api_result" | jq -r '.status // "failed"' 2>/dev/null || echo failed)"
     platform_user_id="$(printf '%s' "$api_result" | jq -r '.user_id // empty' 2>/dev/null || true)"
+    if [ "$api_status" = "ok" ]; then
+      if ! printf '%s' "$api_result" | EGREGORE_ROOT="$ROOT" \
+        python3 -m egregore_runtime.identity_cli >/dev/null; then
+        echo 'Identity reconciliation stopped. Resolve the error above, then run bash bin/person.sh sync from this Egregore.' >&2
+        jq -n '{status:"error",supabase:"identity-reconcile-failed",error:"Identity reconciliation did not complete"}'
+        return 1
+      fi
+    fi
   fi
 
   # A removed membership is terminal until an admin explicitly re-invites
@@ -82,8 +100,11 @@ sync_remote_identity() {
     platformUserId:$platformUserId
   }')"
 
-  graph_status="failed"
-  if graph_result="$(bash "$ROOT/bin/graph.sh" query "
+  graph_enabled="${EGREGORE_GRAPH_PROJECTION:-0}"
+  graph_status="disabled"
+  if [ "$graph_enabled" = "1" ]; then
+    graph_status="failed"
+    if graph_result="$(bash "$ROOT/bin/graph.sh" query "
     OPTIONAL MATCH (legacy:Person)
     WHERE NOT coalesce(legacy.kind, '') IN ['external', 'identity_alias']
       AND coalesce(legacy.status, 'active') = 'active'
@@ -140,11 +161,12 @@ sync_remote_identity() {
     MATCH (o:Org {id: \$_org})
     MERGE (p)-[:MEMBER_OF]->(o)
     RETURN p.personId AS personId
-  " "$params" 2>/dev/null)"; then
-    if printf '%s' "$graph_result" | jq -e \
-      --arg personId "$(printf '%s' "$identity" | jq -r .person_id)" \
-      '.values[0][0] == $personId' >/dev/null 2>&1; then
-      graph_status="synced"
+    " "$params" 2>/dev/null)"; then
+      if printf '%s' "$graph_result" | jq -e \
+        --arg personId "$(printf '%s' "$identity" | jq -r .person_id)" \
+        '.values[0][0] == $personId' >/dev/null 2>&1; then
+        graph_status="synced"
+      fi
     fi
   fi
 
@@ -188,7 +210,9 @@ sync_remote_identity() {
 
   status="synced"
   [ "$api_status" = "ok" ] || status="partial"
-  [ "$graph_status" = "synced" ] || status="partial"
+  if [ "$graph_enabled" = "1" ] && [ "$graph_status" != "synced" ]; then
+    status="partial"
+  fi
   printf '%s' "$identity" | jq \
     --arg status "$status" \
     --arg supabase "$api_status" \
@@ -233,7 +257,7 @@ backfill_people() {
     return 1
   fi
   org_slug="$(_config_val slug)"
-  members_result="$(curl -sf "${api_url}/api/org/${org_slug}/members?include_removed=true" \
+  members_result="$(curl -q -sf "${api_url}/api/org/${org_slug}/members?include_removed=true" \
     -H "Authorization: Bearer ${api_key}" \
     --max-time 20 2>/dev/null || true)"
   if ! printf '%s' "$members_result" | jq -e '.members | type == "array"' >/dev/null 2>&1; then
@@ -366,6 +390,7 @@ command="${1:-}"
 [ -n "$command" ] || usage
 
 if [ "$command" = "show" ]; then
+  authorize_identity read "identity:self"
   jq '{
     person_id,
     display_name,
@@ -382,6 +407,7 @@ if [ "$command" = "show" ]; then
 fi
 
 if [ "$command" = "backfill" ]; then
+  authorize_identity administer "identity:roster"
   backfill_people "$@"
   exit $?
 fi
@@ -413,6 +439,13 @@ case "$command" in
   *) usage ;;
 esac
 
+# Bootstrap reconciliation is allowed to establish the first ActorContext;
+# every explicit self-service mutation must authorize before provider lookup,
+# canonical profile writes, control-plane reconciliation, or projection.
+if [ "$command" = "set-name" ] || [ "$command" = "set-email" ]; then
+  authorize_identity administer "identity:self"
+fi
+
 github_args=()
 state_github="$(jq -r '.github_username // empty' "$STATE" 2>/dev/null)"
 if command -v gh >/dev/null 2>&1; then
@@ -437,8 +470,13 @@ fi
 if [ "$(jq -r '.onboarding_complete // false' "$STATE" 2>/dev/null)" = "true" ]; then
   onboard_args=(--onboarded)
 fi
+# macOS still ships Bash 3.2, where expanding an empty array under `set -u`
+# raises "unbound variable". Disable nounset only for this argument expansion;
+# every value remains passed as a separately quoted argument.
+set +u
 identity="$(python3 "$PERSON_PY" sync-local \
   "${display_args[@]}" "${github_args[@]}" "${email_args[@]}" "${onboard_args[@]}")"
+set -u
 
 if [ "$(_detect_mode)" = "local" ]; then
   printf '%s' "$identity" | jq '. + {status:"synced-local",supabase:"unavailable",graph:"unavailable"}'

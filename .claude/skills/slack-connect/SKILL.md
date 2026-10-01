@@ -33,8 +33,11 @@ the token; revoking either cuts Egregore off instantly.
 
 **Works in both modes.** Check which one first:
 ```bash
-MODE=$(jq -r '.mode // "connected"' egregore.json 2>/dev/null)
+bash bin/config-get.sh mode
 ```
+
+Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`.
+
 - **local** — the token stays in the gitignored `.env` on this machine and
   messages go straight from here to Slack. No Egregore server is in the path.
 - **connected** — the token is stored on the org's row so the hosted service
@@ -86,33 +89,62 @@ bottom (or the `/archives/C…` segment of a channel link).
 Validate: must match `^[CG][A-Z0-9]{6,}$`. A `D…` id is a DM — not supported;
 ask for a channel.
 
-Smoke-test the token before persisting anything (no message is sent):
+Write the token they pasted in Step 2 to `.env` (gitignored — never commit)
+before testing it: append one line, `SLACK_BOT_TOKEN=` followed by the pasted
+value, by editing the file directly, never through a shell command, so the
+value does not enter the command log. This is the one place the pasted value
+is written; the smoke test reads it from there instead of taking it as a typed
+argument.
+
+Smoke-test the stored token (no message is sent):
 ```bash
-curl -sS https://slack.com/api/auth.test -H "Authorization: Bearer <TOKEN>"
+bash bin/notify.sh slack-auth-test
 ```
 `"ok":true` proves the token and names the workspace — confirm it is the one
-they expect. `invalid_auth` here means a mispasted or revoked token; fix now,
-not at send time.
+they expect. `invalid_auth` here means a mispasted or revoked token; have them
+paste it again, rewrite the `SLACK_BOT_TOKEN` line in `.env`, and re-run. Fix
+now, not at send time.
 
 ## Step 5: Persist
 
-**Local mode** — token to `.env` (gitignored — never commit), channel to
-`.egregore-state.json` (NOT `egregore.json` — the state file is untracked and
-shared across worktrees):
+**Local mode** — channel to `.egregore-state.json` (NOT `egregore.json` — the
+state file is untracked and shared across worktrees):
+
 ```bash
-printf 'SLACK_BOT_TOKEN=%s\n' '<TOKEN>' >> .env
+mkdir -p tmp
 jq '.slack_channel_id = "<CHANNEL_ID>" | .slack_channel_name = "<#channel-name>"' \
-  .egregore-state.json > .egregore-state.json.tmp && mv .egregore-state.json.tmp .egregore-state.json
+  .egregore-state.json > tmp/slack-connect-state.json
+```
+
+After `jq` succeeds:
+
+```bash
+mv tmp/slack-connect-state.json .egregore-state.json
 ```
 
 **Connected mode** — store on the org so any member's session can deliver:
+
 ```bash
-API_URL=$(jq -r '.api_url' egregore.json)
-KEY=$(grep '^EGREGORE_API_KEY=' .env | cut -d= -f2-)
-curl -sS -X POST "$API_URL/api/org/slack" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"channel_id":"<CHANNEL_ID>","bot_token":"<TOKEN>","channel_name":"<#channel-name>"}'
+mkdir -p tmp
 ```
+
+Only read the response with `jq` after the helper succeeds. If it fails, show
+its error and stop;
+the helper leaves no response file after a failure.
+
+Write the file `tmp/slack-connect-bind.json` with
+`{"channel_id":"<CHANNEL_ID>","bot_token":"<TOKEN>","channel_name":"<#channel-name>"}`,
+substituting the channel details and the token the user pasted. The helper
+reads `EGREGORE_API_KEY` internally.
+
+```bash
+bash bin/api-call.sh POST /api/org/slack --auth egregore --json-file tmp/slack-connect-bind.json --out tmp/slack-connect-bind-response.json
+```
+
+```bash
+jq '.' tmp/slack-connect-bind-response.json
+```
+
 Expect `{"status":"connected", …}`.
 
 ## Step 6: Verify with separate exact notification consent
@@ -120,7 +152,22 @@ Expect `{"status":"connected", …}`.
 Follow `.claude/context/notification-consent.md`. Connecting Slack is not
 consent to send a test message. Prepare after configuration is final:
 ```bash
-PLAN_JSON=$(bash bin/notify.sh plan group "Slack channel connected — this message reached you through Egregore.")
+mkdir -p tmp
+```
+
+```bash
+bash bin/notify.sh plan group "Slack channel connected — this message reached you through Egregore." > tmp/slack-connect-plan.json
+```
+
+```bash
+jq -r '.plan_id, .digest' tmp/slack-connect-plan.json
+```
+
+Use the printed values as `{plan_id}` and `{digest}`, respectively, for the
+notification consent flow. Read the exact preview fields:
+
+```bash
+jq -r '.org, .recipient, .channels, .deliveries, .message' tmp/slack-connect-plan.json
 ```
 
 Show every resolved receiving channel—potentially Telegram, Teams, and

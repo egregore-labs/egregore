@@ -7,8 +7,8 @@
 // same way bin/codex-sync-skills.sh derives skills: deterministic transform,
 // explicit per-section adaptation, manifest of what was adapted or dropped.
 //
-//   node bin/codex-render-spec.mjs            # render AGENTS.md + manifest
-//   node bin/codex-render-spec.mjs --check    # exit 1 if rendered output is stale
+//   bash bin/node-run.sh bin/codex-render-spec.mjs            # render AGENTS.md + manifest
+//   bash bin/node-run.sh bin/codex-render-spec.mjs --check    # exit 1 if rendered output is stale
 //
 // Adaptation rules (the DECIDED option-b translations):
 //   EnterWorktree            -> bin/agent.sh branch / git checkout fallback
@@ -46,83 +46,46 @@ const AGENTS_PREAMBLE = `# Egregore Agent Protocol
 
 > **Runtime precedence — read this first.**
 >
-> **If you are Claude Code** (or any agent that loads \`.claude/\`): **stop here.**
-> Your authoritative instructions are \`CLAUDE.md\` and \`.claude/\`. Follow the
-> SessionStart greeting and the branch-on-first-message rule there. Do **not**
-> follow the startup steps below and do **not** use \`bin/agent.sh\` for work an
-> Egregore skill already covers. This file exists only for runtimes that cannot
-> read \`CLAUDE.md\`.
+> **Claude Code or an agent loading \`.claude/\`: stop here.** Follow
+> \`CLAUDE.md\` and \`.claude/\`, including their greeting and branch rules.
+> Skip startup below; use Egregore skills instead of \`bin/agent.sh\` where covered.
 >
-> **If you are Pi** (the \`pi\` coding-agent harness): **stop here.** Your
-> authoritative Egregore instructions are loaded from
-> \`.pi/APPEND_SYSTEM.md\`, and your workflows are exposed through the
-> project-local \`.pi/\` runtime. Do not follow the Codex-specific block below.
->
-> **If you are Prime Agent** (the \`prime-agent\` harness): **stop here.** Your
-> authoritative Egregore instructions are loaded from
-> \`.prime/agent/APPEND_SYSTEM.md\`, and your workflows are exposed through the
-> project-local \`.prime/agent/\` runtime. Do not follow the Codex-specific
-> block below.
+> **Pi or Prime: stop here.** Follow \`.pi/APPEND_SYSTEM.md\` or
+> \`.prime/agent/APPEND_SYSTEM.md\` and that runtime's workflows, not the Codex block.
 >
 > **If you are Codex or another shell-only agent:** this file is yours — continue.
 
-Egregore is no longer only a Claude Code workspace. Claude Code remains the
-first-class integrated runtime through \`.claude/\` and \`CLAUDE.md\`; any other
-agent that can run shell commands in this checkout participates through the
-portable memory protocol below.
+Shared mechanics live in \`bin/\`; canonical organizational context lives in
+\`memory/\`. The generated contract below governs Codex sessions.
 
 ## Startup
 
-1. Read \`egregore.json\` for the instance name, GitHub owner, and managed repos.
-2. Run \`bin/agent.sh sync\` to pull the latest shared memory.
-3. Read \`memory/people/\` to learn collaborator handles.
-4. Run \`bin/agent.sh activity --for <your-handle>\` to inspect handoffs and
-   pending questions addressed to you.
+**Ordinary recall:** Supplied Runtime guidance or its reminder takes precedence
+over generic skill invocation: use it directly without loading the search skill.
+Explicit skill requests still apply. Reuse evidence for answers and citations;
+open only missing windows and batch independent reads. Stale sources require
+fresh evidence.
+
+Reuse the launcher's startup and actor receipts; do not repeat startup.
+For a direct session without those receipts, read \`egregore.json\` and run
+\`bash bin/codex-session-start.sh\` once. Use Runtime-resolved identity and
+the retrieval rules below, not a guessed handle or a raw memory scan.
 
 ## Communication
 
-Use the runtime-neutral bridge instead of Claude Code slash commands:
-
-\`\`\`bash
-bin/agent.sh branch --topic "auth review"
-bin/agent.sh save --message "Save: auth review" --topic "auth review" \\
-  --pr-body "$PR_BODY"   # body per .claude/context/pr-format.md (auto-skeleton if omitted)
-bin/agent.sh wrap --from alice --topic "auth review" \\
-  --summary "Implemented the OAuth callback parser and documented follow-ups." \\
-  --body "Open threads: review error cases and browser redirects."
-
-bin/agent.sh handoff --from alice --to bob --topic "auth review" \\
-  --body "Implemented the OAuth callback parser. Bob should review error cases."
-
-bin/agent.sh ask --from bob --to alice --topic "auth review" \\
-  --question "Should invalid state redirect to login or return 400?"
-
-bin/agent.sh answer --from alice \\
-  --question memory/knowledge/questions/2026-04-26-bob-to-alice-auth-review.md \\
-  --body "Return 400 in the API path; redirect only in browser routes."
-\`\`\`
-
-Each command writes to the existing Git-backed \`memory/\` repository and pushes
-when the memory repo has an \`origin\` remote. Agents that cannot run shell may
-write the same markdown files directly, following \`docs/AGENT-PROTOCOL.md\`.
+Use installed Egregore skills and shell adapters. Bridge examples and Markdown
+formats: \`docs/AGENT-PROTOCOL.md\`. Follow the generated contract below.
 
 ## Handoffs vs Emissaries
 
-\`bin/agent.sh handoff\` is the runtime-neutral path for internal team
-session-handoffs: it writes to \`memory/handoffs/\`, updates the index, and uses
-the same \`bin/handoff-run.sh\` machinery as Claude Code's \`/handoff\`.
-
-Portable external capsules are **emissaries**, not team handoffs. Claude Code
-routes those through \`/emissary\`; non-Claude agents should use the
-\`egregore-emissary\` CLI/skill when it is installed. Do not use the deprecated
-\`egregore-handoff\` CLI for Egregore project \`/handoff\` work.
+Internal handoffs use \`bin/agent.sh handoff\` (\`memory/handoffs/\` + index,
+via \`bin/handoff-run.sh\`). External capsules use \`egregore-emissary\`.
+Never use deprecated \`egregore-handoff\` for internal handoffs.
 
 ## Compatibility
 
-Claude Code users continue using \`/handoff\`, \`/activity\`, \`/ask\`, \`/save\`, and
-other skills — driven by \`CLAUDE.md\`, not this file. Non-Claude agents use
-\`bin/agent.sh\` and the file protocol, with the full Codex behavioral spec in the
-generated block below. Both paths converge on the same \`memory/\` files.`;
+Claude Code follows \`CLAUDE.md\`; other shell agents use the generated
+contract below. All runtimes share canonical memory.`;
 
 function sha(text) {
   return crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
@@ -157,6 +120,32 @@ function splitSections(markdown) {
 // (public checkouts carry fewer skills than the source repo).
 const NON_SKILL_TOKENS = new Set(['loop', 'fast', 'config', 'clear', 'help']);
 
+// Shell runtimes read tool stdout as the model's evidence channel — the
+// Claude-only --context-packet flag would strand the evidence in a file no
+// hook delivers there. Rewrite the fallback command to the stdout form and
+// state the same hygiene contract in shell terms: search output is
+// model-internal; the visible reply carries only the retrieval line.
+const CLAUDE_PACKET_NOTE = `\`--context-packet\` attaches the evidence privately; the visible output is the
+attribution line alone. Never re-print ranked results or raw JSON.`;
+const SHELL_PACKET_NOTE = `Search output is model-internal: show only the retrieval line and receipts —
+never ranked blocks, file/rank/excerpt metadata, or raw JSON.`;
+
+// The Command Awareness lifecycle bullet is Claude-surface routing prose; on
+// Codex the same typed-lookup routing arrives through the shared hook
+// contract, and the 32 KiB project-doc budget has no room to restate it.
+// Decided 2026-09: drop the bullet from the render rather than ship a stale
+// hand-reverted AGENTS.md.
+const CLAUDE_LIFECYCLE_BULLET_PREFIX = '- Exact lifecycle questions (';
+
+function transformSearchHygiene(body) {
+  return body
+    .split('\n')
+    .filter((line) => !line.startsWith(CLAUDE_LIFECYCLE_BULLET_PREFIX))
+    .join('\n')
+    .replaceAll(CLAUDE_PACKET_NOTE, SHELL_PACKET_NOTE)
+    .replace(/(\bbin\/search\.sh[^\n]*?) --context-packet\b/g, '$1');
+}
+
 function transformTokens(body) {
   const lines = body.split('\n');
   let inFence = false;
@@ -183,9 +172,13 @@ This block is the Codex-native Egregore behavioral spec, rendered from CLAUDE.md
 
 const ON_LAUNCH_BODY = `The \`egregore\` launcher renders the startup card (identity, momentum, pending work) via \`bin/codex-session-start.sh\` before Codex starts and installs project skills. Do not rerun or narrate startup. The card ends with **"What are you working on?"** — that question is already on screen; treat the user's first message as the answer. Re-show with \`bash bin/codex-session-start.sh --card\`.`;
 
-const AFTER_GREETING_BODY = `**Mandatory behavioral rule.** When the user describes work, your **first action** — before reading files, exploring code, or anything else — is to get onto a working branch:
+const AFTER_GREETING_BODY = `**Branch for project changes.** Create a working branch before modifying project
+code, configuration, or documentation. Read-only questions, memory lookups,
+explanations, and reviews stay in the current workspace. Runtime bookkeeping and
+canonical memory writeback need no project branch. Branch if the user subsequently
+authorizes a project change:
 
-The integration branch is \`develop\` unless top-level \`egregore.json.base_branch\` sets another; the configured branch is then the branch point, rebase target, PR base, and protected branch everywhere below.
+Use \`egregore.json.base_branch\` (default \`develop\`) for branch points, rebases, PR bases and protection.
 
 1. Derive a topic slug from what the user said (kebab-case, 2–4 words)
 2. Run \`bin/agent.sh branch --topic "<topic>"\` — it resolves the configured base and creates a work branch from \`origin/{base}\` in a task worktree (\`dev/{author}/{slug}\`, or \`feature/{slug}\` / \`bugfix/{slug}\` when the topic reads as a feature or fix). Continue all file work from the printed path.
@@ -195,11 +188,11 @@ The integration branch is \`develop\` unless top-level \`egregore.json.base_bran
 \`_get_base_branch\`, then use
 \`git checkout --no-track -b dev/{author}/{slug} origin/{base}\`.
 
-4. Update graph (fire-and-forget): \`bash bin/graph-op.sh set-topic "$(cat .egregore-session-id 2>/dev/null)" "topic from slug" "dev/author/slug" 2>/dev/null &\`
+4. Graph topic: \`bin/agent.sh branch\` records the session's topic and branch on the graph itself (it reads \`.egregore-session-id\` for you). Only the git-checkout fallback above needs it by hand — fire-and-forget: \`bash bin/graph-op.sh set-current-topic "topic from slug" "dev/author/slug" 2>/dev/null &\`. Never assemble the session id with a \`$(cat …)\` substitution.
 
 ### Starting-work UX contract
 
-Sequence: **intent → safe workspace → relevant context → consequential assumptions → execution**. Make Egregore's structure legible without turning task starts into a tutorial; keep technical identifiers secondary to user value.
+For project changes: **intent → safe workspace → relevant context → consequential assumptions → execution**.
 
 - **Workspace** — the value-first receipt above, only for a new workspace or topic pivot; do not repeat it on the same branch.
 - **Context** — when organizational retrieval materially informs the work, keep the required Egregore Retrieval Beat plus one compact receipt: \`↳ Context restored: {decision, handoff, or prior work} · {source/date}\`. Never claim context was restored when retrieval found nothing useful.
@@ -208,10 +201,10 @@ Sequence: **intent → safe workspace → relevant context → consequential ass
 
 ### Returning-work UX contract
 
-When the user continues the current branch's work or asks to resume — sequence: **continuation intent → prior workspace → restored context → open threads → resumed execution**:
+For continued project work: **continuation intent → prior workspace → restored context → open threads → resumed execution**:
 
 - Do not create a new workspace for the same topic. After confirming relevance, say: \`I found your previous work on **{topic}** and restored its workspace and context.\` Show \`Workspace: {branch} (worktree).\` secondarily.
-- Retrieve relevant decisions, handoffs, or prior work; keep the Retrieval Beat and \`↳ Context restored:\` receipt. Never claim context was restored from a branch name alone.
+- Interpret continuation from meaning, not fixed phrases. Reuse sufficient \`EGREGORE_ORG_CONTEXT_V1\`; otherwise use \`bash bin/search.sh find\` with an appropriate lookup kind. Batch source reads with search.sh open; use the shared retrieval contract in \`.claude/context/retrieval-investigation.md\`. Keep the Retrieval Beat and \`↳ Context restored:\` receipt. Never infer context from a branch or substitute status dashboards, Git, Graph, or raw memory scans.
 - Name only unresolved items that could change the next move, state the next outcome briefly, and continue without replaying setup.
 
 ### Handoff claiming
@@ -238,13 +231,13 @@ Report \`✓ Checked out {branch} in {repo1}, {repo2}\`; for a merged-away branc
 
 **Exceptions** — skip branching when the user explicitly created or named a branch themselves, or the intent continues the current working branch's topic.
 
-**Topic pivot:** work **unrelated** to the current branch's topic gets a new branch (\`bin/agent.sh branch --topic "<new topic>"\`). Do NOT mix unrelated work on one branch.
+**Topic pivot:** project changes **unrelated** to the current branch's topic gets a new branch (\`bin/agent.sh branch --topic "<new topic>"\`). Do NOT mix unrelated work on one branch.
 
-If still on the configured base branch after two messages, create a branch immediately from whatever context you have.
+Read-only work never triggers branching based on message count.
 
 ### Branch-guard protocol
 
-The \`.codex/hooks/branch-guard.js\` PreToolUse hook (launcher \`--enable hooks\`) protects project writes on the configured base plus \`develop\`/\`main\`/\`master\`. Its block message is operational guidance — do not interrupt the user with routine Git choices:
+The \`.codex/hooks/branch-guard.js\` PreToolUse hook (launcher \`--enable hooks\`) protects project writes on the configured base and \`develop\`/\`main\`/\`master\`. Handle blocks as follows:
 
 - **Topic is clear** → run \`bin/agent.sh branch --topic "<topic>"\` automatically, continue in the printed worktree, and say one short sentence so the change is visible — never ask approval for routine branching.
 - **Topic is genuinely ambiguous** → ask only for the topic, using compact numbered options:
@@ -269,15 +262,15 @@ only for dependencies. Deletion needs no rewrite unless purging secrets.
 
 If the startup card output contains \`onboarding_needed\`, invoke the \`$onboarding\` skill instead of greeting.`;
 
-const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins, so Egregore workflows are **skills**, not slash commands. Invoke them with the matching \`$name\` skill token or from natural language intent ("show activity", "make a handoff"). Hand-written native Codex skills: \`$activity\`, \`$handoff\`, \`$wrap\`, \`$announce\`, \`$harvest\`, \`$the-spiral\`, \`$dashboard\`, \`$deep-reflect\`, \`$quest\`, \`$invite\`, \`$ask\`, \`$save\`, \`$view\`, \`$scroll\`; every other workflow has a generated adapter of the same name. \`$save\` is the user-facing abstraction for committing, pushing, opening or reusing PRs, and syncing memory — never make users manage git by hand.`;
+const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins. Invoke Egregore skills with \`$name\` or natural language ("show activity", "make a handoff"). Every framework workflow uses a generated adapter that names its one maintained body under \`.claude/skills/\`. Organization-owned skills may also provide full native implementations. \`$save\` covers committing, pushing, pull requests, and memory sync; users need not manage Git themselves.`;
 
 const SOCRATIC_BODY = `**Triggers**: "ask me questions", "question me", "help me think through", or any request to be questioned.
 
-Codex has no structured question tool — render each batch as compact numbered questions in plain text, each with 2–4 lettered options plus an \`Other:\` line, then STOP and wait for the user's answers. Derive 2–4 context-specific questions per batch. Iteratively deepen based on answers. Converge toward decisions. After 4–5 rounds, synthesize and propose next steps. Route insights to \`$reflect\`.
+Use structured question tooling when available and permitted; otherwise render compact numbered questions with 2–4 lettered options and an \`Other:\` line. Wait for answers before dependent work. Derive 2–4 context-specific questions per batch within the tool's limits. Deepen from the answers and converge toward decisions. After 4–5 rounds, synthesize next steps. Route insights to \`$reflect\`.
 
 **Rules:** Max 4 questions per batch. When choices aren't mutually exclusive, say "pick any that apply".`;
 
-const LOOM_ROUTING_BODY = `Loom routes commands across model tiers on the Claude Code runtime (\`loom/routes.json\` + \`bin/loom.sh\` + a model-pinned executor subagent). Codex has no subagent delegation — commands run inline. Ignore "Loom routing" preambles in skill specs and skip \`bin/loom.sh\` calls; \`loom/\` and \`.claude/agents/\` are Claude-runtime framework files.`;
+const LOOM_ROUTING_BODY = `Loom is Claude-specific; skip its preambles and \`bin/loom.sh\` calls. Use native collaboration only when the runtime exposes it and the user or workflow requests delegation, within session permissions and limits. Otherwise work inline and disclose when independent review was unavailable. \`loom/\` and \`.claude/agents/\` remain Claude framework files.`;
 
 const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. On Codex the boundary is a standing instruction, not an enforced hook — hold it yourself.
 
@@ -321,13 +314,16 @@ const RULES = {
     body: ON_LAUNCH_BODY,
     note: 'Claude SessionStart hook does not run on Codex; the egregore launcher renders the card via bin/codex-session-start.sh before the session. Greeting-replay instruction dropped (card is already on screen).',
   },
-  'After Greeting — BRANCH ON FIRST RESPONSE': {
+  'Before Project Changes — WORKING BRANCH': {
     action: 'replace',
     body: AFTER_GREETING_BODY,
     note: 'EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout bash kept verbatim (pure git); surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained.',
   },
   'Config Files': { action: 'keep', note: 'Kept verbatim — shell facts, runtime-neutral.' },
-  'Knowledge Graph': { action: 'keep', note: 'Kept verbatim — bin/graph.sh is runtime-neutral.' },
+  'Optional Knowledge Graph Projection': {
+    action: 'keep',
+    note: 'Kept verbatim — graph traversal remains an explicit optional adapter and canonical evidence wins.',
+  },
   'Egregore Retrieval Beat': { action: 'keep', note: 'Kept verbatim — product attribution applies across runtimes.' },
   'Notifications': { action: 'keep', note: 'Kept verbatim — bin/notify.sh is runtime-neutral.' },
   'Onboarding': { action: 'keep', note: 'Kept; /onboarding rendered as $onboarding.' },
@@ -336,7 +332,7 @@ const RULES = {
   'Loom Routing': {
     action: 'replace',
     body: LOOM_ROUTING_BODY,
-    note: 'Loom delegation rides the Claude Code Agent tool; Codex has no subagent delegation — commands run inline. Preambles and bin/loom.sh calls marked skippable.',
+    note: 'Native collaboration is conditional on exposed capabilities, workflow intent, and session permissions. Claude-only Loom calls stay excluded; inline fallback reports lost independence.',
   },
   'Git Workflow': {
     action: 'keep',
@@ -346,12 +342,12 @@ const RULES = {
   'Command Awareness': {
     action: 'keep',
     prepend: COMMAND_AWARENESS_PREPEND,
-    note: 'Prepended the Codex command surface (skill tokens, native vs adapter split, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is.',
+    note: 'Prepended the Codex command surface (skill tokens, canonical workflow adapters, org-owned native support, $save abstraction); disambiguation map kept with /x -> $x token rendering. Tokens with no Codex skill (e.g. /loop, a Claude Code harness feature) are left as-is.',
   },
   'Socratic Questioning (MANDATORY)': {
     action: 'replace',
     body: SOCRATIC_BODY,
-    note: 'AskUserQuestion -> numbered plain-text question batches with explicit stop-and-wait; multiSelect -> "pick any that apply".',
+    note: 'Use permitted structured question tools when exposed, with a numbered plain-text fallback; dependent work waits for answers.',
   },
   'Telemetry': { action: 'keep', note: 'Kept verbatim — bin/telemetry.sh is runtime-neutral.' },
   'Mode': { action: 'keep', note: 'Kept; /env and /checkup rendered as $skill tokens.' },
@@ -384,7 +380,7 @@ function render() {
     if (rule.action === 'replace') {
       body = rule.body;
     } else {
-      body = transformTokens(section.body);
+      body = transformSearchHygiene(transformTokens(section.body));
       if (rule.prepend) body = `${rule.prepend}\n\n${body}`;
     }
     parts.push(`${heading}\n\n${body}`);
@@ -426,7 +422,7 @@ if (check) {
   const currentManifest = fs.existsSync(MANIFEST) ? fs.readFileSync(MANIFEST, 'utf-8') : '';
   const stale = nextAgents !== currentAgents || manifestJson !== currentManifest;
   if (stale) {
-    console.error('codex spec out of date — run: node bin/codex-render-spec.mjs');
+    console.error('codex spec out of date — run: bash bin/node-run.sh bin/codex-render-spec.mjs');
     process.exit(1);
   }
   console.log('codex spec up to date');

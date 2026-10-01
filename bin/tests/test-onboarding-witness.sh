@@ -34,13 +34,13 @@ auto_heal() {
     if [ -f "$PEOPLE_FILE" ]; then
       if grep -q '^Onboarded:' "$PEOPLE_FILE" 2>/dev/null; then
         WITNESSED="true"
-      elif head -1 "$PEOPLE_FILE" 2>/dev/null | grep -q '^# '; then
+      elif head -1 "$PEOPLE_FILE" 2>/dev/null | grep '^# ' >/dev/null; then
         WITNESSED="true"
       fi
     fi
     if [ "$WITNESSED" != "true" ] && [ -n "$DISPLAY_NAME_STATE" ] && [ -f "$SCRIPT_DIR/egregore.md" ]; then
       sed -n '/^## Members/,/^## /p' "$SCRIPT_DIR/egregore.md" 2>/dev/null \
-        | grep -qx "### ${DISPLAY_NAME_STATE}" && WITNESSED="true"
+        | grep -x "### ${DISPLAY_NAME_STATE}" >/dev/null && WITNESSED="true"
     fi
     if [ "$WITNESSED" = "true" ] && [ -f "$STATE_FILE" ]; then
       jq '.onboarding_complete = true | .onboarding.phase = "complete"' "$STATE_FILE" > "$STATE_FILE.tmp" \

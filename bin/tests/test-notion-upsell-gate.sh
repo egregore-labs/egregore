@@ -44,10 +44,11 @@ for f in ".claude/skills/teams-connect/SKILL.md"; do
     fail "$f: upgrade path or decline stop missing"
   fi
 
-  # 4. The gate's tier predicate states the CANONICAL truth table:
-  #    local iff mode=="local" OR api_url empty (matches _detect_mode).
-  if grep -q '`MODE` is `local` \*\*or\*\* `API_URL` is empty' "$ROOT/$f"; then
-    pass "$f: tier predicate matches canonical _detect_mode"
+  # 4. The gate reads canonical mode and branches on its printed value.
+  if grep -Fq 'bash bin/config-get.sh mode' "$ROOT/$f" \
+    && grep -Fq 'If it prints `local`' "$ROOT/$f" \
+    && grep -Fq 'if it prints `connected`, continue with setup.' "$ROOT/$f"; then
+    pass "$f: tier gate uses the printed canonical mode"
   else
     fail "$f: tier predicate drifted from canonical mode detection"
   fi

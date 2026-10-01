@@ -16,9 +16,9 @@ Not this: "/pr" (create a PR), "/test" (validate local changes)
 
 **CRITICAL: Suppress raw output.** Never show raw JSON, raw diffs, or unformatted gh output. All output should be structured assessment.
 
-**Use Agent tool for diff review.** Each PR gets its own background agent for parallel analysis. The agent fetches the diff, analyzes it, and returns a structured verdict.
+**For diff review, delegate to a subagent when available and permitted in this session; otherwise do it inline.** When delegation is available and permitted in this session, each PR gets its own background subagent for parallel analysis. In either case, fetch the diff, analyze it, and return a structured verdict.
 
-**Auth:** All `gh` commands need: `GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' .env | cut -d'=' -f2-)`
+**Auth:** Run every `gh` command through `bash bin/gh-run.sh`; the helper reads and trims `GITHUB_TOKEN` from the project's `.env` and passes it directly to the child environment when nonempty, otherwise preserving the existing login. Never read, print, or type the secret.
 
 ## Step 0: Determine scope
 
@@ -30,41 +30,68 @@ Parse `$ARGUMENTS`:
 
 Get org/repo:
 ```bash
-GITHUB_ORG=$(jq -r '.github_org' egregore.json)
-REPO_NAME=$(jq -r '.repo_name // "egregore"' egregore.json)
+bash bin/config-get.sh github_org
 ```
+
+Read the configured repository name:
+
+```bash
+bash bin/config-get.sh repo_name
+```
+
+Use each printed value as `{github_org}` or `{repo_name}` below; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`.
 
 ## Step 1: Fetch PR metadata
 
 ### Single PR
+Use `{pr_number}` from the command's arguments or the selected PR metadata, and `{github_org}` and `{repo_name}` from configuration:
 ```bash
-GITHUB_TOKEN=$TOKEN gh pr view $PR_NUM --json title,author,additions,deletions,changedFiles,headRefName,body,createdAt,state --repo $GITHUB_ORG/$REPO_NAME
+bash bin/gh-run.sh pr view '{pr_number}' --json title,author,additions,deletions,changedFiles,headRefName,body,createdAt,state --repo '{github_org}/{repo_name}'
 ```
 
 ### Multiple PRs (author or --all)
+Use `{github_org}` and `{repo_name}` from configuration with the credential helper:
 ```bash
-GITHUB_TOKEN=$TOKEN gh pr list --state open --json number,title,author,additions,deletions,changedFiles,headRefName,createdAt --limit 50 --repo $GITHUB_ORG/$REPO_NAME
+bash bin/gh-run.sh pr list --state open --json number,title,author,additions,deletions,changedFiles,headRefName,createdAt --limit 50 --repo '{github_org}/{repo_name}'
 ```
 
 Filter by author login if specified.
 
 ## Step 2: For each PR, run the 10-point checklist
 
-Launch an Agent (subagent_type: general-purpose) per PR for parallel review. Give each agent:
+Delegate each PR to a subagent when available and permitted in this session, using general-purpose subagents and running reviews in parallel when available and permitted in this session; otherwise review each PR inline. Use this same review context for each PR:
 1. The PR number
 2. The repo
-3. The GITHUB_TOKEN retrieval command
+3. The requirement to invoke `gh` through `bash bin/gh-run.sh` from this checkout
 4. The full checklist below
 
 ### The 10-Point CTO Checklist
 
-Each agent must fetch the diff (`gh pr diff $PR_NUM`) and evaluate:
+Each review must fetch the diff through `bash bin/gh-run.sh pr diff '{pr_number}'`, using the selected PR number, and evaluate:
 
 #### 1. Does it actually work?
 - Check that all imports reference functions/modules that exist
 - Check that Cypher syntax is valid (balanced parentheses, proper MATCH/RETURN/WHERE structure)
 - Check that shell scripts use correct flags for the target platform (e.g. `base64 -d` vs `-D` on macOS)
 - Check that referenced files/scripts actually exist in the codebase (e.g. `bin/graph-batch.sh`, `bin/graph-op.sh`)
+
+For an Egregore framework PR, inspect affected skill instructions as part of
+this check. Use an isolated checkout at the PR's exact head SHA with its base
+ref available; do not switch the user's working branch or mix their unsaved
+changes into the review. Run the existing development engine against that
+checkout, using `{pr_checkout}` for its absolute path and `{pr_base_ref}` for that PR's available base ref:
+
+```bash
+bash bin/node-run.sh bin/capability-distribution.mjs skill-references \
+  --root '{pr_checkout}' --changed --base '{pr_base_ref}' --branch-only --review
+```
+
+The receipt names consuming skills and their maintained instruction paths,
+including native runtime resources. Open the relevant instructions and check
+whether they still describe the changed behavior. This is direct-reference
+coverage, not proof of transitive dependency completeness. Report a missing
+base or unavailable engine as a coverage gap. The receipt is advisory and
+adds no approval checkpoint; include actual findings in the existing verdict.
 
 #### 2. Side effects on shared state
 - Does it modify `.claude/settings.json`? (hook changes affect every session)
@@ -119,7 +146,7 @@ Each agent must fetch the diff (`gh pr diff $PR_NUM`) and evaluate:
 
 ### Agent output format
 
-Each agent must return a structured assessment:
+Each review must return a structured assessment:
 
 ```
 PR: #NNN — Title
@@ -149,7 +176,7 @@ VERDICT: MERGE / FIX THEN MERGE / NEEDS WORK / REJECT
 
 ## Step 3: Compile results
 
-Wait for all agents to complete. Sort PRs into tiers:
+Wait for all delegated or inline reviews to complete. Sort PRs into tiers:
 
 ### Tier classification
 
@@ -211,7 +238,7 @@ If multiple PRs touch the same files:
 │    #185  Rewrite /meeting                   +586/-734  LOW    MERGE  │
 │                                                                      │
 │  TIER 2 — FIX THEN MERGE                                            │
-│    #266  PR graph nodes                     +167/-7    MED    FIX    │
+│    #266  PR linkage                         +167/-7    MED    FIX    │
 │          → Cypher bug: LIMIT before SKIP                             │
 │    #265  /summon command                    +207/-0    LOW    FIX    │
 │          → Missing schema declaration                                │
@@ -248,9 +275,9 @@ After showing the summary, offer:
 
 ## Merge execution (when user confirms)
 
-For each PR to merge:
+For each PR the user confirmed for merging, use its metadata number as `{pr_number}` and the configured `{github_org}` and `{repo_name}`:
 ```bash
-GITHUB_TOKEN=$TOKEN gh pr merge $PR_NUM --merge --repo $GITHUB_ORG/$REPO_NAME
+bash bin/gh-run.sh pr merge '{pr_number}' --merge --repo '{github_org}/{repo_name}'
 ```
 
 After merge, update local develop:
@@ -258,9 +285,9 @@ After merge, update local develop:
 git fetch origin develop --quiet
 ```
 
-For PRs to close (superseded):
+For PRs confirmed for closure as superseded, use their metadata number as `{pr_number}`, the superseding PR number as `{superseding_pr_number}`, and the configured `{github_org}` and `{repo_name}`:
 ```bash
-GITHUB_TOKEN=$TOKEN gh pr close $PR_NUM --comment "Superseded by #NNN" --repo $GITHUB_ORG/$REPO_NAME
+bash bin/gh-run.sh pr close '{pr_number}' --comment 'Superseded by #{superseding_pr_number}' --repo '{github_org}/{repo_name}'
 ```
 
 ## Edge cases

@@ -1,67 +1,29 @@
 ---
 name: announce
-description: Draft, confirm, and send an Egregore group announcement from Codex when the user invokes /announce or $announce.
+description: 'Draft, preview, and explicitly send an Egregore group announcement. Use for /announce, telling the team something, or notifying everyone—not a direct message or structured handoff.'
 ---
 
-# Egregore Announce
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. Use this to send concise team announcements
-through the existing Egregore notification path.
+# Egregore announce Adapter
 
-## Flow
+This adapter runs the canonical Egregore workflow for `announce`. Its one
+maintained body is `.claude/skills/announce/SKILL.md`; read that file completely and follow it here.
 
-1. Draft a message from the user request and current context. Keep it under
-   500 characters unless the user provided exact text.
-2. If the announcement references a memory artifact, publish it first and add
-   the returned URL only when publication succeeds:
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-```bash
-bash bin/publish-artifact.sh document "$FILE_PATH" --title "$TITLE" --author "$AUTHOR" --description "$DESCRIPTION"
-```
-
-Use `handoff`, `quest`, or `document` as the artifact type when appropriate.
-Never fabricate a URL.
-
-3. Follow `.claude/context/notification-consent.md`. Create a plan without
-   sending:
-
-```bash
-PLAN_JSON=$(bash bin/notify.sh plan group "$MESSAGE")
-```
-
-4. Preview the plan's exact organization, all deliveries/channels, and exact
-   final message. Confirm in a separate checkpoint with structured Codex
-   question tooling when available; otherwise render those fields followed by:
-
-```text
-Send this announcement?
-1. Send
-2. Edit
-3. Cancel
-```
-
-5. If the user edits, cancel the old plan, redraft, plan, and preview again.
-   If they cancel, cancel the plan and stop. Only after they select Send for
-   that exact preview, run:
-
-```bash
-APPROVAL_JSON=$(bash bin/notify.sh approve "$PLAN_ID" "$DIGEST" APPROVE_EXACT_NOTIFICATION)
-APPROVAL_TOKEN=$(printf '%s' "$APPROVAL_JSON" | jq -r '.approval_token')
-bash bin/notify.sh dispatch "$PLAN_ID" "$APPROVAL_TOKEN"
-```
-
-6. Emit telemetry in the background:
-
-```bash
-bash bin/telemetry.sh emit "command" '{"command":"announce"}' >/dev/null 2>&1 &
-```
-
-7. Confirm whether the exact approved group send succeeded.
-
-## Rules
-
-- The request to announce is not dispatch consent. Always use a dedicated
-  exact-delivery checkpoint.
-- Do not expose notification credentials.
-- Use `bin/notify.sh`; do not call Telegram directly.
-- Do not use Claude Code commands.
+1. Read `.claude/skills/announce/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

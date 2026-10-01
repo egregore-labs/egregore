@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Deterministic handoff lifecycle reconciliation.
@@ -13,6 +13,24 @@ set -euo pipefail
 # without implementation evidence stay open for human review.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+USE_LEGACY_GRAPH=false
+RUNTIME_ARGS=()
+for argument in "$@"; do
+  if [ "$argument" = "--graph" ]; then
+    USE_LEGACY_GRAPH=true
+  else
+    RUNTIME_ARGS+=("$argument")
+  fi
+done
+
+# Canonical Markdown is authoritative in every mode. The preserved graph
+# implementation is an explicit compatibility/projection adapter only.
+if [ "$USE_LEGACY_GRAPH" != true ]; then
+  export PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  exec python3 -m egregore_runtime.lifecycle_cli "${RUNTIME_ARGS[@]}"
+fi
+set -- "${RUNTIME_ARGS[@]}"
+
 GS="$SCRIPT_DIR/bin/graph.sh"
 ACTION="${1:-scan}"
 shift || true
@@ -21,12 +39,15 @@ usage() {
   cat <<'EOF'
 Usage:
   handoff-lifecycle.sh scan [--days N] [--user HANDLE] [--managed-only]
+  handoff-lifecycle.sh action <read|claim|done|expire|reopen|review> ARTIFACT_ID
+                              [--expected-revision REV]
   handoff-lifecycle.sh apply --snapshot SHA256 --confirm APPLY_SAFE_HANDOFF_LIFECYCLE
                              [--days N] [--user HANDLE] [--managed-only]
 
-scan is read-only. apply fails closed when the graph changed after the scan.
+scan is read-only. apply fails closed when canonical state changed after scan.
 --managed-only limits the plan to lifecycle-v1 handoffs with explicit intent;
 it is the safe boundary for unattended recurring execution.
+Add --graph to use the preserved legacy graph projection explicitly.
 EOF
 }
 
@@ -120,7 +141,7 @@ build_plan() {
       lifecycle_version:.[11], nudged_at:.[12]
     }) | sort_by(.id, .recipient)
   ' 2>/dev/null)"; then
-    echo '{"error":"invalid graph response"}'
+    echo '{"error":"invalid hosted index response"}'
     return 1
   fi
 

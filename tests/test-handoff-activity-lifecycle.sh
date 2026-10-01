@@ -34,7 +34,7 @@ esac
 SH
 
 export ACTION_LOG="$TMPD/action.log"
-DONE="$(bash "$TMPD/bin/activity-action.sh" "done" h1)"
+DONE="$(bash "$TMPD/bin/activity-action.sh" "done" h1 --graph)"
 if jq -e '.applied and .status == "done" and .user == "oz"' <<<"$DONE" >/dev/null &&
    grep -Fq 'mark-done h1 oz' "$ACTION_LOG"; then
   pass "activity done is recipient-scoped"
@@ -42,8 +42,8 @@ else
   fail "activity done contract"
 fi
 
-EXPIRED="$(bash "$TMPD/bin/activity-action.sh" expire h1)"
-REOPENED="$(bash "$TMPD/bin/activity-action.sh" reopen h1)"
+EXPIRED="$(bash "$TMPD/bin/activity-action.sh" expire h1 --graph)"
+REOPENED="$(bash "$TMPD/bin/activity-action.sh" reopen h1 --graph)"
 if jq -e '.status == "expired"' <<<"$EXPIRED" >/dev/null &&
    jq -e '.status == "pending"' <<<"$REOPENED" >/dev/null; then
   pass "activity exposes explicit expire and reopen transitions"
@@ -52,12 +52,12 @@ else
 fi
 
 printf '{"mode":"local"}\n' > "$TMPD/egregore.json"
-LOCAL="$(bash "$TMPD/bin/activity-action.sh" "done" h1)"
+LOCAL="$(bash "$TMPD/bin/activity-action.sh" "done" h1 --graph)"
 if jq -e '.applied == false and .availability == "unavailable_in_this_configuration"' \
   <<<"$LOCAL" >/dev/null; then
-  pass "local activity actions abstain"
+  pass "explicit legacy graph activity action abstains in Local"
 else
-  fail "local activity action boundary"
+  fail "legacy graph Local activity boundary"
 fi
 
 # Recurring runner fixture.
@@ -96,7 +96,7 @@ JSON
 SH
 
 export JOB_LOG="$TMPD/job.log"
-JOB="$(bash "$TMPD/bin/handoff-lifecycle-job.sh" run)"
+JOB="$(bash "$TMPD/bin/handoff-lifecycle-job.sh" --graph run)"
 if jq -e '
   .applied
   and .managed_only

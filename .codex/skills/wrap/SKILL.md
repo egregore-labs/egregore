@@ -1,58 +1,49 @@
 ---
 name: wrap
-description: Wrap an Egregore session when the user invokes /wrap or $wrap, or says they are done, wrapping up, or at a stopping point in Codex.
+description: 'Close the current Egregore session with a personal, canonical summary. Use for /wrap or when the user says they are done, wrapping up, or at a stopping point. Route work assigned to another person to /handoff and save-without-closing to /save.'
 ---
 
-# Egregore Wrap
+<!-- generated-by: bin/codex-sync-skills.sh -->
 
-Native Codex Egregore skill. Use this inside an Egregore checkout with
-`bin/agent.sh`. The command routes through `bin/capture-run.sh --mode personal`.
-It writes the personal record first, appends graph and handoff-completion events
-to the local WAL, and reconciles them detached; do not wait for or repeat that
-background work.
+# Egregore wrap Adapter
 
-## Flow
+This adapter runs the canonical Egregore workflow for `wrap`. Its one
+maintained body is `.claude/skills/wrap/SKILL.md`; read that file completely and follow it here.
 
-1. Synthesize a topic, a one to three sentence summary, and concise open notes
-   from the current session.
-2. If the session has ambiguous or potentially misleading state, confirm with
-   the user. Use structured Codex question tooling when available; otherwise
-   show numbered choices plus `Other:` and wait.
-3. Resolve the author from `.egregore-state.json` `github_username`, then
-   `name`, then git config.
-4. Write the notes to a temp markdown file.
-5. Run:
+Use the project shell and filesystem directly. Do not invoke Claude Code
+commands. Translate interactive choices to structured Codex question tooling
+when it is available; otherwise render compact numbered choices with an
+`Other:` option and wait for the user.
 
-```bash
-bin/agent.sh wrap --from "$AUTHOR" --topic "$TOPIC" --summary "$SUMMARY" --body-file "$BODY_FILE"
-```
+## Structured UX parity
 
-6. If `git status --porcelain` reports repo changes after the wrap, run:
+This workflow has a Claude skill with user-visible structured output. After
+reading `.claude/skills/wrap/SKILL.md`, reproduce the same visible UX in Codex:
 
-```bash
-bin/agent.sh save --message "Wrap: $TOPIC" --topic "$TOPIC"
-```
+- Preserve TUI boxes, markdown tables, rich cards, browser artifact rendering,
+  exact confirmation blocks, and "no preamble" rules from the source skill.
+- Use the source skill's frame width, section order, labels, status footer,
+  and examples as the contract for the final response.
+- Never replace a required box/table/card/artifact view with a prose summary
+  unless the user explicitly asks for a summary.
+- When the source says to output a TUI box directly, paste that box as the
+  visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
+- Never show raw JSON, raw command output, or unformatted script output when
+  the source skill requires formatted status or rendered output.
 
-7. Report the `memory/wraps/...` path and whether code changes were saved.
-
-## Output
-
-Structured UX parity is required. Finish with the standard Egregore wrap
-confirmation TUI, not a prose-only summary:
-
-- Use a 72-column outer box with only the four standard line patterns:
-  top rule, separator rule, content line, bottom rule.
-- Header: `WRAP`, author, and date.
-- Body: topic, one compact summary, open threads or "No open threads", and
-  the `memory/wraps/...` path.
-- Footer: saved/pushed status. If code changes were saved, show that. If the
-  wrap only touched memory, say so.
-- Output the box directly, preferably in a `text` fenced block, with no
-  narration before it.
-
-## Rules
-
-- Do not use Claude Code commands.
-- Do not invent finished work. Separate completed work, verification, and open
-  follow-ups.
-- If save fails, report the failure and leave the local commits untouched.
+1. Read `.claude/skills/wrap/SKILL.md` for the workflow details.
+2. Run the referenced `bin/` scripts directly from Codex.
+3. Treat graph and publish steps as best-effort unless that workflow explicitly
+   says they are required.
+4. For every external notification, follow
+   `.claude/context/notification-consent.md`: plan without sending, then show
+   a separate exact Send / Edit / Cancel checkpoint. Never infer notification
+   consent from the workflow request or a batch approval.
+5. Keep local-mode behavior filesystem-first and avoid graph or notification
+   calls when `egregore.json` declares `"mode": "local"`.
+6. Never call the deprecated `egregore-handoff` CLI for Egregore project
+   handoffs.

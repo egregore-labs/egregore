@@ -14,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
 CAPTURE_SCHEMA="egregore-capture/v1"
+GRAPH_ENABLED="${EGREGORE_GRAPH_PROJECTION:-0}"
 
 queue_handoff_completion() {
   local session_id="$1"
@@ -108,7 +109,7 @@ case "$CAPTURE_MODE" in
     # same guarded transition as /wrap after the addressed worker has marked
     # the current Session handed_off.
     ADDRESSED_CONFIG_MODE="$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null || echo connected)"
-    if [ "$status" = "0" ] && [ "$ADDRESSED_CONFIG_MODE" = "connected" ]; then
+    if [ "$status" = "0" ] && [ "$ADDRESSED_CONFIG_MODE" = "connected" ] && [ "$GRAPH_ENABLED" = "1" ]; then
       CURRENT_SID="$(cat "$SCRIPT_DIR/.egregore-session-id" 2>/dev/null || true)"
       if [ -z "$CURRENT_SID" ]; then
         PROJ_HASH="$(printf '%s' "$SCRIPT_DIR" | md5 2>/dev/null || printf '%s' "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)"
@@ -153,6 +154,7 @@ while [ $# -gt 0 ]; do
     --no-push) NO_PUSH=1; shift ;;
     --async-push) ASYNC_PUSH=1; shift ;;
     --no-reconcile) NO_RECONCILE=1; shift ;;
+    --no-index|--no-publish|--no-notify) shift ;; # addressed-only compatibility flags
     *) echo "Unknown capture option: $1" >&2; exit 1 ;;
   esac
 done
@@ -188,6 +190,11 @@ SLUG="$(slugify "$TOPIC")"
 [ -n "$SLUG" ] || SLUG="session"
 AUTHOR_LC="$(printf '%s' "$AUTHOR" | tr '[:upper:]' '[:lower:]')"
 
+yaml_scalar() {
+  # JSON strings are valid YAML scalars and preserve punctuation safely.
+  jq -Rn --arg value "$1" '$value'
+}
+
 if [ "$CAPTURE_MODE" = "personal" ]; then
   REL_FILE="wraps/${YYYY_MM}/${DD}-${AUTHOR_LC}-${SLUG}.md"
   TITLE_PREFIX="Wrap"
@@ -208,6 +215,15 @@ if [ -e "$ABS_FILE" ]; then
 fi
 
 {
+  printf '%s\n' '---'
+  printf 'capture_schema: %s\n' "$CAPTURE_SCHEMA"
+  printf 'capture_mode: %s\n' "$CAPTURE_MODE"
+  printf 'kind: %s\n' "$CAPTURE_MODE"
+  printf 'from: %s\n' "$(yaml_scalar "$AUTHOR_LC")"
+  printf 'date: %s\n' "$DATE_ONLY"
+  printf 'topic: %s\n' "$(yaml_scalar "$TOPIC")"
+  printf 'status: active\n'
+  printf '%s\n\n' '---'
   printf '# %s: %s\n\n' "$TITLE_PREFIX" "$TOPIC"
   printf '**Capture Schema**: %s\n' "$CAPTURE_SCHEMA"
   printf '**Capture Mode**: %s\n' "$CAPTURE_MODE"
@@ -259,7 +275,7 @@ fi
 
 GRAPH_STATUS="skipped"
 MODE="$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null || echo connected)"
-if [ "$MODE" = "connected" ] && [ -n "$SESSION_ID" ]; then
+if [ "$MODE" = "connected" ] && [ "$GRAPH_ENABLED" = "1" ] && [ -n "$SESSION_ID" ]; then
   # shellcheck disable=SC2016 # $name tokens are Cypher parameters.
   CAPTURE_CYPHER='
     MERGE (s:Session {id: $sessionId})

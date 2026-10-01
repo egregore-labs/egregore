@@ -7,8 +7,8 @@ description: 'Stage changes and create a commit with a properly formatted messag
 
 # Egregore commit Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `commit`. Its one
+maintained body is `.claude/skills/commit/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

@@ -95,6 +95,24 @@ if [ -n "${CTX_SEED_TAR:-}" ] && [ -f "${CTX_SEED_TAR:-}" ]; then
       fi
     fi
   fi
+  # Record why a fresh bake was not used — seed misses silently cost a full
+  # live gather, so the reason must be observable in startup traces.
+  if [ "$CTX_SEED_USED" != "true" ]; then
+    _SEED_REASON="tar-extract"
+    if [ "$_SEED_TS" != "0" ] || [ -n "$_SEED_AUTHOR" ]; then
+      if [ "$_SEED_AUTHOR" != "$AUTHOR" ]; then _SEED_REASON="author"
+      elif [ "$_SEED_MODE" != "${LOCAL_MODE:-false}" ]; then _SEED_REASON="mode"
+      elif [ "$_SEED_CONFIG" != "$_NOW_CONFIG" ]; then _SEED_REASON="config"
+      elif [ "$_SEED_SCOPE" != "$_NOW_SCOPE" ]; then _SEED_REASON="scope"
+      elif [ "$_SEED_SCHEMA" != "$_NOW_SCHEMA" ]; then _SEED_REASON="schema"
+      elif [ "$_SEED_AGE" -lt 0 ] || [ "$_SEED_AGE" -ge 900 ]; then _SEED_REASON="age:${_SEED_AGE}s"
+      else _SEED_REASON="completeness"
+      fi
+    fi
+    type egregore_trace_mark >/dev/null 2>&1 && egregore_trace_mark "context:seed-rejected:${_SEED_REASON}"
+  else
+    type egregore_trace_mark >/dev/null 2>&1 && egregore_trace_mark "context:seed-accepted"
+  fi
   rm -rf "$_SEED_TMP"
 fi
 
@@ -370,28 +388,21 @@ fi
   JSON="[]"
   RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
-    # One definition everywhere: in connected mode the list comes from the
-    # graph's open-handoffs named read (open = pending/unread/read/claimed,
-    # matched by name/github/aliases) — the same definition the dashboard
-    # uses. The file grep below stays as the local-mode/offline fallback.
+    # One definition everywhere: Egregore Runtime folds canonical lifecycle
+    # state for both Local and Connected instances. Graph is an optional
+    # projection and must never become the startup/default retrieval path.
     ADDRESSED=""
-    if [ "${LOCAL_MODE:-false}" != "true" ]; then
-      _GRAPH_LIST=$(bash "$SCRIPT_DIR/bin/graph-op.sh" open-handoffs "$AUTHOR" 5 2>/dev/null || true)
-      if echo "$_GRAPH_LIST" | jq -e '.values | length > 0' >/dev/null 2>&1; then
-        ADDRESSED=$(echo "$_GRAPH_LIST" | jq -r '.values[][0]' 2>/dev/null | awk '!seen[$0]++' | while IFS= read -r _SID; do
-          # Two on-disk layouts: dated subdirs (YYYY-MM/DD-slug.md, the id's
-          # own shape) and flat files at the handoffs root. Probe both, else
-          # a graph-listed handoff silently vanishes from the greeting.
-          _MONTH="${_SID:0:7}"
-          _REST="${_SID:8}"
-          _F="$SCRIPT_DIR/memory/handoffs/$_MONTH/$_REST.md"
-          if [ -f "$_F" ]; then
-            echo "$_F"
-          elif [ -f "$SCRIPT_DIR/memory/handoffs/$_SID.md" ]; then
-            echo "$SCRIPT_DIR/memory/handoffs/$_SID.md"
-          fi
-        done | head -5)
-      fi
+    _RUNTIME_STATUS=$(bash "$SCRIPT_DIR/bin/activity-data.sh" 2>/dev/null || true)
+    if echo "$_RUNTIME_STATUS" | jq -e '.handoffs_to_me | type == "array"' >/dev/null 2>&1; then
+      ADDRESSED=$(echo "$_RUNTIME_STATUS" | jq -r '.handoffs_to_me[0:5][]?.filePath // empty' 2>/dev/null | while IFS= read -r _REL; do
+        _F=""
+        if [[ "$_REL" == memory/* ]]; then
+          _F="$SCRIPT_DIR/$_REL"
+        elif [[ "$_REL" == handoffs/* ]]; then
+          _F="$SCRIPT_DIR/memory/$_REL"
+        fi
+        [ -n "$_F" ] && [ -f "$_F" ] && printf '%s\n' "$_F"
+      done)
     fi
     # Match github username, display name, github_name first word, and people-file name
     # Handoff files may use "to: name", "**To**: name", or "To: name"
@@ -410,6 +421,8 @@ fi
       echo "$_GREP_PAT" | grep -qF "$_VARIANT" && continue
       _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_VARIANT\|[Tt]o[*]*:$_VARIANT"
     done
+    # Compatibility fallback for an unavailable Runtime. It reads canonical
+    # Markdown directly and never calls graph or a control-plane retrieval API.
     if [ -z "$ADDRESSED" ]; then
       ADDRESSED=$(grep -rli "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     fi
@@ -509,12 +522,20 @@ fi
 
 # 7. Graph health (background — zero added latency, runs in parallel; seeded)
 [ "$CTX_SEED_USED" != "true" ] && (
-  if [ "$LOCAL_MODE" = "true" ]; then
+  if [ "$LOCAL_MODE" = "true" ] || ! _graph_projection_enabled; then
     echo "skip"
-  elif bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null | grep -q "Connected"; then
-    echo "ok"
   else
-    echo "fail"
+    _GRAPH_TEST=$(bash "$SCRIPT_DIR/bin/graph.sh" test 2>/dev/null)
+    if printf '%s' "$_GRAPH_TEST" | grep -q "runtime_qmd_active"; then
+      # Not a failure: the activated Runtime/QMD does not use graph
+      # retrieval — the greeting already carries that receipt, so /checkup
+      # nagging here would be false alarm.
+      echo "skip"
+    elif printf '%s' "$_GRAPH_TEST" | grep -q "Connected"; then
+      echo "ok"
+    else
+      echo "fail"
+    fi
   fi
 ) > "$CTX_DIR/graph_health" 2>/dev/null &
 

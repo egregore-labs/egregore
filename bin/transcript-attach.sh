@@ -72,11 +72,12 @@ munge_project_path() {
 }
 
 file_mtime_epoch() {
-  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || printf '0'
+  # GNU first: on Linux `stat -f` succeeds with filesystem data, not the file's.
+  stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || printf '0'
 }
 
 file_size_bytes() {
-  stat -f '%z' "$1" 2>/dev/null || stat -c '%s' "$1" 2>/dev/null || wc -c < "$1" 2>/dev/null | tr -d ' '
+  stat -c '%s' "$1" 2>/dev/null || stat -f '%z' "$1" 2>/dev/null || wc -c < "$1" 2>/dev/null | tr -d ' '
 }
 
 epoch_to_iso() {

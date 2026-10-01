@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Graph maintenance — scan for issues, fix safe ones, report health.
+# Optional hosted index maintenance — scan for issues, fix safe ones, report health.
 # Usage: bash bin/graph-maintenance.sh <mode>
 #
 # Modes:
@@ -16,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: graph-maintenance.sh <mode> [args...]"
   echo ""
-  echo "Graph maintenance — scan for issues, fix safe ones, report health."
+  echo "Optional hosted index maintenance — scan for issues, fix safe ones, report health."
   echo ""
   echo "Modes:"
   echo "  scan                  Detect issues (read-only, default)"

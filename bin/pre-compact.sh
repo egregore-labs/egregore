@@ -18,6 +18,9 @@ SID_FILE="$SCRIPT_DIR/.egregore-session-id"
 if [ -f "$SID_FILE" ]; then
   SESSION_ID=$(cat "$SID_FILE" 2>/dev/null) || true
 fi
+# Compaction can drop the actor/retrieval contract from context. Removing the
+# per-session marker makes the next prompt hook attach the full contract again.
+rm -f "$SCRIPT_DIR"/.egregore/runtime/observe/actor-contract-*.sent 2>/dev/null || true
 
 # --- Observation buffer summary ---
 # Buffer parsing uses awk/grep (safe). Graph write uses jq (can fail).
@@ -98,7 +101,7 @@ if [ "$OBS_COUNT" -gt 0 ]; then
     done
   fi
   SEQ_DISPLAY="${SEQ:-1}"
-  echo "  Compaction #$SEQ_DISPLAY — your earlier work is preserved in the graph."
+  echo "  Compaction #$SEQ_DISPLAY — your earlier work is preserved in session memory."
 fi
 
 if [ "$TOTAL" -gt 0 ]; then

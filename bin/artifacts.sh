@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Intentionally NOT `set -euo pipefail`: this is a grep-heavy find tool where
 # no-match (grep exit 1) and empty arrays are normal control flow, not errors.
 
@@ -219,7 +219,7 @@ _graph_find() {
   local nrows; nrows="$(printf '%s' "$resp" | jq -r '(.values // []) | length' 2>/dev/null || echo 0)"
   [ "${nrows:-0}" -gt 0 ] || return 1
 
-  echo "⌕ artifacts · graph · \"$query\"$(_window_label "$since" "$until")"
+  echo "⌕ artifacts · relationships · \"$query\"$(_window_label "$since" "$until")"
   echo
   # Render each row with jq (null-safe): @tsv + bash read collapses null columns
   # because tab is IFS-whitespace. Cols: 0 title,1 url,2 type,3 score,4 author,5 quest,6 created.

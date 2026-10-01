@@ -75,7 +75,6 @@ function adapt(sourceSpec) {
     ["Codex-native", "Prime-native"],
     ["Codex sessions", "Prime Agent sessions"],
     ["On Codex", "On Prime Agent"],
-    ["Codex has no", "Prime Agent has no built-in"],
     ["bin/codex-session-start.sh", "bin/prime-session-start.sh"],
     [".codex/hooks/branch-guard.js", ".prime/agent/extensions/egregore.ts"],
     ["PreToolUse hook (launcher `--enable hooks`)", "`tool_call` gate (loaded from the project-local extension)"],
@@ -97,7 +96,7 @@ function adapt(sourceSpec) {
 
 This appendix is generated from the reviewed shell-runtime translation of \`CLAUDE.md\`, the behavioral source of truth. Prime Agent loads it through \`.prime/agent/APPEND_SYSTEM.md\`. Egregore workflows are shared from \`.codex/skills/\` through the Agent Skills standard (via \`.agents/skills\` and project settings) and exposed as familiar slash commands by \`.prime/agent/extensions/egregore.ts\`.
 
-Your subagent mechanism (\`rlm(...)\`) spawns Prime Agent child sessions, not Egregore Loom lanes. Ignore Loom routing preambles inside shared skills: run those workflows inline.`);
+Your subagent mechanism (\`rlm(...)\`) spawns Prime Agent child sessions, not Egregore Loom lanes. Ignore Claude Loom preambles. Use native delegation only when exposed and requested by the user or workflow, within session permissions; otherwise work inline and report unavailable independent review.`);
 
   text = replaceSection(text, "On Launch — MANDATORY FIRST ACTION", `The project-local Prime Agent extension renders the Egregore startup card (identity, handoffs, team activity) inside the session via \`bin/prime-session-start.sh\`. This works for direct \`prime-agent\` launches and launcher-managed sessions. Do not rerun startup checks and do not narrate startup. The card ends with **"What are you working on?"** — that question is already on screen; treat the user's first message as the answer to it. To re-show the card outside Prime Agent, run \`bash bin/prime-session-start.sh --card\`.`);
 
@@ -135,7 +134,7 @@ if (check) {
   const currentOutput = fs.existsSync(OUTPUT) ? fs.readFileSync(OUTPUT, "utf8") : "";
   const currentManifest = fs.existsSync(MANIFEST) ? fs.readFileSync(MANIFEST, "utf8") : "";
   if (currentOutput !== rendered || currentManifest !== manifest) {
-    console.error("prime spec out of date — run: node bin/prime-render-spec.mjs");
+    console.error("prime spec out of date — run: bash bin/node-run.sh bin/prime-render-spec.mjs");
     process.exit(1);
   }
   console.log("prime spec up to date");

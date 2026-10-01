@@ -70,13 +70,13 @@ if [ -f "$REPO/.claude/skills/shared-name/EXTRA.md" ]; then
 else
   ok "collision: upstream-only file inside owned dir removed"
 fi
-echo "$OUT" | grep -q "owned skill 'shared-name'" && ok "collision reported" || bad "collision reported — got: $OUT"
+grep -q "owned skill 'shared-name'" <<< "$OUT" && ok "collision reported" || bad "collision reported — got: $OUT"
 check "org-only owned skill keeps uncommitted edit" "uncommitted edit" "$(tail -1 "$REPO/.claude/skills/org-only/SKILL.md")"
 check "unowned skill untouched by script" "unowned org" "$(cat "$REPO/.claude/skills/unowned/SKILL.md")"
 check "framework skill adopted from upstream" "framework skill" "$(cat "$REPO/.claude/skills/framework-only/SKILL.md")"
 check "owned-but-never-committed: upstream copy stays" "upstream new" "$(cat "$REPO/.claude/skills/missing-local/SKILL.md")"
-echo "$OUT" | grep -q "missing-local" && ok "uncommitted-ownership warning emitted" || bad "uncommitted-ownership warning emitted"
-echo "$OUT" | grep -q "invalid name" && ok "path-traversal name rejected" || bad "path-traversal name rejected"
+grep -q "missing-local" <<< "$OUT" && ok "uncommitted-ownership warning emitted" || bad "uncommitted-ownership warning emitted"
+grep -q "invalid name" <<< "$OUT" && ok "path-traversal name rejected" || bad "path-traversal name rejected"
 
 # --- No owned_skills key → silent no-op ------------------------------------
 printf '{"org_name":"t"}\n' > "$REPO/egregore.json"

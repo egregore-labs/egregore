@@ -57,14 +57,14 @@ else
   fail "bundled prime settings drifted from source"
 fi
 
-# --- 5. Greeting addressed list: graph-sourced with file fallback ---
+# --- 5. Greeting addressed list: Runtime-sourced with file fallback ---
 CTX="$SCRIPT_DIR/bin/lib/context.sh"
-if grep -q 'graph-op.sh" open-handoffs' "$CTX"; then
-  pass "greeting sources addressed handoffs from the canonical named read"
+if grep -q 'bin/activity-data.sh' "$CTX" && ! grep -q 'graph-op.sh" open-handoffs' "$CTX"; then
+  pass "greeting sources addressed handoffs from canonical Runtime status"
 else
-  fail "greeting no longer uses open-handoffs"
+  fail "greeting still bypasses Runtime for addressed handoffs"
 fi
-if grep -q 'LOCAL_MODE:-false' "$CTX" && grep -A2 'if \[ -z "\$ADDRESSED" \]' "$CTX" | grep -q 'grep -rli'; then
+if grep -q 'LOCAL_MODE:-false' "$CTX" && grep -A2 'if \[ -z "\$ADDRESSED" \]' "$CTX" | grep 'grep -rli' >/dev/null; then
   pass "greeting keeps the local/offline file-grep fallback"
 else
   fail "greeting fallback to file grep missing"

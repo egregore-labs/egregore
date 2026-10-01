@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # artifact-register.sh — record a PUBLISHED (hosted) artifact in the local
@@ -17,9 +17,16 @@ set -euo pipefail
 # render.
 #
 # Usage: artifact-register.sh --id <id> --url <url> --type <type> \
-#          --title <title> [--author <a>] [--source <file>] [--description <d>]
+#          --title <title> [--author <a>] [--source <file>] [--description <d>] \
+#          [--canonical-id <id>]
 #
-# Idempotent: re-registering the same artifact (same date+author+slug) upserts.
+# --canonical-id marks a memory file hosted by reference (publish-references.sh):
+# the record keeps the file's path-derived id next to the random hosted id in
+# `url`, and that pair is how later publishes find and reuse the hosted id
+# (bin/lib/hosted-ref-id.sh). Such records are written for every type.
+#
+# Idempotent: re-registering the same artifact (same date+author+slug, plus the
+# hosted id when --canonical-id is given) upserts.
 # Non-fatal by design — a registry-write failure must never break a publish.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,7 +36,7 @@ REG_DIR="$SCRIPT_DIR/memory/artifacts"
 # skip them to keep the registry to findable content artifacts.
 SKIP_TYPES=" handoff board activity network dashboard subgraph "
 
-ID="" URL="" TYPE="artifact" TITLE="" AUTHOR="" SOURCE="" DESCRIPTION=""
+ID="" URL="" TYPE="artifact" TITLE="" AUTHOR="" SOURCE="" DESCRIPTION="" CANONICAL_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --id)          ID="$2"; shift 2 ;;
@@ -39,12 +46,17 @@ while [[ $# -gt 0 ]]; do
     --author)      AUTHOR="$2"; shift 2 ;;
     --source)      SOURCE="$2"; shift 2 ;;
     --description) DESCRIPTION="$2"; shift 2 ;;
+    --canonical-id) CANONICAL_ID="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+[[ "$CANONICAL_ID" =~ ^[mh]-[0-9a-f]{12}$ ]] || CANONICAL_ID=""
 
-# Skip transient / already-homed types.
-case "$SKIP_TYPES" in *" $TYPE "*) exit 0 ;; esac
+# Skip transient / already-homed types. A referenced memory file is recorded
+# whatever its type: its record is the only place its hosted id is kept.
+if [ -z "$CANONICAL_ID" ]; then
+  case "$SKIP_TYPES" in *" $TYPE "*) exit 0 ;; esac
+fi
 
 [ -n "$URL" ] || exit 0
 [ -d "$SCRIPT_DIR/memory" ] || exit 0   # memory not linked → nothing to do
@@ -62,13 +74,29 @@ fi
 DATE="$(date +%Y-%m-%d)"
 AUTH="${AUTHOR:-unknown}"
 
+# JSON strings are valid YAML scalars and safely preserve punctuation, quotes,
+# newlines, and values that YAML would otherwise coerce (for example numeric
+# ids or ISO dates).  Keep serialization here rather than relying on callers to
+# pre-escape metadata from artifact titles and provider responses.
+yaml_scalar() {
+  printf '%s' "$1" | jq -Rs .
+}
+
 # --- Slug + stable filename (date-author-slug, matching the existing convention) ---
 # Portable (BSD + GNU): lowercase, non-alnum → single '-', trim, cap length.
 slug() { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' \
   | LC_ALL=C tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-60 \
   | sed 's/-$//'; }
 SLUG="$(slug "$TITLE")"; [ -n "$SLUG" ] || SLUG="artifact"
-FILE="$REG_DIR/${DATE}-$(slug "$AUTH")-${SLUG}.md"
+# A referenced file's record also carries its hosted id in the name. Such
+# records are titled from the file name with no author, so two teammates
+# referencing one file on one day would otherwise write the same path. When
+# neither has pulled the other's record yet, each creates its own hosted id,
+# and the two records would conflict on push; with the id in the name they
+# are two files. The same path now means the same hosted id.
+ID_SUFFIX=""
+[ -z "$CANONICAL_ID" ] || ID_SUFFIX="-$(slug "$ID")"
+FILE="$REG_DIR/${DATE}-$(slug "$AUTH")-${SLUG}${ID_SUFFIX}.md"
 
 # --- Topics: derive 2–5 slugs from the title, minus stopwords (grep + graph) ---
 STOP=" the a an is for and or in of to on with our we v0 v1 v2 "
@@ -99,14 +127,15 @@ fi
 # --- Write the entry (upsert) ---
 {
   printf -- '---\n'
-  printf 'id: %s\n' "$ID"
-  printf 'title: %s\n' "$TITLE"
-  printf 'type: %s\n' "$TYPE"
-  printf 'author: %s\n' "$AUTH"
-  printf 'date: %s\n' "$DATE"
+  printf 'id: %s\n' "$(yaml_scalar "$ID")"
+  printf 'title: %s\n' "$(yaml_scalar "$TITLE")"
+  printf 'type: %s\n' "$(yaml_scalar "$TYPE")"
+  printf 'author: %s\n' "$(yaml_scalar "$AUTH")"
+  printf 'date: %s\n' "$(yaml_scalar "$DATE")"
   printf 'topics: [%s]\n' "$TOPICS"
-  printf 'url: %s\n' "$URL"
-  [ -n "$SRC_REL" ] && printf 'source: %s\n' "$SRC_REL"
+  printf 'url: %s\n' "$(yaml_scalar "$URL")"
+  [ -n "$CANONICAL_ID" ] && printf 'canonical_id: %s\n' "$(yaml_scalar "$CANONICAL_ID")"
+  [ -n "$SRC_REL" ] && printf 'source: %s\n' "$(yaml_scalar "$SRC_REL")"
   printf 'published: true\n'
   printf -- '---\n\n'
   printf '# %s\n\n' "$TITLE"
@@ -128,14 +157,49 @@ printf '%s\n' "$FILE"
 # and detached, so a slow or racing push can never delay or fail the publish.
 # If a push loses a race the commit still lands locally and rides out on the
 # next push (/save, handoff, or the next registration).
+#
+# A pull that stops on a conflict must not leave the memory repo mid-rebase:
+# every other script that pulls there would then fail too. When the conflict
+# is this record alone, someone pushed the same record first (same day, same
+# name); keep theirs, which for a referenced file carries the same hosted id.
+# Any other conflict is undone with `rebase --abort`. A rebase this loop did
+# not start is never touched.
 REL="artifacts/$(basename "$FILE")"
 (
   cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 0
+  # Prints the commit a rebase in progress started from; fails when none is.
+  rebase_start() {
+    local dir
+    for dir in rebase-merge rebase-apply; do
+      dir="$(git rev-parse --git-path "$dir" 2>/dev/null)" || continue
+      [ -d "$dir" ] || continue
+      cat "$dir/orig-head" 2>/dev/null || printf 'unknown\n'
+      return 0
+    done
+    return 1
+  }
+  rebase_start >/dev/null && exit 0   # someone else's rebase: leave it alone
   git add -- "$REL" >/dev/null 2>&1 || exit 0
   git diff --cached --quiet -- "$REL" 2>/dev/null && exit 0
   git commit -m "chore(artifacts): register ${TITLE}" -- "$REL" >/dev/null 2>&1 || exit 0
   for _ in 1 2 3; do
+    before="$(git rev-parse HEAD 2>/dev/null)" || break
     git pull --rebase --no-edit >/dev/null 2>&1 && git push >/dev/null 2>&1 && break
+    if [ "$(rebase_start)" = "$before" ]; then
+      if [ "$(git diff --name-only --diff-filter=U 2>/dev/null)" = "$REL" ] \
+        && git checkout --ours -- "$REL" 2>/dev/null && git add -- "$REL" 2>/dev/null; then
+        # During a rebase "ours" is the pushed side. A commit left with no
+        # change of its own is skipped rather than recorded empty.
+        if git diff --cached --quiet 2>/dev/null; then
+          git rebase --skip >/dev/null 2>&1 || true
+        else
+          GIT_EDITOR=true git rebase --continue >/dev/null 2>&1 || true
+        fi
+      fi
+      if [ "$(rebase_start)" = "$before" ]; then
+        git rebase --abort >/dev/null 2>&1 || true
+      fi
+    fi
     sleep 1
   done
 ) >/dev/null 2>&1 &

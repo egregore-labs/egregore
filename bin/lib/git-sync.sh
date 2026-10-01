@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# State variables are outputs consumed by session-start and greeting callers.
+# shellcheck disable=SC2034
 # git-sync.sh — Git synchronization for session-start.sh
 #
 # Handles all git operations during session startup:
@@ -13,14 +15,40 @@
 # Inputs:  SCRIPT_DIR, IS_WORKTREE, MAIN_PROJECT_DIR, STATE_FILE, ENV_FILE,
 #          HEALTH_GIT, BASE_BRANCH (optional — resolved here if unset),
 #          MANAGED_REPOS (not yet set — read from config here)
-# Outputs: HEALTH_GIT, DEVELOP_SYNCED, COMMITS_AHEAD, ACTION, SAVED_BRANCH,
+# Outputs: HEALTH_GIT, HEALTH_GIT_REASON, HEALTH_MEMORY, HEALTH_MEMORY_REASON,
+#          HEALTH_RETRIEVAL (ok|stale|fail|skip), HEALTH_RETRIEVAL_DETAIL,
+#          DEVELOP_SYNCED, COMMITS_AHEAD, ACTION, SAVED_BRANCH,
 #          BRANCH, MEMORY_SYNCED, REPOS_STATUS, MANAGED_REPOS, CURRENT_BRANCH,
 #          FRAMEWORK_UPDATED, FRAMEWORK_UPDATED_COUNT, FRAMEWORK_UPDATED_FILES,
 #          BASE_BRANCH, BASE_BRANCH_READY
+#
+# Health dimensions are independent. HEALTH_GIT is the project checkout (base
+# branch, worktree, managed repos); HEALTH_MEMORY is the canonical memory
+# repository's synchronization; HEALTH_RETRIEVAL is whether recall can answer.
+# Each carries a *_REASON/_DETAIL the greeting prints verbatim, so a failure
+# names its cause and the one action to take instead of pointing at /checkup.
 
 FRAMEWORK_UPDATED="false"
 FRAMEWORK_UPDATED_COUNT=0
 FRAMEWORK_UPDATED_FILES=""
+HEALTH_GIT_REASON=""
+HEALTH_MEMORY="skip"
+HEALTH_MEMORY_REASON=""
+HEALTH_RETRIEVAL="skip"
+HEALTH_RETRIEVAL_DETAIL=""
+SYNC_RECEIPT=""
+
+# Settings drift healer + unshared-settings reporting (see the lib header).
+# shellcheck source=bin/lib/settings-drift.sh
+source "$SCRIPT_DIR/bin/lib/settings-drift.sh"
+
+# Runtime framework ownership (upgrade activation or fresh-install receipt).
+# shellcheck source=bin/lib/runtime-owned.sh
+source "$SCRIPT_DIR/bin/lib/runtime-owned.sh"
+
+# Framework overlay shared with the explicit update command.
+# shellcheck source=bin/lib/framework-update.sh
+source "$SCRIPT_DIR/bin/lib/framework-update.sh"
 
 # The core repo's integration branch: "develop" unless egregore.json sets
 # base_branch. session-start.sh resolves this before sourcing; resolve it here
@@ -28,6 +56,7 @@ FRAMEWORK_UPDATED_FILES=""
 if [ -z "${BASE_BRANCH:-}" ]; then
   if ! BASE_BRANCH=$(_get_base_branch); then
     HEALTH_GIT="fail"
+    HEALTH_GIT_REASON="integration branch could not be resolved from egregore.json"
     return 1 2>/dev/null || exit 1
   fi
 fi
@@ -115,6 +144,7 @@ fi
 
 # Wait for all fetches
 wait 2>/dev/null || true
+type egregore_trace_mark >/dev/null 2>&1 && egregore_trace_mark "sync:fetch-join(refs_fresh=$_REFS_FRESH)"
 
 # --- Auto-update framework from upstream (deferred) ---
 # Moved AFTER setup_develop() so framework commits land on develop, not on
@@ -174,6 +204,14 @@ _apply_framework_update() {
   if [ "$_UPSTREAM_URL" = "none" ] || [ "$_AUTO_UPDATE" != "true" ]; then
     return 0
   fi
+  # Runtime ownership: once this exact instance installed or activated the
+  # new Runtime, the legacy upstream sync
+  # must never overwrite Runtime-owned framework paths — that fight is how a
+  # launched-then-synced instance became a broken old/new mixture. Rollback
+  # flips the record off runtime-qmd and legacy ownership resumes here.
+  if runtime_owns_framework 2>/dev/null; then
+    return 0
+  fi
   if ! git show-ref --verify --quiet refs/remotes/upstream/main 2>/dev/null; then
     return 0
   fi
@@ -187,20 +225,21 @@ _apply_framework_update() {
   # applies it.
   git fetch origin "$BASE_BRANCH" --quiet 2>/dev/null || return 0
   git merge --ff-only "origin/$BASE_BRANCH" --quiet 2>/dev/null || return 0
-  # Apply upstream changes — checkout is idempotent, skip diff check
-  # (git diff with variable path lists breaks in zsh — no word-splitting)
-  for _p in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ loom/ CLAUDE.md skills/; do
-    git checkout upstream/main -- "$_p" 2>/dev/null || true
-  done
+  # Apply the same paths and per-path tolerance as the explicit update command.
+  _checkout_framework_paths . || return 0
   # Only commit if there are actual changes. Record WHAT changed before
   # committing — an overwrite of local edits is the one outcome the user has
   # to be able to see afterwards, and the commit is the only other record.
   local _changed
-  _changed=$(git status --porcelain bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null)
+  _changed=$(git status --porcelain bin/ .claude/ .pi/ .prime/ loom/ CLAUDE.md skills/ 2>/dev/null)
   if [ -n "$_changed" ]; then
     FRAMEWORK_UPDATED_COUNT=$(printf '%s\n' "$_changed" | grep -c . || echo 0)
     FRAMEWORK_UPDATED_FILES=$(printf '%s\n' "$_changed" | awk '{print $NF}' | head -3 | tr '\n' ' ')
     git add bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null
+    local _runtime_path
+    for _runtime_path in .pi .prime; do
+      [ ! -e "$_runtime_path" ] || git add -- "$_runtime_path" 2>/dev/null
+    done
     EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "chore(sync): update framework from upstream" --quiet 2>/dev/null || true
     FRAMEWORK_UPDATED="true"
   fi
@@ -214,6 +253,7 @@ if git show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" 2>/dev/null;
   HEALTH_GIT="ok"
 else
   HEALTH_GIT="fail"
+  HEALTH_GIT_REASON="origin/$BASE_BRANCH is missing; the fetch did not reach GitHub"
 fi
 
 # --- Guarded staging -------------------------------------------------------
@@ -278,6 +318,17 @@ setup_develop() {
     COMMITS_AHEAD=$(git rev-list "origin/main..$BASE_BRANCH" --count 2>/dev/null || echo "0")
   fi
 
+  # Read-only invocations (tests, card/prompt renders exercised outside a
+  # real session start) stop here: the ref updates above are working-tree
+  # safe, but autosave commits, branch pushes, and parking the checkout on
+  # the base branch mutate a live repo out from under whatever session owns
+  # it.
+  if [ "${EGREGORE_GIT_SYNC_READONLY:-0}" = "1" ]; then
+    ACTION="ready"
+    SAVED_BRANCH=""
+    return 0
+  fi
+
   # Always start from the base branch
   # Every session begins there. Claude creates a fresh topic branch
   # (dev/{author}/{topic-slug}) when the user says what they're working on.
@@ -310,8 +361,17 @@ setup_develop() {
       return 1
     fi
   else
-    # Already on it — fetch couldn't update a checked-out branch, so pull
+    # Already on it — fetch couldn't update a checked-out branch, so pull.
+    # Launcher/installer settings drift blocks this merge and the refusal
+    # is otherwise silent; heal it first, re-apply the launcher's intent
+    # after (bin/lib/settings-drift.sh).
+    settings_drift_heal
     git merge --ff-only "origin/$BASE_BRANCH" --quiet 2>/dev/null || true
+    settings_drift_reapply
+    # Connected mode: reconcile with the control plane (org settings row) —
+    # pull a teammate's confirmed write down, or re-deliver a failed push.
+    settings_drift_pull
+    settings_drift_report
   fi
 
   # Never report the intended branch as the actual branch. A checkout can fail
@@ -374,6 +434,7 @@ if [ "$IS_WORKTREE" = "true" ]; then
     echo "Start a new session in the main project to get a fresh branch."
     echo ""
     HEALTH_GIT="fail"
+    HEALTH_GIT_REASON="this worktree's branch is already merged into $BASE_BRANCH; start a new session in the main project"
   elif [ "$WORKTREE_STALE" = "remote_deleted" ]; then
     echo ""
     echo "WARNING: Remote branch '$BRANCH' was deleted but NOT merged into $BASE_BRANCH."
@@ -390,6 +451,7 @@ elif setup_develop 2>/dev/null; then
   BASE_BRANCH_READY="true"
 else
   HEALTH_GIT="fail"
+  HEALTH_GIT_REASON="local $BASE_BRANCH could not be prepared from origin/$BASE_BRANCH"
 fi
 
 # Apply a framework update only after setup verified the configured base branch.
@@ -397,15 +459,92 @@ if [ "$IS_WORKTREE" != "true" ] && [ "$BASE_BRANCH_READY" = "true" ]; then
   _apply_framework_update 2>/dev/null || true
 fi
 
-# --- Sync memory (symlink or direct directory — both valid) ---
+# --- Synchronize canonical memory and retrieval readiness ---
+type egregore_trace_mark >/dev/null 2>&1 && egregore_trace_mark "sync:branch-setup"
 if [ -d "$SCRIPT_DIR/memory/.git" ]; then
-  MEM_LOCAL=$(git -C "$SCRIPT_DIR/memory" rev-parse HEAD 2>/dev/null || echo "")
-  MEM_REMOTE=$(git -C "$SCRIPT_DIR/memory" rev-parse origin/main 2>/dev/null || echo "")
-  if [ -n "$MEM_LOCAL" ] && [ -n "$MEM_REMOTE" ] && [ "$MEM_LOCAL" != "$MEM_REMOTE" ]; then
-    git -C "$SCRIPT_DIR/memory" pull origin main --quiet 2>/dev/null || true
+  # Runtime owns the whole receipt: canonical Git state gates the synchronous
+  # lexical refresh, then semantic construction is scheduled in the
+  # background. Capture stderr as part of a visible failure instead of turning
+  # a failed pull into a false "memory synced" state.
+  # When the attendant's warm marker proved a successful fetch round within
+  # the freshness window, the memory remote-tracking ref is already current —
+  # let the Runtime sync reuse it instead of fetching a second time. Boots
+  # without that proof keep the Runtime's own fetch as the canonical gate.
+  _SYNC_FETCH_FRESH=0
+  [ "${_REFS_FRESH:-false}" = "true" ] && _SYNC_FETCH_FRESH=1
+  SYNC_RECEIPT=$(EGREGORE_ROOT="$SCRIPT_DIR" \
+    PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+    EGREGORE_SYNC_FETCH_FRESH="$_SYNC_FETCH_FRESH" \
+    python3 -m egregore_runtime.harness_cli sync --json 2>&1) || true
+  if printf '%s' "$SYNC_RECEIPT" | jq -e '.schema_version == "egregore-runtime-sync/v1"' >/dev/null 2>&1; then
+    if [ "$(printf '%s' "$SYNC_RECEIPT" | jq -r '.canonical_current')" = "true" ]; then
+      MEMORY_SYNCED="true"
+      HEALTH_MEMORY="ok"
+    else
+      MEMORY_SYNCED="false"
+      HEALTH_MEMORY="fail"
+      # The Runtime names the failure kind and the one action to take; the
+      # prose failure is the fallback so an older receipt still says something.
+      HEALTH_MEMORY_REASON=$(printf '%s' "$SYNC_RECEIPT" \
+        | jq -r '.remedy // (.failures[0] // "memory sync failed; run /checkup")' 2>/dev/null)
+    fi
+    # Retrieval is graded by the Runtime: ready, stale (answers from a snapshot
+    # slightly behind the tree), or unavailable. A receipt that predates the
+    # grade falls back to the whole-receipt status.
+    case "$(printf '%s' "$SYNC_RECEIPT" | jq -r '.retrieval_grade // empty' 2>/dev/null)" in
+      ready) HEALTH_RETRIEVAL="ok" ;;
+      stale) HEALTH_RETRIEVAL="stale" ;;
+      unavailable) HEALTH_RETRIEVAL="fail" ;;
+      *)
+        if [ "$(printf '%s' "$SYNC_RECEIPT" | jq -r '.status')" = "ready" ]; then
+          HEALTH_RETRIEVAL="ok"
+        else
+          HEALTH_RETRIEVAL="fail"
+        fi
+        ;;
+    esac
+    HEALTH_RETRIEVAL_DETAIL=$(printf '%s' "$SYNC_RECEIPT" | jq -r '.retrieval_detail // empty' 2>/dev/null)
+  else
+    # Import/runtime failures are still retained as the startup receipt and
+    # surfaced through health; never call this synchronized.
+    MEMORY_SYNCED="false"
+    HEALTH_MEMORY="fail"
+    HEALTH_MEMORY_REASON="the Runtime sync returned no receipt; run /checkup"
+    HEALTH_RETRIEVAL="fail"
   fi
-  MEMORY_SYNCED="true"
+
+  # Canonical synchronization and local retrieval readiness are independent
+  # health dimensions. A dirty or diverged memory repository must keep memory
+  # red, but it does not invalidate a BM25 index that is aligned with the
+  # exact local canonical snapshot. Consult the typed health surface after a
+  # failed/degraded sync so the greeting does not report retrieval unavailable
+  # when QMD can safely answer from that snapshot. Semantic warming is healthy.
+  if [ "$HEALTH_RETRIEVAL" != "ok" ]; then
+    RETRIEVAL_HEALTH=$(EGREGORE_ROOT="$SCRIPT_DIR" \
+      PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 -m egregore_runtime.harness_cli status --json 2>/dev/null) || true
+    if printf '%s' "$RETRIEVAL_HEALTH" | jq -e '
+      .available == true
+      and .canonical_state_ready == true
+      and .bm25_ready == true
+      and .index_source_revision != null
+      and .index_source_revision == .source_revision
+    ' >/dev/null 2>&1; then
+      HEALTH_RETRIEVAL="ok"
+      HEALTH_RETRIEVAL_DETAIL=""
+    elif printf '%s' "$RETRIEVAL_HEALTH" | jq -e '
+      .available == true
+      and .canonical_state_ready == true
+      and .bm25_ready == true
+    ' >/dev/null 2>&1; then
+      # The index answers, from a snapshot behind the tree. Stale, not dead.
+      HEALTH_RETRIEVAL="stale"
+      [ -n "$HEALTH_RETRIEVAL_DETAIL" ] \
+        || HEALTH_RETRIEVAL_DETAIL="index is behind the canonical tree; it refreshes on the next sync"
+    fi
+  fi
 fi
+type egregore_trace_mark >/dev/null 2>&1 && egregore_trace_mark "sync:memory-retrieval"
 
 # --- Sync managed repos ---
 # Managed repos sync silently — they are a CLI concern and never render in the
@@ -417,6 +556,7 @@ for REPO in $MANAGED_REPOS; do
     # Resolve base branch for this repo (from egregore.json or auto-detect)
     if ! REPO_BASE=$(_get_base_branch "$REPO"); then
       HEALTH_GIT="fail"
+      [ -n "$HEALTH_GIT_REASON" ] || HEALTH_GIT_REASON="integration branch could not be resolved for managed repo $REPO"
       continue
     fi
     # Sync base branch with remote (if not checked out)

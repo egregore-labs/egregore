@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "excluded_from_baseline": [
+    {
+      "suite": "bin/tests/test-artifact-dark-mode.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "artifacts-tests"
+    },
+    {
+      "suite": "bin/tests/test-boundary-check-askuserquestion.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-boundary-instance-isolation.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-bundle-skill-scripts.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-parity"
+    },
+    {
+      "suite": "bin/tests/test-card-output-hygiene.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-codex-native-skills.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-parity"
+    },
+    {
+      "suite": "bin/tests/test-codex-spec-render.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-parity"
+    },
+    {
+      "suite": "bin/tests/test-loom-dashboard.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom-evals.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom-learner.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom-replay.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom-scenarios.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom-truth.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-loom.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-minion-workflow.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-prose-check.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-retrieval-output-hygiene.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-runtime-launch-path.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-runtime-mode-status.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "bin/tests/test-view-render.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "artifacts-tests"
+    },
+    {
+      "suite": "tests/test-agent-protocol.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-ci-test-ownership.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-convention-parity.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-emissary-data-plane-hardening-pg16.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "postgres-proofs"
+    },
+    {
+      "suite": "tests/test-emissary-donation-ingestion-pg16.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "postgres-proofs"
+    },
+    {
+      "suite": "tests/test-greeting-pending-turns.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-handle-claim-pg16.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "postgres-proofs"
+    },
+    {
+      "suite": "tests/test-handoff-activity-lifecycle.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-harvest-question-palette.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-runtime-skill-migration.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-parity"
+    },
+    {
+      "suite": "tests/test-suite-shard.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    },
+    {
+      "suite": "tests/test-worktree.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "shell-contracts"
+    }
+  ]
+}

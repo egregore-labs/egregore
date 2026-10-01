@@ -5,10 +5,10 @@ const WIDTH = 72;
 
 function usage() {
   console.error(`usage:
-  node bin/codex-skill-render.mjs classify-graph [--mode connected|local] [--attempt initial|retry] [file|-]
-  node bin/codex-skill-render.mjs activity-card [file|-]
-  node bin/codex-skill-render.mjs dashboard-card [file|-]
-  node bin/codex-skill-render.mjs handoff-card [file|-]`);
+  bash bin/node-run.sh bin/codex-skill-render.mjs classify-graph [--mode connected|local] [--attempt initial|retry] [file|-]
+  bash bin/node-run.sh bin/codex-skill-render.mjs activity-card [file|-]
+  bash bin/node-run.sh bin/codex-skill-render.mjs dashboard-card [file|-]
+  bash bin/node-run.sh bin/codex-skill-render.mjs handoff-card [file|-]`);
   process.exit(2);
 }
 
@@ -98,6 +98,15 @@ function graphFields(data) {
   };
 }
 
+function hostedIndexReason(reason) {
+  const descriptions = {
+    graph_projection_disabled: 'disabled by choice',
+    runtime_qmd_active: 'local Runtime/QMD retrieval is active',
+    canonical_runtime_snapshot: 'using canonical Runtime status',
+  };
+  return descriptions[reason] || reason;
+}
+
 function classifyGraph(data, options = {}) {
   const mode = options.mode || data.mode || 'connected';
   const attempt = options.attempt || 'initial';
@@ -117,7 +126,7 @@ function classifyGraph(data, options = {}) {
       status: 'connected',
       retry: false,
       reason: '',
-      message: 'Graph connected.',
+      message: 'Optional hosted index connected.',
     };
   }
 
@@ -126,7 +135,7 @@ function classifyGraph(data, options = {}) {
       status: 'retry',
       retry: true,
       reason,
-      message: 'Connected-mode graph was unreachable; retry with network escalation.',
+      message: 'Optional hosted index was unreachable; retry with network escalation.',
     };
   }
 
@@ -135,7 +144,7 @@ function classifyGraph(data, options = {}) {
     status: 'offline',
     retry: false,
     reason: finalReason,
-    message: `Graph offline (${finalReason}). Render filesystem fallback.`,
+    message: `Optional hosted index offline (${hostedIndexReason(finalReason)}). Render canonical Runtime status.`,
   };
 }
 
@@ -154,8 +163,8 @@ function renderActivity(data) {
 
   const brand = `${truncate(org, 20).toUpperCase()} EGREGORE ✦ ACTIVITY DASHBOARD`;
   const lines = [topRule(), padLine(brand), padLine([me, date].filter(Boolean).join(' · ')), rule()];
-  if (graph.status !== 'connected') {
-    lines.push(padLine(`graph: ${graph.status}`, graph.reason));
+  if (data.connected_enrichment && graph.status !== 'connected') {
+    lines.push(padLine(`hosted index: ${graph.status}`, hostedIndexReason(graph.reason)));
     lines.push(rule());
   }
 
@@ -235,7 +244,9 @@ function renderDashboard(data) {
   const graph = classifyGraph(data, { mode: data.mode || 'connected', attempt: 'retry' });
   const org = data.org || 'Egregore';
   const date = data.date || '';
-  const me = data.me?.github || data.me?.name || data.github_username || '';
+  const me = typeof data.me === 'string'
+    ? data.me
+    : data.me?.github || data.me?.name || data.github_username || '';
   const current = data.current_session || {};
   const sessions = firstArray(data, ['sessions', 'local_sessions.sessions']);
   const todos = firstArray(data, ['todos', 'open_todos']);
@@ -245,8 +256,8 @@ function renderDashboard(data) {
   const stats = data.stats || {};
 
   const lines = [topRule(), padLine('DASHBOARD', [org, me, date].filter(Boolean).join(' · ')), rule()];
-  if (graph.status !== 'connected') {
-    lines.push(padLine(`graph: ${graph.status}`, graph.reason));
+  if (data.connected_enrichment && graph.status !== 'connected') {
+    lines.push(padLine(`hosted index: ${graph.status}`, hostedIndexReason(graph.reason)));
     lines.push(rule());
   }
 
@@ -306,7 +317,7 @@ function renderDashboard(data) {
 function renderHandoff(data) {
   const file = data.file ? `memory/${data.file}` : '';
   const statuses = [
-    data.graphStatus ? `graph=${data.graphStatus}` : '',
+    data.graphStatus ? `hosted index=${data.graphStatus}` : '',
     data.memoryStatus ? `memory=${data.memoryStatus}` : '',
     data.notifyStatus ? `notify=${data.notifyStatus}` : '',
     data.publishStatus ? `publish=${data.publishStatus}` : '',

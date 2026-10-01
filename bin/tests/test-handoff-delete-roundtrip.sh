@@ -18,6 +18,8 @@
 #   RELAY=http://localhost:8000 bin/tests/test-handoff-delete-roundtrip.sh
 
 set -euo pipefail
+# Live: publishes to the live relay. Opt in with EGREGORE_LIVE_INTEGRATION=1; otherwise report a skip.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then echo "SKIP: publishes to the live relay; set EGREGORE_LIVE_INTEGRATION=1 to run"; exit 0; fi
 
 RELAY="${RELAY:-https://egregore-production-55f2.up.railway.app}"
 NOW="$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())')"

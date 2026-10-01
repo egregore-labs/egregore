@@ -17,6 +17,13 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
+if ! _graph_projection_enabled; then
+  echo '{"results":[],"status":"disabled","reason":"graph_projection_disabled"}'
+  exit 0
+fi
+
 # --- Local mode gate: bail immediately ---
 _MODE=$(jq -r '.mode // "connected"' "$CONFIG" 2>/dev/null)
 if [ "$_MODE" = "local" ]; then

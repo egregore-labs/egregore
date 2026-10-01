@@ -47,6 +47,12 @@ egregore_link_shared_state() {
 
     if [ -L "$dst" ]; then
       ln -sfn "$src" "$dst" 2>/dev/null || true
+    elif [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+      # Older atomic writers could replace a shared-state symlink with an
+      # identical private file. Exact equality makes this repair lossless;
+      # differing files are left untouched for explicit reconciliation.
+      rm -f "$dst" 2>/dev/null || continue
+      ln -s "$src" "$dst" 2>/dev/null || true
     elif [ ! -e "$dst" ]; then
       ln -s "$src" "$dst" 2>/dev/null || true
     fi

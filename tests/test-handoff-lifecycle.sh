@@ -43,7 +43,7 @@ fi
 SH
 chmod +x "$TMPD/bin/graph.sh" "$TMPD/bin/handoff-lifecycle.sh"
 
-PLAN="$(bash "$TMPD/bin/handoff-lifecycle.sh" scan --days 14)"
+PLAN="$(bash "$TMPD/bin/handoff-lifecycle.sh" --graph scan --days 14)"
 if jq -e '
   .schema == "egregore-handoff-lifecycle-plan/v1"
   and .counts.open_rows == 6
@@ -61,7 +61,7 @@ else
   fail "scan classification"
 fi
 
-MANAGED="$(bash "$TMPD/bin/handoff-lifecycle.sh" scan --days 14 --managed-only)"
+MANAGED="$(bash "$TMPD/bin/handoff-lifecycle.sh" --graph scan --days 14 --managed-only)"
 if jq -e '.managed_only == true' <<<"$MANAGED" >/dev/null; then
   pass "managed-only plans are explicit in their output"
 else
@@ -78,14 +78,14 @@ else
 fi
 
 SNAPSHOT="$(jq -r '.snapshot_id' <<<"$PLAN")"
-if bash "$TMPD/bin/handoff-lifecycle.sh" apply \
+if bash "$TMPD/bin/handoff-lifecycle.sh" --graph apply \
   --snapshot "$SNAPSHOT" --confirm WRONG >/dev/null 2>&1; then
   fail "apply rejects wrong confirmation"
 else
   pass "apply rejects wrong confirmation"
 fi
 
-APPLIED="$(bash "$TMPD/bin/handoff-lifecycle.sh" apply \
+APPLIED="$(bash "$TMPD/bin/handoff-lifecycle.sh" --graph apply \
   --snapshot "$SNAPSHOT" --confirm APPLY_SAFE_HANDOFF_LIFECYCLE)"
 if jq -e '.applied == true and .transitions == {closed:1,expired:2}' \
   <<<"$APPLIED" >/dev/null; then
@@ -96,11 +96,11 @@ else
 fi
 
 printf '{"mode":"local"}\n' > "$TMPD/egregore.json"
-LOCAL="$(bash "$TMPD/bin/handoff-lifecycle.sh" scan)"
+LOCAL="$(bash "$TMPD/bin/handoff-lifecycle.sh" --graph scan)"
 if jq -e '.must_abstain == true' <<<"$LOCAL" >/dev/null; then
-  pass "local mode explicitly abstains"
+  pass "explicit legacy graph mode abstains in Local"
 else
-  fail "local abstention"
+  fail "legacy graph Local abstention"
 fi
 
 if grep -Fq "MATCH (implementation:Session)-[:IMPLEMENTS]->(s)" "$ROOT/bin/graph-op.sh" &&

@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: enrich-graph.sh [--dry-run]"
   echo ""
-  echo "Enrich the knowledge graph by backfilling missing data:"
+  echo "Update the optional hosted index by backfilling missing data:"
   echo "  1. Topics on Artifact nodes (from frontmatter or title)"
   echo "  2. Type labels on Artifact nodes"
   echo "  3. Timestamps on Artifact nodes"
@@ -18,7 +18,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "  5. RELATES_TO edges between artifacts with shared topics"
   echo ""
   echo "Options:"
-  echo "  --dry-run  Show what would change without modifying the graph"
+  echo "  --dry-run  Show what would change without modifying the hosted index"
   exit 0
 fi
 

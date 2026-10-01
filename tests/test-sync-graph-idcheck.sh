@@ -58,7 +58,7 @@ esac
 
 # --- Test 2: the existence check must not depend on a pipeline ---
 # Any `| grep -q` reintroduces the SIGPIPE race regardless of how it's written.
-if echo "$ID_EXISTS_SRC" | grep -q '|[[:space:]]*grep'; then
+if grep -q '|[[:space:]]*grep' <<< "$ID_EXISTS_SRC"; then
   fail "id_exists pipes into grep — pipefail can turn an early match into a false miss"
 else
   pass "id_exists resolves in-shell, no pipeline to break"
@@ -68,9 +68,9 @@ fi
 # Leading with MATCH (p:Person) yields zero rows for an unknown author, so the
 # MERGE silently never runs while the query still reports success.
 WRAP_CYPHER="$(sed -n '/CYPHER="MERGE (s:Session/,/RETURN s.id"/p' "$SYNC")"
-if [ -n "$WRAP_CYPHER" ] && echo "$WRAP_CYPHER" | grep -q 'OPTIONAL MATCH (p:Person)'; then
+if [ -n "$WRAP_CYPHER" ] && grep -q 'OPTIONAL MATCH (p:Person)' <<< "$WRAP_CYPHER"; then
   pass "wrap sync MERGEs the Session first, then OPTIONAL MATCHes the author"
-elif sed -n '/CYPHER="MATCH (p:Person)/,/RETURN s.id"/p' "$SYNC" | grep -q 'MERGE (s:Session'; then
+elif sed -n '/CYPHER="MATCH (p:Person)/,/RETURN s.id"/p' "$SYNC" | grep >/dev/null 'MERGE (s:Session'; then
   fail "wrap sync still leads with MATCH (p:Person) — unknown authors write nothing and report success"
 else
   fail "could not locate the wrap sync Cypher — test needs updating"

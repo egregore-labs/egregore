@@ -109,7 +109,7 @@ Numbers in brackets. Use section markers after the bracket for typed items.
 ### Status Confirmations
 ```
 ✓ Saved to knowledge/decisions/2026-02-08-...
-✓ Indexed in knowledge graph
+✓ Memory index updated
 ✓ Auto-saved
 ```
 
@@ -117,7 +117,7 @@ Numbers in brackets. Use section markers after the bracket for typed items.
 ```
 [1/5] ✓ Conversation file
 [2/5] ✓ Index updated
-[3/5] ✓ Session → knowledge graph
+[3/5] ✓ Session saved to memory
 [4/5] ✓ Pushed + PR created
 [5/5] ✓ Oz notified
 ```
@@ -169,13 +169,13 @@ Numbers in brackets. Use section markers after the bracket for typed items.
 - **Never include org name** in non-activity command headers
 - **Never use emoji** in TUI boxes (sigils and markers only)
 
-## 8. AskUserQuestion Integration
+## 8. Structured questions
 
 When a command's TUI includes interactive follow-up (like `/activity` numbered items):
 
 1. Display the full TUI box first
 2. Add footer text inside the box: `Type a number to act, or keep working.`
-3. Use AskUserQuestion with options matching the numbered items
+3. Ask with a structured question when available and permitted in this session; otherwise ask in plain text. Use options matching the numbered items
 4. Include a "Skip" option for non-action
 
 ## 9. Color and Emphasis

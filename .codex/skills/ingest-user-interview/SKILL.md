@@ -1,14 +1,14 @@
 ---
 name: ingest-user-interview
-description: 'Analyze user interview transcripts (Granola, pasted text, or a file) through a 3-analyst-agent plus Opus-synthesis pipeline. Say ''process the interview'', ''onboarding interview'', ''research call''.'
+description: 'Analyze a user interview from Granola, pasted text, or a file into an evidence-backed briefing, journey insights, product findings, patterns, and actions. Use for /ingest user-interview, onboarding interviews, research calls, or requests to process user feedback.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore ingest-user-interview Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `ingest-user-interview`. Its one
+maintained body is `.claude/skills/ingest-user-interview/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling
@@ -28,6 +28,10 @@ reading `.claude/skills/ingest-user-interview/SKILL.md`, reproduce the same visi
   unless the user explicitly asks for a summary.
 - When the source says to output a TUI box directly, paste that box as the
   visible response, preferably in a `text` fenced block.
+- If the canonical body says the command's stdout is the card and must not
+  be repeated, that rule assumes a host that displays command output in full;
+  in Codex, paste the card once as the visible response in a `text` fenced
+  block and do not print it a second time.
 - Never show raw JSON, raw command output, or unformatted script output when
   the source skill requires formatted status or rendered output.
 

@@ -1,14 +1,14 @@
 ---
 name: pull
-description: 'Use for /pull when you need to sync the current branch and shared memory without also viewing activity (/activity auto-syncs already).'
+description: 'Use for /pull when you need to sync the current branch and shared memory. Activity and dashboard are read-only and never sync repositories.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->
 
 # Egregore pull Adapter
 
-This is fallback coverage for a long-tail Egregore workflow that has not been
-ported to a hand-written Codex-native skill yet.
+This adapter runs the canonical Egregore workflow for `pull`. Its one
+maintained body is `.claude/skills/pull/SKILL.md`; read that file completely and follow it here.
 
 Use the project shell and filesystem directly. Do not invoke Claude Code
 commands. Translate interactive choices to structured Codex question tooling

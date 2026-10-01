@@ -29,8 +29,10 @@ mandatory for every mode, including `status`, and replaces any hand-written
 interpretation of `upstream_url`:
 
 ```bash
-UPSTREAM_REPO=$(bash bin/contribute-guard.sh) || exit $?
+bash bin/contribute-guard.sh
 ```
+
+Use the printed target as `{upstream_repo}`; quote placeholders in single quotes when you use them in a command, and write any single quote inside a value as `'\''`.
 
 If the guard refuses because `upstream_url` is `"none"`, tell the user:
 
@@ -44,8 +46,10 @@ show its error and stop. Never substitute a public target after a guard error.
 ## Step 1: Check auth + get username
 
 ```bash
-GH_USER=$(gh api user --jq '.login' 2>/dev/null)
+gh api user --jq '.login' 2>/dev/null
 ```
+
+Use the printed login as `{gh_user}`.
 
 If empty: "Run `bash bin/github-auth.sh` first — you need GitHub access to contribute." Stop.
 
@@ -57,7 +61,7 @@ If empty: "Run `bash bin/github-auth.sh` first — you need GitHub access to con
 
 If `$ARGUMENTS` is non-empty (and not `submit`/`status`), use as the topic description.
 
-If empty, use AskUserQuestion:
+If empty, ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 
 ```
 header: "Contribute"
@@ -77,57 +81,69 @@ If freeform or "Something else" → ask the user to describe the change.
 
 ### Step 3: Set up infrastructure (silent — no output to user)
 
-All three steps in one bash call:
+Run all three steps in order:
 
 ```bash
 # Revalidate immediately before the first external mutation. A target change
 # or source-repository config stops the entire command block.
-bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
+bash bin/contribute-guard.sh --expect '{upstream_repo}' >/dev/null || exit $?
 
 # 3a: Fork upstream (idempotent — no-ops if fork exists)
-gh repo fork "$UPSTREAM_REPO" --clone=false 2>/dev/null || true
+gh repo fork '{upstream_repo}' --clone=false 2>/dev/null || true
+```
 
+Check whether the contribute remote exists:
+
+```bash
 # 3b: Add contribute remote (skip if exists)
-if ! git remote get-url contribute &>/dev/null; then
-  REPO_NAME=$(echo "$UPSTREAM_REPO" | cut -d'/' -f2)
-  git remote add contribute "https://github.com/${GH_USER}/${REPO_NAME}.git" 2>/dev/null
-fi
+git remote get-url contribute &>/dev/null
+```
+
+If the check exits nonzero, add the remote; if it succeeds, skip adding it:
+
+Use the part after `/` in `{upstream_repo}` as `{repo_name}`.
+
+```bash
+git remote add contribute 'https://github.com/{gh_user}/{repo_name}.git' 2>/dev/null
+```
+
+Then fetch the remote and continue with branch setup:
+
+```bash
 git fetch contribute --quiet 2>/dev/null || true
 
 # 3c: Create contribution branch from upstream/main
 git fetch upstream main --quiet 2>/dev/null || true
 ```
 
-Derive topic slug:
-```bash
-SLUG=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-40)
-CONTRIBUTE_BRANCH="contribute/${SLUG}"
-```
+Derive topic slug: lowercase the description, replace every character outside `a-z0-9` with `-`, collapse consecutive hyphens, remove leading and trailing hyphens, then keep the first 40 characters as `{topic_slug}`. Use `contribute/{topic_slug}` as `{contribute_branch}`.
 
 Save current branch for later return:
 ```bash
-PREVIOUS_BRANCH=$(git branch --show-current)
+git branch --show-current
 ```
+
+Keep the printed value as `{previous_branch}` for the return in Step 13.
 
 Check if branch exists:
 ```bash
-if git show-ref --verify --quiet "refs/heads/$CONTRIBUTE_BRANCH" 2>/dev/null; then
+if git show-ref --verify --quiet 'refs/heads/{contribute_branch}' 2>/dev/null; then
   # Branch exists — ask: resume or start fresh?
 fi
 ```
 
 If new:
 ```bash
-git checkout -b "$CONTRIBUTE_BRANCH" upstream/main --quiet
+git checkout -b '{contribute_branch}' upstream/main --quiet
 ```
 
 ### Step 4: Confirm setup
 
 ```
-Contributing to {UPSTREAM_REPO}
+Contributing to {upstream_repo}
 
-  Fork:   github.com/{GH_USER}/{repo_name}
-  Branch: {CONTRIBUTE_BRANCH}
+  Fork:   github.com/{gh_user}/{repo_name}
+  Branch: {contribute_branch}
   Scope:  bin/ · .claude/commands/ · .claude/agents/ · loom/ · CLAUDE.md · skills/
 
 Make your changes, then run /contribute submit.
@@ -148,32 +164,40 @@ The user now works on their changes. Claude assists normally. When ready, they r
 ### Step 6: Validate state
 
 ```bash
-CURRENT_BRANCH=$(git branch --show-current)
+git branch --show-current
 ```
+
+Use the printed value as `{branch}` for the branch checks below.
 
 **If not on a `contribute/*` branch**: Check for framework changes vs upstream:
 
 ```bash
-FRAMEWORK_CHANGES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/null)
+git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/null
 ```
+
+Use the printed file list as `{framework_changes}`.
 
 - If changes exist on a non-contribute branch: offer to cherry-pick into a contribution branch
 - If no changes: "No framework changes found. Make changes first, then `/contribute submit`." Stop.
 
-**If on a `contribute/*` branch**: Proceed.
+**If on a `contribute/*` branch**: Use `{branch}` as `{contribute_branch}` and proceed.
 
 ### Step 7: Show changes for review
 
 ```bash
-DIFF_STAT=$(git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
-DIFF_FILES=$(git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
+git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/
+git diff upstream/main --name-only -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/
 ```
+
+Use the first command's output as `{diff_stat}` and the second command's file list as `{diff_files}`.
 
 Show the diff. Also warn about out-of-scope changes:
 
 ```bash
-NON_FRAMEWORK=$(git diff upstream/main --name-only | grep -v '^bin/' | grep -v '^\.claude/commands/' | grep -v '^\.claude/agents/' | grep -v '^loom/' | grep -v '^CLAUDE\.md$' | grep -v '^skills/' | head -5)
+git diff upstream/main --name-only | grep -v '^bin/' | grep -v '^\.claude/commands/' | grep -v '^\.claude/agents/' | grep -v '^loom/' | grep -v '^CLAUDE\.md$' | grep -v '^skills/' | head -5
 ```
+
+Use the printed file list as `{non_framework}`.
 
 If non-empty:
 > These files are outside framework scope and won't be included:
@@ -187,7 +211,7 @@ git add bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/ 2>/dev/nu
 
 If nothing staged: "No framework changes to submit." Stop.
 
-Commit message — per `.claude/context/commit-format.md`; use AskUserQuestion:
+Commit message — per `.claude/context/commit-format.md`; ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 
 ```
 header: "Message"
@@ -199,27 +223,35 @@ options:
     description: "Enter a custom message"
 ```
 
+Use `{commit_message}` for the commit message chosen in the preceding question, escaping embedded single quotes as `'\''`:
+
 ```bash
-git commit -m "$COMMIT_MESSAGE"
+git commit -m '{commit_message}'
 ```
 
 ### Step 9: Safety scan
 
 Check for org-specific content that shouldn't go upstream:
 
-```bash
-ORG_NAME=$(jq -r '.org_name // empty' egregore.json 2>/dev/null)
-GITHUB_ORG=$(jq -r '.github_org // empty' egregore.json 2>/dev/null)
-SLUG=$(jq -r '.slug // empty' egregore.json 2>/dev/null)
+Use `{diff_files}` from Step 7 as separate file arguments, each single-quoted;
+write any single quote inside a path as `'\''`:
 
-LEAKS=""
-for f in $DIFF_FILES; do
-  FOUND=$(grep -n "$ORG_NAME\|$GITHUB_ORG\|$SLUG" "$f" 2>/dev/null)
-  [ -n "$FOUND" ] && LEAKS="${LEAKS}\n${f}:\n${FOUND}"
-done
+```bash
+bash bin/contribute-guard.sh scan -- {diff_files}
 ```
 
-If leaks found, use AskUserQuestion:
+For a long list, write those paths, one per line, to
+`tmp/contribute-files.txt`, then run this instead:
+
+```bash
+bash bin/contribute-guard.sh scan --stdin < tmp/contribute-files.txt
+```
+
+The guard reads `org_name`, `github_org`, and `slug` from configuration and prints
+`path:line:match` rows. Exit 1 means references matched, 0 means clean (including
+an empty list); deleted files are skipped. On exit 2, show the error and stop.
+
+If leaks found, ask with a structured question when available and permitted in this session; otherwise ask in plain text:
 
 ```
 header: "Safety"
@@ -236,36 +268,42 @@ If "Fix first" → Stop.
 ### Step 10: Push to fork
 
 ```bash
-bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
-git push contribute "$CONTRIBUTE_BRANCH" -u --quiet 2>&1
+bash bin/contribute-guard.sh --expect '{upstream_repo}' >/dev/null || exit $?
+git push contribute '{contribute_branch}' -u --quiet 2>&1
 ```
 
 If push fails: "Push failed. Your changes are saved locally. Check your network and try `/contribute submit` again." Stop.
 
 ### Step 11: Create cross-fork PR
 
+Refresh the diff stat for the PR body:
+
 ```bash
-bash bin/contribute-guard.sh --expect "$UPSTREAM_REPO" >/dev/null || exit $?
-PR_URL=$(gh pr create \
-  --repo "$UPSTREAM_REPO" \
-  --head "${GH_USER}:${CONTRIBUTE_BRANCH}" \
-  --base main \
-  --title "$COMMIT_MESSAGE" \
-  --body "$(cat <<EOF
-$DESCRIPTION
-
-### Changes
-$(git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/)
-
----
-Contributed via \`/contribute\` from an Egregore instance.
-EOF
-)" 2>&1)
+git diff upstream/main --stat -- bin/ .claude/commands/ .claude/agents/ loom/ CLAUDE.md skills/
 ```
 
-If PR creation fails: "PR creation failed, but your branch is pushed to your fork. Create the PR manually at github.com/{GH_USER}/{repo_name}." Stop.
+Use the printed value as `{diff_stat}`. Write `tmp/pr-body.md` following `.claude/context/pr-format.md`, including the contribution description from the user's arguments or Step 2 answer, `{diff_stat}`, and the credit "Contributed via `/contribute` from an Egregore instance."
 
-Extract PR number from URL.
+Revalidate `{upstream_repo}`, the target printed by the guard, and stop if it refuses:
+```bash
+bash bin/contribute-guard.sh --expect '{upstream_repo}' >/dev/null
+```
+
+Use `{commit_message}` from Step 8 as the title, `{upstream_repo}` from the guard, `{gh_user}` from the authenticated login, and `{contribute_branch}` from the current contribution branch:
+```bash
+gh pr create \
+  --repo '{upstream_repo}' \
+  --head '{gh_user}:{contribute_branch}' \
+  --base main \
+  --title '{commit_message}' \
+  --body-file tmp/pr-body.md 2>&1
+```
+
+Use the printed URL as `{pr_url}` for the confirmation below.
+
+If PR creation fails: "PR creation failed, but your branch is pushed to your fork. Create the PR manually at github.com/{gh_user}/{repo_name}." Stop.
+
+Extract PR number from `{pr_url}`.
 
 ### Step 12: Confirmation
 
@@ -275,18 +313,24 @@ Extract PR number from URL.
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
 │  {PR title}                                                          │
-│  → {UPSTREAM_REPO} · PR #{number}                                    │
+│  → {upstream_repo} · PR #{number}                                    │
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │  ✓ Pushed to fork · PR created                                      │
-│  {PR URL}                                                            │
+│  {pr_url}                                                            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Step 13: Return to working branch
 
 ```bash
-git checkout "$PREVIOUS_BRANCH" 2>/dev/null || git checkout develop 2>/dev/null || true
+git checkout '{previous_branch}'
+```
+
+If it fails, run:
+
+```bash
+git checkout develop
 ```
 
 ### Step 14: Telemetry
@@ -300,18 +344,20 @@ bash bin/telemetry.sh emit "command" '{"command":"contribute","subcommand":"subm
 ## Status mode (`/contribute status`)
 
 ```bash
-CONTRIBUTE_BRANCHES=$(git branch --list "contribute/*" --format="%(refname:short)")
+git branch --list "contribute/*" --format="%(refname:short)"
 ```
+
+Use the printed branch list as `{contribute_branches}`.
 
 For each branch, check:
 - Diff stat vs upstream/main
 - Whether pushed to fork (`git log contribute/$branch --oneline -1 2>/dev/null`)
-- Whether PR exists (`gh pr list --repo "$UPSTREAM_REPO" --head "${GH_USER}:${branch}" --json number,state --jq '.[0]' 2>/dev/null`)
+- Whether PR exists (`gh pr list --repo '{upstream_repo}' --head '{gh_user}:{branch}' --json number,state --jq '.[0]' 2>/dev/null`)
 
 Display:
 
 ```
-↑ Contributions to {UPSTREAM_REPO}
+↑ Contributions to {upstream_repo}
 
   contribute/improve-save-command
     +42/-8, 3 files · pushed · PR #17 (open)

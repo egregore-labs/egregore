@@ -45,7 +45,12 @@ echo '{"autosave_enabled":true}' > "$SB/.egregore-state.json"
 rm -f /tmp/.egregore-autosave-* 2>/dev/null || true
 
 bash "$SB/bin/session-autosave.sh" --sweep
-sleep 3
+# The sweep rescues each checkout in the background; wait for both, bounded.
+for _ in $(seq 1 100); do
+  [ -z "$(git -C "$SB" status --porcelain)" ] \
+    && [ -z "$(git -C "$SB/.claude/worktrees/wt-a" status --porcelain)" ] && break
+  sleep 0.2
+done
 check "root rescued (clean)"        0 "$(git -C "$SB" status --porcelain | wc -l | tr -d ' ')"
 check "root restored to develop"    develop "$(git -C "$SB" branch --show-current)"
 check "wt-a rescued (clean)"        0 "$(git -C "$SB/.claude/worktrees/wt-a" status --porcelain | wc -l | tr -d ' ')"

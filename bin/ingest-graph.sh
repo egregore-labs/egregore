@@ -31,6 +31,12 @@ case "$mode" in
   *) usage ;;
 esac
 
+if ! _graph_projection_enabled; then
+  jq -cn \
+    '{status:"stored",graph:"disabled",reason:"graph_projection_disabled",queries:0,batches:0,failed:0,replayable:true}'
+  exit 0
+fi
+
 plan="$(python3 "$PLANNER" plan "$manifest")"
 manifest_id="$(printf '%s' "$plan" | jq -r '.manifest_id')"
 query_count="$(printf '%s' "$plan" | jq -r '.query_count')"

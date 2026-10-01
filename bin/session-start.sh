@@ -8,14 +8,18 @@ FRAMEWORK_VERSION="7"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-# --- Worktree detection ---
-# Git worktrees have .git as a FILE (not directory) pointing to the main repo's .git/worktrees/
+# --- Transient development-checkout detection ---
+# Git worktrees have .git as a FILE. The launcher also marks standalone
+# development clones as transient so startup preserves their feature branch
+# and never registers them as a second Egregore instance.
 IS_WORKTREE="false"
 MAIN_PROJECT_DIR="$SCRIPT_DIR"
 if [ -f "$SCRIPT_DIR/.git" ]; then
   IS_WORKTREE="true"
   WT_GITDIR=$(sed 's/^gitdir: //' "$SCRIPT_DIR/.git" 2>/dev/null)
   MAIN_PROJECT_DIR=$(cd "$WT_GITDIR/../../.." 2>/dev/null && pwd)
+elif [ "${EGREGORE_TRANSIENT_CHECKOUT:-0}" = "1" ]; then
+  IS_WORKTREE="true"
 fi
 
 # Defensive net: re-link worktree shared state (symlinks to the main checkout's
@@ -32,10 +36,14 @@ rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch
 # Same for boundary-crossing consent — grants are session-scoped (CLAUDE.md
 # environment-isolation protocol); durable grants belong in .egregore-boundary.local.json.
 rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
+# Prune abandoned scratch without blocking startup or fresh sibling work.
+( bash "$SCRIPT_DIR/bin/scratch-sweep.sh" --older-than 60 >/dev/null 2>&1 & ) 2>/dev/null
 
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
 HEALTH_GIT="skip"
+HEALTH_MEMORY="skip"
+HEALTH_RETRIEVAL="skip"
 HEALTH_APIKEY="skip"
 HEALTH_GRAPH="skip"
 HEALTH_TELEGRAM="skip"
@@ -51,10 +59,17 @@ source "$SCRIPT_DIR/bin/lib/config.sh"
 source "$SCRIPT_DIR/bin/lib/hash.sh"
 source "$SCRIPT_DIR/bin/lib/time.sh"
 
+# Opt-in monotonic phase tracing (EGREGORE_STARTUP_TRACE=1); traces land in
+# ~/.egregore/runtime/startup-traces, normal output is untouched.
+source "$SCRIPT_DIR/bin/lib/trace.sh" 2>/dev/null || true
+egregore_trace_begin "session-start" 2>/dev/null || true
+egregore_trace_mark "libs-loaded" 2>/dev/null || true
+
 # ============================================================
 # 1. Resolve identity
 # ============================================================
 source "$SCRIPT_DIR/bin/lib/identity.sh"
+egregore_trace_mark "identity" 2>/dev/null || true
 
 # ============================================================
 # 2. Ensure the base branch exists (needed before onboarding creates working branches)
@@ -153,7 +168,8 @@ if [ "$LOCAL_MODE" != "true" ]; then
     else
       # Extract slug from key: ek_<slug>_<secret> → <slug>
       KEY_SLUG=$(echo "$CURRENT_KEY" | cut -d'_' -f2)
-      if [ -n "$EXPECTED_SLUG" ] && [ "$KEY_SLUG" != "$EXPECTED_SLUG" ]; then
+      if [ -n "$EXPECTED_SLUG" ] && [ "$KEY_SLUG" != "$EXPECTED_SLUG" ] \
+         && _graph_projection_enabled; then
         # Slug differs from config — ask the API whether the key actually works
         PROBE_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
         PROBE_CODE="000"
@@ -242,6 +258,7 @@ if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]
       exit 0
     fi
     INST_NAME=$(jq -r '.org_name // empty' "$CONFIG")
+    INST_ORG=$(jq -r '.org_id // empty' "$CONFIG")
 
     if [ -n "$INST_SLUG" ] && [ -n "$INST_NAME" ]; then
       mkdir -p "$REGISTRY_DIR"
@@ -249,9 +266,19 @@ if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]
 
       ALREADY=$(jq --arg p "$SCRIPT_DIR" '[.[] | select(.path == $p)] | length' "$REGISTRY")
       if [ "$ALREADY" = "0" ]; then
-        ENTRY=$(jq -n --arg s "$INST_SLUG" --arg n "$INST_NAME" --arg p "$SCRIPT_DIR" \
-          '{slug: $s, name: $n, path: $p}')
+        # org_id is the stable identity other sessions use to prove this
+        # checkout is same-organization rather than foreign
+        ENTRY=$(jq -n --arg s "$INST_SLUG" --arg n "$INST_NAME" --arg p "$SCRIPT_DIR" --arg o "$INST_ORG" \
+          '{slug: $s, name: $n, path: $p} + (if $o == "" then {} else {org_id: $o} end)')
         jq --argjson e "$ENTRY" '. + [$e]' "$REGISTRY" > "$REGISTRY.tmp" \
+          && mv "$REGISTRY.tmp" "$REGISTRY"
+      elif [ -n "$INST_ORG" ]; then
+        # Backward compatibility: patch this checkout's own legacy entry with
+        # its org_id so other sessions can prove identity instead of failing
+        # closed against it
+        jq --arg p "$SCRIPT_DIR" --arg o "$INST_ORG" \
+          'map(if .path == $p and ((.org_id // "") == "") then . + {org_id: $o} else . end)' \
+          "$REGISTRY" > "$REGISTRY.tmp" \
           && mv "$REGISTRY.tmp" "$REGISTRY"
       fi
     fi
@@ -298,13 +325,18 @@ compute_boundary() {
     managed_repos_json="$managed_repos_json]"
   fi
 
-  # Collect denied paths from instance registry
+  # Collect denied paths from instance registry. Only checkouts proven to
+  # share this instance's stable organization identity (org_id) are excluded;
+  # ancestry or a matching slug proves nothing, and entries without org_id
+  # stay denied (fail closed). Shared logic: bin/boundary.sh compute-denied.
   local denied_paths_json="[]"
   local registry="$HOME/.egregore/instances.json"
   if [ -f "$registry" ]; then
-    denied_paths_json=$(jq --arg self "$project_dir" --arg wt_prefix "$project_dir/.claude/worktrees" \
-      '[.[] | select(.path != $self) | select((.path | startswith($wt_prefix)) | not) | .path]' \
-      "$registry" 2>/dev/null || echo "[]")
+    local self_org
+    self_org=$(jq -r '.org_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
+    denied_paths_json=$(bash "$SCRIPT_DIR/bin/boundary.sh" compute-denied \
+      "$registry" "$project_dir" "$self_org" 2>/dev/null || echo "[]")
+    case "$denied_paths_json" in "["*) ;; *) denied_paths_json="[]" ;; esac
   fi
 
   # --- Boundary policy: posture + read roots (two-tier consent model) ---
@@ -383,7 +415,17 @@ compute_boundary 2>/dev/null || true
 # ============================================================
 # 5. Git sync
 # ============================================================
+egregore_trace_mark "branch-onboarding-mode-boundary" 2>/dev/null || true
 source "$SCRIPT_DIR/bin/lib/git-sync.sh"
+egregore_trace_mark "git-sync" 2>/dev/null || true
+
+# Resolve a legacy instance's stable Runtime identity before SessionStart
+# finishes and UserPromptSubmit can invoke Observe. Once persisted this is a
+# local status check; a control-plane outage never blocks the harness.
+if [ -f "$SCRIPT_DIR/bin/runtime-identity.sh" ]; then
+  bash "$SCRIPT_DIR/bin/runtime-identity.sh" ensure >/dev/null 2>&1 || true
+fi
+egregore_trace_mark "runtime-identity" 2>/dev/null || true
 
 # ============================================================
 # 6. Graph bootstrap
@@ -574,11 +616,13 @@ fi
 export EGREGORE_GRAPH_CACHE_TTL=600
 source "$SCRIPT_DIR/bin/lib/context.sh"
 unset EGREGORE_GRAPH_CACHE_TTL CTX_SEED_TAR
+egregore_trace_mark "context-gather" 2>/dev/null || true
 
 # ============================================================
 # 8b. Generate session dashboard artifact
 # ============================================================
 source "$SCRIPT_DIR/bin/lib/dashboard-artifact.sh"
+egregore_trace_mark "dashboard-artifact" 2>/dev/null || true
 
 # Stable board URL — shown in greeting, refreshable. Connected mode only;
 # /view board upserts content at this URL via `publish-artifact.sh --id board`.
@@ -608,7 +652,7 @@ if command -v jq >/dev/null 2>&1; then
   _LOOM_CACHE="$HOME/.egregore/loom-doctor-brief-$(echo -n "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" | cksum | cut -d' ' -f1)"
   _LOOM_FRESH="false"
   if [ -f "$_LOOM_CACHE" ] && [ "$(head -1 "$_LOOM_CACHE" 2>/dev/null)" = "$_LOOM_HASH" ]; then
-    _LOOM_AGE=$(( $(date +%s) - $(stat -f %m "$_LOOM_CACHE" 2>/dev/null || stat -c %Y "$_LOOM_CACHE" 2>/dev/null || echo 0) ))
+    _LOOM_AGE=$(( $(date +%s) - $(stat -c %Y "$_LOOM_CACHE" 2>/dev/null || stat -f %m "$_LOOM_CACHE" 2>/dev/null || echo 0) ))
     [ "$_LOOM_AGE" -lt 21600 ] && _LOOM_FRESH="true"
   fi
   if [ "$_LOOM_FRESH" = "true" ]; then
@@ -625,8 +669,10 @@ fi
 # visible card for external launchers and (b) emit a slim reply when the
 # launcher already displayed the card — the model then answers in one short
 # message instead of re-typing ~1k tokens of box art.
+egregore_trace_mark "loom-doctor" 2>/dev/null || true
 _GREETING_BUF="${TMPDIR:-/tmp}/egregore-greeting-$$.txt"
 { source "$SCRIPT_DIR/bin/lib/greeting.sh"; } > "$_GREETING_BUF"
+egregore_trace_mark "greeting-render" 2>/dev/null || true
 
 # Cache the visible card (everything before the hidden context sections) for
 # bin/greeting-card.sh. Keyed by the main checkout + framework version so a
@@ -651,3 +697,4 @@ fi
 # re-enable path depends on it.
 cat "$_GREETING_BUF"
 rm -f "$_GREETING_BUF" 2>/dev/null || true
+egregore_trace_end 2>/dev/null || true

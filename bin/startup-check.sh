@@ -14,9 +14,19 @@ STATE_FILE="$SCRIPT_DIR/.egregore-state.json"
 
 # --- Read config ---
 API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+MODE=$(jq -r '.mode // "local"' "$CONFIG" 2>/dev/null)
 CONFIG_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
 ORG_NAME=$(jq -r '.org_name // empty' "$CONFIG" 2>/dev/null)
 GITHUB_ORG=$(jq -r '.github_org // empty' "$CONFIG" 2>/dev/null)
+
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
+
+# Runtime telemetry and diagnostics remain on-device by default. Historical
+# Connected health reporting is retained only as an explicit operator action;
+# merely having stale credentials in .env must never trigger an upload.
+[ "$MODE" = "connected" ] || exit 0
+[ "${EGREGORE_SHARE_HEALTH:-0}" = "1" ] || exit 0
 
 GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
 API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
@@ -41,7 +51,7 @@ if [ -n "$API_KEY" ]; then
   KEY_SLUG=$(echo "$API_KEY" | cut -d'_' -f2)
   if [ "$KEY_SLUG" = "$CONFIG_SLUG" ]; then
     KEY_VALID="true"
-  else
+  elif _graph_projection_enabled; then
     # Slug mismatch is not proof of a bad key — org renames leave the working
     # key on the old slug. Ask the API before reporting it broken.
     PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
@@ -53,6 +63,10 @@ if [ -n "$API_KEY" ]; then
     else
       KEY_VALID="true"
     fi
+  else
+    # Graph is intentionally quarantined for this instance. Do not use its
+    # health endpoint as a generic Connected authentication probe.
+    KEY_VALID="true"
   fi
 else
   ERR_LIST="\"no_api_key\""

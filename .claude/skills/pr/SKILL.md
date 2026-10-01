@@ -10,42 +10,22 @@ Create a pull request for current branch targeting the repo's base branch.
 User says: "/pr", "create a PR", "open a pull request", "push this up for review", or the current branch is ready to be reviewed against the base branch.
 Not this: reviewing an existing PR → `/review-pr`.
 
-## Loom routing
+## Execution boundary
 
-**Skip this section if your prompt contains `LOOM-EXECUTOR`** — you are the executor; run the skill as specced below. Full protocol: `.claude/context/loom.md`.
-
-1. Resolve: `ROUTE=$(bash bin/loom.sh route pr)`, then `DECISION_ID=$(printf '%s\n' "$ROUTE" | jq -r '.decision_id // empty')`.
-2. If `mode` ≠ `delegate`, or the user signalled depth ("deep", "think hard", `--deep`) → run this skill inline as normal. On a depth override, print `bash bin/loom.sh footer pr --override` after the output and set `"override":true` in telemetry.
-3. Otherwise delegate: spawn the Agent tool with `subagent_type:
-   "loom-executor"`, `model` = the route's `tier`, prompt =
-   `LOOM-DECISION-ID: $DECISION_ID` on its own first line, then
-   `LOOM-EXECUTOR: Execute .claude/skills/pr/SKILL.md`, plus the user's
-   arguments and any context the spec needs from the session. Print the
-   executor's final output **verbatim**, then print the output of
-   `bash bin/loom.sh footer pr`.
-4. If the spawn fails or the executor's first line is `LOW_CONFIDENCE:` —
-   triage the reason: needs-user-interaction or a main-loop-only tool → take
-   over and finish this skill inline (no escalation); genuine uncertainty or
-   failure → reassign `ROUTE=$(bash bin/loom.sh escalate pr "<reason>")`,
-   refresh `DECISION_ID` from `ROUTE`, then re-spawn once on the new tier
-   carrying the returned decision ID
-   (sticky for this session).
-5. Telemetry (fire-and-forget):
-   `bash bin/telemetry.sh emit "command" '{"command":"pr","routed":true,"mode":"delegate","model":"<actual>","route_tier":"<table tier>","class":"<class>","escalated":<bool>,"override":<bool>,"source":"<source>"}' 2>/dev/null &`
+The Git and GitHub mechanics are deterministic and run inline. The main loop
+keeps only the judgment work: summarize the diff, draft the review text, and
+show the exact title/body before the external PR creation.
 
 ## What to do
 
 1. Determine which repo — if the user mentions a managed repo (listed in `egregore.json` → `repos[]`), create the PR there. Otherwise use the hub.
-2. Resolve the target base branch:
-   - **Egregore hub repo**: call `_get_base_branch`
-   - **Managed repos**: call `_get_base_branch "$REPO"`
-   - Both use the validated `base_branch` from `egregore.json`; a valid config
-     that omits it defaults to `"develop"`, while resolution errors stop
-     before Git changes.
-     ```bash
-     BASE_BRANCH=$(bash -c 'SCRIPT_DIR="$PWD"; CONFIG="$PWD/egregore.json"; . "$PWD/bin/lib/config.sh" && _get_base_branch "$1"' _ "${REPO:-}") ||
-       { echo "Could not resolve the configured base branch; stopping before Git changes." >&2; exit 1; }
-     ```
+2. Resolve the configured integration branch first:
+   ```bash
+   bash bin/base-branch.sh
+   ```
+   It prints the branch name; for a managed repo run `bash bin/base-branch.sh <repo-name>`.
+   A non-zero exit means the configuration could not be resolved: stop before any
+   Git change. Use the printed name wherever `{base}` appears below.
 3. Summarize branch changes vs base branch
 4. Draft title and body per `.claude/context/pr-format.md`:
    - Title: `type(scope): imperative summary` (≤ 72 chars) — the same
@@ -58,16 +38,13 @@ Not this: reviewing an existing PR → `/review-pr`.
      when real · attribution footer of the harness that authored the body
      (final non-blank line, e.g. `🤖 Generated with [Claude Code](https://claude.com/claude-code)`)
    - Show the draft to the user; apply their edits before creating
-5. Create PR via GitHub CLI: `gh pr create --base "$BASE_BRANCH" --title "$TITLE" --body "$BODY"` — never `--fill`, never an empty body (the `pr-format` CI check fails bare PRs)
+5. Create PR via GitHub CLI: `gh pr create --base "{base}" --title "$TITLE" --body "$BODY"` — never `--fill`, never an empty body (the `pr-format` CI check fails bare PRs)
 6. Track PR in graph (fire-and-forget):
    ```bash
-   PROJ_HASH=$(echo -n "$(pwd)" | md5 2>/dev/null || echo -n "$(pwd)" | md5sum 2>/dev/null | cut -d' ' -f1)
-   SID=$(cat "$HOME/.egregore/session-${PROJ_HASH}.id" 2>/dev/null || echo "")
-   GH_USER=$(jq -r '.github_username // empty' .egregore-state.json 2>/dev/null)
-   REPO_NAME=$(jq -r '.repo_name // "egregore"' egregore.json 2>/dev/null)
-   bash bin/graph-op.sh create-pr "$SID" "$PR_NUMBER" "$REPO_NAME" "$GH_USER" "$PR_TITLE" 2>/dev/null &
+   bash bin/graph-op.sh record-pr <number> "<title>" 2>/dev/null &
    ```
-   Where `$PR_NUMBER` is extracted from the `gh pr create` output URL.
+   `<number>` comes from the `gh pr create` output URL; the command resolves
+   the session, repository, and author itself.
 7. Return PR URL
 8. Do NOT auto-merge — explicit `/pr` means "please review this"
 

@@ -19,8 +19,8 @@ echo
 # ── File existence + shebang + exec bits ──────────────────────────
 
 [ -f "$JOIN" ] && pass "join-gh.sh exists" || fail "join-gh.sh missing"
-head -1 "$JOIN" | grep -q '^#!/bin/bash' \
-  && pass "shebang is #!/bin/bash" \
+head -1 "$JOIN" | grep '^#!/usr/bin/env bash' >/dev/null \
+  && pass "shebang is #!/usr/bin/env bash" \
   || fail "wrong or missing shebang"
 
 # ── bash 3.2 syntax check ─────────────────────────────────────────
@@ -225,7 +225,7 @@ fi
 # dangling symlink. First `cd memory` would fail.
 # Look within the "Linking memory" block for a MEMORY_DIR existence guard.
 SYMLINK_BLOCK="$(awk '/Linking memory/,/^fi$/' "$JOIN")"
-if echo "$SYMLINK_BLOCK" | grep -qE '\[ ! -d "\$MEMORY_DIR/\.git"|-d "\$MEMORY_DIR"'; then
+if grep -qE '\[ ! -d "\$MEMORY_DIR/\.git"|-d "\$MEMORY_DIR"' <<< "$SYMLINK_BLOCK"; then
   pass "symlink creation is gated on MEMORY_DIR existence"
 else
   fail "symlink created unconditionally — leaves dangling link if memory clone failed"

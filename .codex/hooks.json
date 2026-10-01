@@ -6,16 +6,16 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/search-hint.js\"",
-            "timeout": 5,
-            "statusMessage": "Checking recall routing"
+            "command": "bash \"$(git rev-parse --show-toplevel)/bin/observe-context.sh\" codex",
+            "timeout": 45,
+            "statusMessage": "Compiling organizational context"
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|apply_patch|Edit|Write",
+        "matcher": "Bash|exec_command|apply_patch|Edit|Write",
         "hooks": [
           {
             "type": "command",

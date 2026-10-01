@@ -170,7 +170,7 @@ if [ "$MIN_IDLE" -gt 0 ] && [ -n "$DIRTY_PATHS" ]; then
   NOW=$(date +%s)
   while IFS= read -r f; do
     [ -e "$f" ] || continue
-    M=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+    M=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
     [ $(( NOW - M )) -lt "$MIN_IDLE" ] && exit 0
   done <<< "$DIRTY_PATHS"
 fi

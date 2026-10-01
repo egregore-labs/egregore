@@ -35,8 +35,9 @@ git fetch upstream main --quiet 2>/dev/null || true
 git ls-tree -d upstream/main ".claude/skills/$NAME" 2>/dev/null | grep -q . && echo "exists upstream"
 ```
 
-If the name exists locally or upstream, propose 2–3 alternatives via
-AskUserQuestion instead of silently picking one. An org CAN deliberately own a
+If the name exists locally or upstream, propose 2–3 alternatives and
+ask with a structured question when available and permitted in this session; otherwise ask in plain text
+instead of silently picking one. An org CAN deliberately own a
 name upstream also uses (their version then always wins), but that is an
 explicit choice — never a default.
 
@@ -57,8 +58,8 @@ description: <one line — what it does and when an agent should reach for it>
 
 ## When to invoke
 
-User says: <trigger phrases>
-Not this: <adjacent intents that route elsewhere>
+<Describe the user intent that selects this skill, with example requests.>
+<Route adjacent intents elsewhere when useful; free-form prose is valid.>
 
 ## Steps
 
@@ -67,7 +68,8 @@ Not this: <adjacent intents that route elsewhere>
 ```
 
 Fill it with real content derived from the user's description — trigger
-phrases an agent can match, concrete steps, actual commands. Follow
+intent an agent can recognize, concrete steps, actual commands. Do not leave
+placeholder-only invocation sections or require fixed routing labels. Follow
 `product-voice` for any user-facing copy the skill emits.
 
 **Cross-runtime adapter (mandatory).** Codex invokes skills as `$<name>` from
@@ -78,6 +80,7 @@ Write `.codex/skills/$NAME/SKILL.md`:
 ---
 name: <name>
 description: '<same one line>'
+canonical: .claude/skills/<name>/SKILL.md
 ---
 
 <!-- org-owned skill adapter — created by /create-skill -->
@@ -100,11 +103,19 @@ exists for Claude Code teammates only — always write both files.
 ## Step 3: Register ownership
 
 Add the name to `owned_skills` in `egregore.json` (create the array if
-absent):
+absent). Use the chosen skill name as `{name}`, single-quoted in the command;
+write any embedded single quote as `'\''`:
 
 ```bash
-jq --arg n "$NAME" '.owned_skills = ((.owned_skills // []) + [$n] | unique)' \
-  egregore.json > egregore.json.tmp && mv egregore.json.tmp egregore.json
+mkdir -p tmp
+jq --arg n '{name}' '.owned_skills = ((.owned_skills // []) + [$n] | unique)' \
+  egregore.json > tmp/create-skill-config.json
+```
+
+If it succeeds, replace the configuration:
+
+```bash
+mv tmp/create-skill-config.json egregore.json
 ```
 
 This is what makes the skill org-owned: `/update` runs
