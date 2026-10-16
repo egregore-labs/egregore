@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  An agentic operating system for organizations.
+  Shared memory for people and their AI agents.
 </p>
 
 <p align="center">
@@ -14,141 +14,127 @@
 
 ---
 
-Egregore is a shared cognition layer for AI-native collaboration. It turns Claude Code into an inhabitable production environment where every session, handoff, and decision accumulates into a living memory owned by your organization.
-With use, the deep context that accumulates enables seamless continuity across multi-agent workflows, visibility into organizational patterns and decision-making, and persistence of collective intelligence across people, sessions, and time.
+Egregore gives people and their AI agents a shared organizational memory.
+Decisions, discoveries, and handoffs accumulate across sessions, so each person
+can build on what the others have learned. Your organization owns the memory.
+**Claude Code, Codex, Pi, and Prime Agent** can all work with it.
 
+One person works through a design decision in Claude Code and leaves a handoff.
+A teammate using Codex picks it up, asks why that approach was chosen, and
+retrieves the decision with its sources. The work continues from the reasoning
+that produced it.
+
+An earlier workflow demo:
 
 https://github.com/user-attachments/assets/71a690fb-8a4e-4d0b-9a61-e6cdc7595430
 
+## Start an Egregore
 
-## Install
+Recommended setup: [Node.js 22 or later](https://nodejs.org/) with npm,
+[Git](https://git-scm.com/), [jq](https://jqlang.org/), Bash, and Python 3.11 or later. Local setup uses the
+[GitHub CLI](https://cli.github.com/) for authentication and offers to install it
+if needed. Install and authenticate your chosen agent before starting a session.
 
 ```bash
 npx create-egregore@latest
 ```
 
-This walks you through GitHub auth, names your egregore, creates the repos
-(instance + shared memory), clones everything locally, and adds a shell
-command to your profile.
+The installer guides you through GitHub authentication, naming your Egregore,
+and choosing an agent. It creates your instance and shared-memory repositories,
+sets up the local workspace, and prepares memory search. Keyword search is
+available first; semantic indexing can finish in the background.
 
-To join an existing egregore:
-
-```bash
-npx create-egregore join <github-org>
-```
-
-(You will need an invitation from the instance owner. See `/invite` below.)
-
-If your org blocks third-party GitHub Apps, there's a gh-CLI install path: see [INSTALL-GH.md](INSTALL-GH.md) or the [docs](https://egregore.xyz/docs/guides/installation).
-
-## Start
-
-Open a new terminal:
+Open a new terminal and run:
 
 ```bash
 egregore
 ```
 
-or, if configured:
+The launcher lets you choose your Egregore and agent, syncs shared memory, and
+starts a session with your identity and pending work. You can return to the
+same memory through any supported agent.
+
+**Join an existing Egregore.** Ask its owner to invite your GitHub username,
+then use the repository's owner and name:
 
 ```bash
-<instance-alias>
+npx create-egregore@latest join <owner>/<egregore-repo>
 ```
 
-Memory syncs. Identity resolves. The session picks up the accumulated context
-from every session before it.
+Setup brings in the shared memory and managed project repositories. Onboarding
+introduces you to the organization and its working conventions.
 
-## The substrate
+**Update an existing installation.** In the launcher, select your Egregore,
+press **s** for **Settings**, then choose **Runtime update**. Review and activate
+the available update. Each person updates their own installation.
 
-Three structural pieces. Everything else is built on them.
+## Work from shared memory
 
-**`egregore.md`** — The identity document. What the group is, what it values,
-how it works. Every session reads it. It evolves with use.
+Memory lives in Markdown files in a separate Git repository, linked into your
+workspace as `memory/`. Decisions, handoffs, patterns, questions, and ongoing
+explorations retain their history. The organization's identity and conventions
+give that memory a shared frame of reference.
 
-**`memory/`** — Git-based shared knowledge. Handoffs, decisions, patterns,
-quests, people. A separate repo, symlinked into the instance. Version-controlled
-provenance on everything.
+Local keyword and semantic search help your agent find relevant work and cite
+the records behind an answer. Ask “What did we decide about onboarding, and
+why?” or “Find the handoff about the redesign.” Egregore retrieves the relevant
+sources as you work.
 
-**Slash commands** — Coordination primitives that encode the session protocol.
-Hand off context, capture decisions, invite people, save work. Nobody needs
-to learn git workflows or remember conventions.
+The same workflows are available across supported agents. Use natural language,
+or `/handoff`, `/reflect`, and other commands in Claude Code, Pi, and Prime
+Agent. In Codex, use `$handoff`, `$reflect`, and the corresponding skills.
 
-## Commands
+| Workflow | What it does |
+|----------|--------------|
+| `handoff` | Carry decisions, reasoning, and open threads into another person's session |
+| `reflect` | Preserve a decision, pattern, or finding |
+| `deep-reflect` | Investigate a question across accumulated knowledge |
+| `quest` | Start or contribute to an open-ended exploration |
+| `ask` | Leave a question for a teammate |
+| `activity` | See recent work across the team |
+| `dashboard` | See your personal status and pending work |
+| `todo` | Keep track of personal tasks |
+| `save` | Commit and push your changes, then create or update a pull request |
+| `invite` | Give a teammate access to your Egregore |
 
-| Command | What it does |
-|---------|-------------|
-| `/handoff` | Structured context for the next session — decisions, trade-offs, open threads |
-| `/activity` | What's happening across the team |
-| `/invite` | Bring someone into the egregore |
-| `/save` | Stage, commit, push, PR — one command |
-| `/dashboard` | Your personal status and recent work |
-| `/quest` | Start or contribute to an open-ended exploration |
-| `/ask` `/harvest` | Route a question to a teammate or the group |
-| `/todo` | Personal task tracking |
-| `/reflect` | Capture a decision, pattern, or finding |
-| `/deep-reflect` | Cross-reference an insight against accumulated knowledge |
+For example, ask “Invite octocat to this Egregore.” Egregore handles the access
+workflow and returns the joining instructions. Each person works in their own
+session; shared memory carries the context between them.
 
-## Invite
+## Your installation
 
-```
-/invite <github-username>
-```
+The open-source runtime includes memory, local search, coordination workflows,
+and adapters for all four agents. Once dependencies and search models are
+provisioned, local memory and search can operate offline. GitHub synchronization
+and hosted model providers need their own connections.
 
-Adds them as a collaborator on your repos. They join with:
+Session startup, memory synchronization, search indexing, and worktree support
+are implemented through shared scripts and agent-specific hooks or extensions.
+Background work can keep repository references and search indexes current.
+The source is available in [`bin/`](bin/), [`.claude/`](.claude/),
+[`.codex/`](.codex/), [`.pi/`](.pi/), and [`.prime/`](.prime/).
 
-```bash
-npx create-egregore join <your-github-org>
-```
+**Telemetry.** Egregore records local diagnostic identifiers and metrics to
+help inspect runtime behavior. Collection is on by default and easy to turn
+off. These diagnostics exclude prompts, code, file contents, and conversations.
+Nothing is uploaded automatically. Ask Egregore to show, clear, or turn off
+telemetry, or set `EGREGORE_NO_TELEMETRY=1` in your `.env`. Your chosen agent's
+own telemetry settings are separate. See the [telemetry specification](.claude/context/telemetry.md)
+for the recorded fields and controls.
 
-New members inherit the full shared context from session one. The egregore
-onboards them.
+**Egregore Connect.** Optional hosted services add membership administration,
+managed integrations, and notifications. Local memory and search remain on your
+machine. Run `egregore connect` to explore the setup, or see
+[egregore.xyz](https://egregore.xyz) for availability.
 
-## What runs
+## Contribute
 
-Egregore uses [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks)
-— shell scripts that fire on session events. All source is in `bin/` and
-`.claude/hooks/`. Read them directly.
+Egregore is built by its users. From an existing installation, ask “Help me
+contribute this improvement upstream,” or use `/contribute` (`$contribute` in
+Codex). The workflow prepares a fork, branch, and pull request to this repository.
 
-| Hook | What it does |
-|------|-------------|
-| **SessionStart** | Syncs memory, resolves identity, renders greeting |
-| **PreToolUse** | Boundary isolation + branch protection |
-| **PostToolUse** | Local activity tracking |
-| **WorktreeCreate** | Isolated git worktrees per topic |
-| **PreCompact** | Saves context before memory compression |
-| **Stop** | Reminds you to save unsaved work |
-
-No background processes. No daemons. No network calls you don't see.
-
-## Telemetry
-
-Anonymous usage data — command names and timestamps only. Never code, file
-contents, or conversation. Opt out anytime:
-
-```bash
-EGREGORE_NO_TELEMETRY=1  # in your .env
-DO_NOT_TRACK=1           # or the standard flag
-```
-
-## Egregore Native: Managed hosting (coming soon)
-
-The open-source Egregore was built as a self-hosted, sovereign architecture without dependencies. Egregore's true capabilities, functionalities and scale are greatly enhanced with managed services.
-For teams that want the knowledge graph, live notifications, organizational agents, and persistent GUI: native@egregore.xyz.
-
-## Contributing
-
-Egregore is built by its users. If you already run an egregore:
-
-```
-/contribute
-```
-
-Forks the repo, creates a branch, and opens a PR to `egregore-labs/egregore`
-when you're done.
-
-For manual setup, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## From the lab
+For direct contributions, see [CONTRIBUTING.md](CONTRIBUTING.md). Egregore is
+[MIT-licensed](LICENSE).
 
 Built by [Egregore Labs](https://egregore.xyz).
 
