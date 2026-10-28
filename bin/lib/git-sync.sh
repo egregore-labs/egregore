@@ -231,13 +231,13 @@ _apply_framework_update() {
   # committing — an overwrite of local edits is the one outcome the user has
   # to be able to see afterwards, and the commit is the only other record.
   local _changed
-  _changed=$(git status --porcelain bin/ .claude/ .pi/ .prime/ loom/ CLAUDE.md skills/ 2>/dev/null)
+  _changed=$(git status --porcelain bin/ egregore_runtime/ .claude/ .pi/ .prime/ loom/ CLAUDE.md skills/ 2>/dev/null)
   if [ -n "$_changed" ]; then
     FRAMEWORK_UPDATED_COUNT=$(printf '%s\n' "$_changed" | grep -c . || echo 0)
     FRAMEWORK_UPDATED_FILES=$(printf '%s\n' "$_changed" | awk '{print $NF}' | head -3 | tr '\n' ' ')
     git add bin/ .claude/ loom/ CLAUDE.md skills/ 2>/dev/null
     local _runtime_path
-    for _runtime_path in .pi .prime; do
+    for _runtime_path in egregore_runtime .pi .prime; do
       [ ! -e "$_runtime_path" ] || git add -- "$_runtime_path" 2>/dev/null
     done
     EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "chore(sync): update framework from upstream" --quiet 2>/dev/null || true

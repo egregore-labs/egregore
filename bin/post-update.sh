@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
 MIGRATED=0
 
 # --- Migration: commands → skills (CC 2.0+) ---
@@ -23,6 +25,19 @@ if [ -d ".claude/skills" ] && [ -d ".claude/commands" ]; then
     echo "  ✓ Removed .claude/commands/ (migrated to skills)"
     MIGRATED=1
   fi
+fi
+
+# --- Migration: Runtime core travels with its adapters ---
+# Earlier overlays copied bin/ but not egregore_runtime/, leaving the Runtime
+# adapters without the module they import. The overlay that ran this update
+# was loaded before bin/ changed, so copy the core here: one /update is
+# enough. A Runtime-managed installation owns these files and is left alone.
+if [ ! -e "$SCRIPT_DIR/egregore_runtime" ] && \
+   git -C "$SCRIPT_DIR" cat-file -e 'upstream/main:egregore_runtime' 2>/dev/null && \
+   ! (source "$SCRIPT_DIR/bin/lib/runtime-owned.sh"; runtime_owns_framework); then
+  git -C "$SCRIPT_DIR" checkout upstream/main -- egregore_runtime/
+  echo "  ✓ Added the Runtime core (egregore_runtime/)"
+  MIGRATED=1
 fi
 
 # --- Future migrations go here ---

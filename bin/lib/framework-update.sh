@@ -33,7 +33,9 @@ _checkout_framework_paths() {
   # A path checkout does not merge, rebase, move HEAD, or consult the user's
   # pull/merge/rebase strategy. Tolerate each missing or failed path separately,
   # preserving the historical overlay behavior while reporting each skip once.
-  for framework_path in bin/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .pi/ .prime/ loom/ CLAUDE.md skills/; do
+  # The Runtime adapters in bin/ import egregore_runtime/, so the core travels
+  # with them; one without the other leaves recall unable to start.
+  for framework_path in bin/ egregore_runtime/ .claude/commands/ .claude/skills/ .claude/hooks/ .claude/context/ .claude/agents/ .pi/ .prime/ loom/ CLAUDE.md skills/; do
     if ! git -C "$target_dir" checkout upstream/main -- "$framework_path" 2>/dev/null; then
       printf 'update-framework: skipped %s (absent from upstream/main or checkout failed)\n' "$framework_path" >&2
     fi
