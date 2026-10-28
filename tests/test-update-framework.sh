@@ -41,7 +41,7 @@ init_repo "$target"
 
 # The retired commands directory is intentionally absent from upstream. All
 # other framework roots must update; unrelated and instance-owned files stay.
-for path in bin .claude/skills .claude/hooks .claude/context .claude/agents .pi .prime loom skills; do
+for path in bin egregore_runtime .claude/skills .claude/hooks .claude/context .claude/agents .pi .prime loom skills; do
   mkdir -p "$upstream/$path" "$target/$path"
   printf 'upstream %s\n' "$path" >"$upstream/$path/fixture.txt"
   printf 'downstream %s\n' "$path" >"$target/$path/fixture.txt"
@@ -77,7 +77,7 @@ check 'successful overlay prints no stdout' '' "$(cat "$TMP/stdout")"
 check 'missing upstream path is reported exactly once' \
   'update-framework: skipped .claude/commands/ (absent from upstream/main or checkout failed)' \
   "$(cat "$TMP/stderr")"
-for path in bin .claude/skills .claude/hooks .claude/context .claude/agents .pi .prime loom skills; do
+for path in bin egregore_runtime .claude/skills .claude/hooks .claude/context .claude/agents .pi .prime loom skills; do
   check "$path receives upstream content" "upstream $path" "$(cat "$target/$path/fixture.txt")"
   check "$path remains unchanged in the other worktree" "downstream $path" "$(cat "$linked/$path/fixture.txt")"
 done

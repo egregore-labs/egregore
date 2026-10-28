@@ -66,8 +66,9 @@ make_fixture() {
   git init --initial-branch=main --quiet "$upstream_work"
   git -C "$upstream_work" config user.name "Upstream Test"
   git -C "$upstream_work" config user.email "upstream@example.test"
-  mkdir -p "$upstream_work/bin" "$upstream_work/.pi" "$upstream_work/.prime/agent"
+  mkdir -p "$upstream_work/bin" "$upstream_work/egregore_runtime" "$upstream_work/.pi" "$upstream_work/.prime/agent"
   printf 'upstream framework\n' > "$upstream_work/bin/framework.txt"
+  printf 'upstream runtime\n' > "$upstream_work/egregore_runtime/__init__.py"
   printf '{"fixture":"upstream pi"}\n' > "$upstream_work/.pi/settings.json"
   printf 'upstream prime\n' > "$upstream_work/.prime/agent/AGENTS.md"
   git -C "$upstream_work" add -A
@@ -158,11 +159,15 @@ check "framework updater runs after verified checkout" \
   "updated=true" "$(printf '%s\n' "$ready_result" | grep '^updated=')"
 check "base branch receives the upstream framework file" \
   "upstream framework" "$(cat "$ready_repo/bin/framework.txt")"
+check "base branch receives the upstream Runtime core" \
+  "upstream runtime" "$(cat "$ready_repo/egregore_runtime/__init__.py")"
 check "base branch receives the upstream Pi settings" \
   '{"fixture":"upstream pi"}' "$(cat "$ready_repo/.pi/settings.json")"
 check "base branch receives the upstream Prime instructions" \
   "upstream prime" "$(cat "$ready_repo/.prime/agent/AGENTS.md")"
 ready_commit_paths="$(git -C "$ready_repo" show --name-only --format= HEAD)"
+check "framework update commit includes the Runtime core" \
+  "egregore_runtime/__init__.py" "$(printf '%s\n' "$ready_commit_paths" | grep -Fx 'egregore_runtime/__init__.py')"
 check "framework update commit includes Pi settings" \
   ".pi/settings.json" "$(printf '%s\n' "$ready_commit_paths" | grep -Fx '.pi/settings.json')"
 check "framework update commit includes Prime instructions" \

@@ -147,6 +147,8 @@ if [ '{in_worktree}' = "true" ]; then
   # Commit on base branch in main repo (.codex/skills/ carries the
   # regenerated adapters)
   git -C '{main_dir}' add -A .claude/ .pi/ .prime/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json .codex/skills/ 2>/dev/null
+  # Older upstreams lack the Runtime core; a missing pathspec would abort the add.
+  [ ! -e '{main_dir}/egregore_runtime' ] || git -C '{main_dir}' add -A -- egregore_runtime/ 2>/dev/null
   if ! git -C '{main_dir}' diff --cached --quiet 2>/dev/null; then
     EGREGORE_FRAMEWORK_UPDATE=1 git -C '{main_dir}' commit -m "Update Egregore framework from upstream"
     git -C '{main_dir}' push origin '{base}' --quiet 2>/dev/null || true
@@ -243,6 +245,7 @@ Worktree path already committed in Step 2. This handles the non-worktree case:
 ```bash
 if [ '{in_worktree}' = "false" ]; then
   git add -A .claude/ .pi/ .prime/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json 2>/dev/null
+  [ ! -e egregore_runtime ] || git add -A -- egregore_runtime/ 2>/dev/null
   if ! git diff --cached --quiet 2>/dev/null; then
     EGREGORE_FRAMEWORK_UPDATE=1 git commit -m "Update Egregore framework from upstream"
     git push origin '{base}' --quiet 2>/dev/null || true
