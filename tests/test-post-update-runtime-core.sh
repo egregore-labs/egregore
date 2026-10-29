@@ -103,5 +103,62 @@ run_post_update "$owned" >/dev/null
 check "Runtime-managed installation is left alone" "missing" \
   "$([ -e "$owned/egregore_runtime" ] && echo present || echo missing)"
 
+# --- Execute the skill's migration/commit blocks in their documented order --
+# Model the first update through the old overlay: bin/ has arrived, but the
+# core is still absent. The actual skill must commit the migration before it
+# rebases the invoking worktree; testing post-update.sh alone misses this.
+worktree_repo="$(make_instance worktree true)"
+for dir in .claude .pi .prime loom skills .codex/skills; do
+  mkdir -p "$worktree_repo/$dir"
+  touch "$worktree_repo/$dir/.keep"
+done
+touch "$worktree_repo/CLAUDE.md" "$worktree_repo/AGENTS.md" "$worktree_repo/.codex/spec-manifest.json"
+git -C "$worktree_repo" add -A
+git -C "$worktree_repo" commit -qm "Seed framework paths"
+git init --bare --initial-branch=develop --quiet "$TMP/worktree/origin.git"
+git -C "$worktree_repo" remote add origin "$TMP/worktree/origin.git"
+git -C "$worktree_repo" push -u origin develop --quiet
+invoking="$TMP/worktree/task"
+git -C "$worktree_repo" worktree add -qb task "$invoking"
+printf 'echo updated adapter\n' > "$worktree_repo/bin/search.sh"
+
+python3 - "$ROOT/.claude/skills/update/SKILL.md" "$worktree_repo" > "$TMP/worktree/finish.sh" <<'PY'
+import pathlib
+import re
+import sys
+
+skill = pathlib.Path(sys.argv[1]).read_text()
+for block in re.findall(r"```bash\n(.*?)```", skill, re.S):
+    if "bin/post-update.sh" not in block and "EGREGORE_FRAMEWORK_UPDATE=1" not in block:
+        continue
+    for key, value in {
+        "main_dir": sys.argv[2], "in_worktree": "true", "base": "develop",
+        "switched": "false", "current_branch": "task",
+    }.items():
+        block = block.replace("{" + key + "}", value)
+    print(block)
+PY
+
+(cd "$invoking" && bash "$TMP/worktree/finish.sh") > "$TMP/worktree/result.log" 2>&1
+check "documented worktree update completes" "0" "$?"
+check "migration is included in the base commit" "# upstream core" \
+  "$(git -C "$worktree_repo" show HEAD:egregore_runtime/runtime.py 2>/dev/null)"
+check "first update delivers the core to the invoking worktree" "# upstream core" \
+  "$(cat "$invoking/egregore_runtime/runtime.py" 2>/dev/null)"
+check "migration leaves no staged core behind" "" \
+  "$(git -C "$worktree_repo" status --porcelain -- egregore_runtime)"
+
+# A failed migration must not publish the overlay or move the task branch.
+base_before="$(git -C "$worktree_repo" rev-parse HEAD)"
+task_before="$(git -C "$invoking" rev-parse HEAD)"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$worktree_repo/bin/post-update.sh"
+printf 'echo next adapter\n' > "$worktree_repo/bin/search.sh"
+(cd "$invoking" && bash "$TMP/worktree/finish.sh") > "$TMP/worktree/failure.log" 2>&1
+check "failed migration stops the documented workflow" "1" "$?"
+check "failed migration does not commit the overlay" "$base_before" \
+  "$(git -C "$worktree_repo" rev-parse HEAD)"
+check "failed migration does not move the worktree" "$task_before" \
+  "$(git -C "$invoking" rev-parse HEAD)"
+
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

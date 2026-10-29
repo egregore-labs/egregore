@@ -909,6 +909,7 @@ class UpgradeEngine:
                     raise ValueError("Runtime adapter evidence needs repair")
             core = instance / "egregore_runtime"
             delivered = (not core.is_symlink() and core.is_dir()
+                         and not any(path.is_symlink() for path in core.rglob("*"))
                          and self._committed_unchanged(instance, "egregore_runtime"))
             if (core.exists() or core.is_symlink()) and not delivered:
                 # A completed legacy rollback removes added files, not their
@@ -1489,6 +1490,26 @@ class UpgradeEngine:
             for relative in (CODEX_SETTINGS_ADAPTER, *NATIVE_SETTINGS_ADAPTERS)
             if relative in selected
         }
+        # Git cleanliness does not make a linked destination safe. Check every
+        # file and parent before opening the journal or backing up any bytes;
+        # copy2 follows destination links, including links inside a tracked tree.
+        # Preserved org-owned paths are not selected and remain untouched.
+        for relative in selected:
+            destination = instance / relative
+            # copy2 treats a directory destination as a container and appends
+            # the source basename, which could select an unchecked child link.
+            if destination.exists() and not destination.is_file():
+                raise UpgradeError(
+                    f"Runtime destination is not a regular file: {relative}; "
+                    "repair the destination before upgrading"
+                )
+            while destination != instance:
+                if destination.is_symlink():
+                    raise UpgradeError(
+                        f"Runtime destination contains a symbolic link: {destination.relative_to(instance)}; "
+                        "replace it with an instance-local file or directory before upgrading"
+                    )
+                destination = destination.parent
         # Journal opens the transaction BEFORE the first byte moves. From here
         # until the caller clears it, a crash is recoverable from the backup.
         journal = {
