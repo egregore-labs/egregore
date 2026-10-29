@@ -137,34 +137,6 @@ if [ '{in_worktree}' = "true" ]; then
 fi
 ```
 
-If `{in_worktree}` is `true`, review the changes and continue the worktree update:
-
-```bash
-if [ '{in_worktree}' = "true" ]; then
-  # Show what changed
-  git -C '{main_dir}' diff --stat HEAD
-
-  # Commit on base branch in main repo (.codex/skills/ carries the
-  # regenerated adapters)
-  git -C '{main_dir}' add -A .claude/ .pi/ .prime/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json .codex/skills/ 2>/dev/null
-  # Older upstreams lack the Runtime core; a missing pathspec would abort the add.
-  [ ! -e '{main_dir}/egregore_runtime' ] || git -C '{main_dir}' add -A -- egregore_runtime/ 2>/dev/null
-  if ! git -C '{main_dir}' diff --cached --quiet 2>/dev/null; then
-    EGREGORE_FRAMEWORK_UPDATE=1 git -C '{main_dir}' commit -m "Update Egregore framework from upstream"
-    git -C '{main_dir}' push origin '{base}' --quiet 2>/dev/null || true
-  fi
-
-  # Rebase worktree branch onto updated base
-  git stash --quiet 2>/dev/null || true
-  git fetch origin '{base}' --quiet
-  if ! git rebase 'origin/{base}' --quiet 2>/dev/null; then
-    git rebase --abort 2>/dev/null || true
-    echo '⚠ Rebase had conflicts — aborted. Run: git rebase origin/{base} and resolve manually.'
-  fi
-  git stash pop --quiet 2>/dev/null || true
-fi
-```
-
 ### Non-worktree path
 
 If `{in_worktree}` is `false`, use `false` as `{switched}` initially.
@@ -221,26 +193,65 @@ if [ '{in_worktree}' = "false" ]; then
 fi
 ```
 
-**Framework paths synced:** `bin/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `.prime/`, `loom/`, `CLAUDE.md`, `skills/`
+**Framework paths synced:** `bin/`, `egregore_runtime/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `.prime/`, `loom/`, `CLAUDE.md`, `skills/`
 **Regenerated:** `AGENTS.md` + `.codex/spec-manifest.json` via `bin/codex-render-spec.mjs`, `.pi/APPEND_SYSTEM.md` + `.pi/spec-manifest.json` via `bin/pi-render-spec.mjs`, `.prime/agent/APPEND_SYSTEM.md` + `.prime/agent/spec-manifest.json` via `bin/prime-render-spec.mjs`, then generated Codex adapter skills via `bin/codex-sync-skills.sh`, so all derived harnesses stay aligned with `CLAUDE.md` and the canonical skills.
 **Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
 **Org-owned skills:** names in `egregore.json` → `owned_skills[]` are restored from the org's committed state after the overlay (`bin/restore-owned-skills.sh`) — upstream never overwrites them; collisions are reported instead.
 
 ## Step 3: Post-update migrations
 
-After syncing, run `bin/post-update.sh` if it exists. In worktrees, run from `{main_dir}` to ensure the updated version executes even if the rebase didn't complete.
+After syncing, run the updated `bin/post-update.sh` before committing or rebasing.
+The first update through an older overlay can add the missing Runtime core here.
+In worktrees, run in `{main_dir}` so migrations affect the main checkout.
+Stop on migration failure; do not commit or rebase a partial update.
 
 ```bash
 if [ '{in_worktree}' = "true" ]; then
-  [ -x '{main_dir}/bin/post-update.sh' ] && bash '{main_dir}/bin/post-update.sh'
+  if [ -f '{main_dir}/bin/post-update.sh' ]; then
+    (cd '{main_dir}' && bash bin/post-update.sh) || exit 1
+  fi
 else
-  [ -x bin/post-update.sh ] && bash bin/post-update.sh
+  if [ -f bin/post-update.sh ]; then
+    bash bin/post-update.sh || exit 1
+  fi
 fi
 ```
 
-## Step 4: Commit and switch back (non-worktree only)
+## Step 4: Commit and restore the working branch
 
-Worktree path already committed in Step 2. This handles the non-worktree case:
+If `{upstream_url}` is `none`, skip this step and continue with Step 5; no
+framework overlay was applied. Otherwise, commit the overlay and migrations
+together before the working branch receives the update.
+
+If `{in_worktree}` is `true`, review the changes and continue the worktree update:
+
+```bash
+if [ '{in_worktree}' = "true" ]; then
+  # Show what changed
+  git -C '{main_dir}' diff --stat HEAD
+
+  # Commit on base branch in main repo (.codex/skills/ carries the
+  # regenerated adapters)
+  git -C '{main_dir}' add -A .claude/ .pi/ .prime/ bin/ loom/ CLAUDE.md skills/ AGENTS.md .codex/spec-manifest.json .codex/skills/ 2>/dev/null
+  # Older upstreams lack the Runtime core; a missing pathspec would abort the add.
+  [ ! -e '{main_dir}/egregore_runtime' ] || git -C '{main_dir}' add -A -- egregore_runtime/ 2>/dev/null
+  if ! git -C '{main_dir}' diff --cached --quiet 2>/dev/null; then
+    EGREGORE_FRAMEWORK_UPDATE=1 git -C '{main_dir}' commit -m "Update Egregore framework from upstream"
+    git -C '{main_dir}' push origin '{base}' --quiet 2>/dev/null || true
+  fi
+
+  # Rebase worktree branch onto updated base
+  git stash --quiet 2>/dev/null || true
+  git fetch origin '{base}' --quiet
+  if ! git rebase 'origin/{base}' --quiet 2>/dev/null; then
+    git rebase --abort 2>/dev/null || true
+    echo '⚠ Rebase had conflicts — aborted. Run: git rebase origin/{base} and resolve manually.'
+  fi
+  git stash pop --quiet 2>/dev/null || true
+fi
+```
+
+For the non-worktree case:
 
 ```bash
 if [ '{in_worktree}' = "false" ]; then
