@@ -62,6 +62,17 @@ DENIED_PATHS=$(echo "$BOUNDARY_JSON" | jq -r '.denied_paths[]?' 2>/dev/null) || 
 
 CONSENT_FILE="$PROJECT_DIR/.egregore-boundary-consent"
 
+# Claude Code's own runtime dirs: its config/memory dir and its per-user
+# scratch dir (background task output, persisted tool results). Targets are
+# compared after realpath, so a symlinked ~/.claude or a CLAUDE_CONFIG_DIR
+# elsewhere must be resolved too, or the agent is refused its own files.
+RUNTIME_ROOTS=""
+for _r in "$HOME/.claude" "${CLAUDE_CONFIG_DIR:-}" "${TMPDIR:+${TMPDIR%/}/claude-$(id -u 2>/dev/null)}"; do
+  [ -n "$_r" ] && [ -e "$_r" ] || continue
+  RUNTIME_ROOTS="$RUNTIME_ROOTS
+$(realpath "$_r" 2>/dev/null || echo "$_r")"
+done
+
 # --- Read tool input from stdin ---
 INPUT=$(cat)
 IFS=$'\t' read -r TOOL_NAME PERM_MODE < <(
@@ -147,6 +158,13 @@ in_core_boundary() {
     /dev/*|/dev|/proc/*|/sys/*) return 0 ;;
     /System/*|/Applications/*|/Library/*) return 0 ;;
   esac
+
+  local rt
+  for rt in $RUNTIME_ROOTS; do
+    if [[ "$resolved" == "$rt" || "$resolved" == "$rt/"* ]]; then
+      return 0
+    fi
+  done
 
   # Allow reading instance registry (needed for multi-instance features)
   if [[ "$resolved" == "$HOME/.egregore"/* ]]; then

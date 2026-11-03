@@ -102,6 +102,14 @@ check_path() {
   # Always-allowed system paths
   if path_starts_with "$resolved" "/tmp"; then return 0; fi
   if path_starts_with "$resolved" "$HOME/.claude"; then return 0; fi
+  # Claude Code's own runtime dirs, resolved: a symlinked ~/.claude, a
+  # CLAUDE_CONFIG_DIR elsewhere, and its per-user scratch dir under TMPDIR.
+  local rt
+  for rt in "$HOME/.claude" "${CLAUDE_CONFIG_DIR:-}" "${TMPDIR:+${TMPDIR%/}/claude-$(id -u 2>/dev/null)}"; do
+    [ -n "$rt" ] && [ -e "$rt" ] || continue
+    rt=$(realpath "$rt" 2>/dev/null || echo "$rt")
+    if path_starts_with "$resolved" "$rt"; then return 0; fi
+  done
   if path_starts_with "$resolved" "/usr"; then return 0; fi
   if path_starts_with "$resolved" "/etc"; then return 0; fi
   if path_starts_with "$resolved" "/var"; then return 0; fi
