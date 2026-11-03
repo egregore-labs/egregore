@@ -33,7 +33,7 @@ CFG="$T/cfg/claude"
 SCRATCH="$T/scratch"
 PROJ="$T/work/proj"
 mkdir -p "$FAKE_HOME" "$STATE/projects/p/memory" "$CFG/projects/p/memory" \
-         "$SCRATCH/claude-$UID_N/tasks" "$PROJ" "$T/elsewhere"
+         "$SCRATCH/claude-$UID_N/tasks" "$PROJ" "$T/elsewhere" "$T/denied/claude"
 ln -s "$STATE" "$FAKE_HOME/.claude"
 
 HOOK_HASH=$(echo -n "$PROJ" | md5 2>/dev/null || echo -n "$PROJ" | md5sum 2>/dev/null | cut -d' ' -f1)
@@ -53,7 +53,7 @@ trap cleanup EXIT
 for f in "$HOOK_FILE" "$SH_FILE"; do
   cat > "$f" <<EOF
 {"project_dir": "$PROJ", "memory_dir": "", "posture": "standard", "locked": false,
- "read_roots": [], "managed_repos": [], "denied_paths": []}
+ "read_roots": [], "managed_repos": [], "denied_paths": ["$T/denied"]}
 EOF
 done
 
@@ -86,6 +86,8 @@ echo "— hook (.claude/hooks/boundary-check.sh) —"
   && pass "unrelated path outside the boundary still refused" || fail "unrelated path allowed"
 [ "$(hook Read "$SCRATCH/other/d.txt")" = 2 ] \
   && pass "TMPDIR outside claude-<uid> still refused" || fail "TMPDIR sibling allowed"
+[ "$(hook Write "$T/denied/claude/x.md" CLAUDE_CONFIG_DIR="$T/denied/claude")" = 2 ] \
+  && pass "CLAUDE_CONFIG_DIR inside another instance stays denied" || fail "denied instance reachable via CLAUDE_CONFIG_DIR"
 
 echo ""
 echo "— bin/boundary.sh check —"
@@ -97,6 +99,8 @@ echo "— bin/boundary.sh check —"
   && pass "CLAUDE_CONFIG_DIR allowed" || fail "CLAUDE_CONFIG_DIR refused"
 [ "$(sh_check "$T/elsewhere/c.md")" = 1 ] \
   && pass "unrelated path outside the boundary still refused" || fail "unrelated path allowed"
+[ "$(sh_check "$T/denied/claude/x.md" CLAUDE_CONFIG_DIR="$T/denied/claude")" = 1 ] \
+  && pass "CLAUDE_CONFIG_DIR inside another instance stays denied" || fail "denied instance reachable via CLAUDE_CONFIG_DIR"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
