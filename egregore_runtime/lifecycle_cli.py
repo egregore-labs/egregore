@@ -18,6 +18,8 @@ from .lifecycle import (
     LifecycleRecord,
     ObligationState,
 )
+from . import held
+from .contracts import Permission
 from .identity import actor_presentation_name
 from .runtime import local_runtime
 
@@ -50,6 +52,17 @@ def _runtime(args: argparse.Namespace):
         )
     actor = runtime.resolve_actor(session_id=_session_id(root), harness="lifecycle-shell")
     return runtime, actor
+
+
+def _emit(runtime, actor, value) -> int:
+    """The plan's handoff rows dropped when their file is refused (each is listed up to three times), then
+    the whole plan packaged."""
+    if isinstance(value.get("items"), list):
+        shown = {row["id"] for row in held.kept(runtime.authorize(actor, Permission.READ), value["items"],
+                                                 root=runtime.canonical_root, path="filePath")}
+        value = {**value, **{key: [row for row in value[key] if row["id"] in shown]
+                             for key in ("safe_candidates", "review_candidates", "handoffs_to_me", "items")}}
+    return held.emit_for(runtime, actor, value, render=lambda shown: json.dumps(shown, separators=(",", ":")))
 
 
 def _activity_status(record: LifecycleRecord) -> str:
@@ -132,8 +145,7 @@ def _plan_json(actor, plan: LifecyclePlan, *, managed_only: bool = False) -> dic
 def _scan(args: argparse.Namespace) -> int:
     runtime, actor = _runtime(args)
     plan = runtime.lifecycle_plan(actor, artifact_types=("handoff",), user=args.user)
-    print(json.dumps(_plan_json(actor, plan, managed_only=args.managed_only), separators=(",", ":")))
-    return 0
+    return _emit(runtime, actor, _plan_json(actor, plan, managed_only=args.managed_only))
 
 
 def _action(args: argparse.Namespace) -> int:
@@ -168,8 +180,9 @@ def _action(args: argparse.Namespace) -> int:
         LifecycleAction.REOPEN: "pending",
         LifecycleAction.REQUEST_REVIEW: "review_due",
     }[action]
-    print(
-        json.dumps(
+    return _emit(
+        runtime,
+        actor,
             {
                 "applied": receipt.status.value != "rejected",
                 "action": action.value,
@@ -180,10 +193,7 @@ def _action(args: argparse.Namespace) -> int:
                 "git_revision": receipt.git_revision,
                 "warnings": list(receipt.warnings),
             },
-            separators=(",", ":"),
-        )
-    )
-    return 0 if receipt.status.value != "rejected" else 3
+    ) or (0 if receipt.status.value != "rejected" else 3)
 
 
 def _apply(args: argparse.Namespace) -> int:
@@ -207,8 +217,9 @@ def _apply(args: argparse.Namespace) -> int:
             user=args.user,
         )
         receipts.append(receipt)
-    print(
-        json.dumps(
+    return _emit(
+        runtime,
+        actor,
             {
                 **_plan_json(actor, plan, managed_only=args.managed_only),
                 "applied": True,
@@ -217,10 +228,7 @@ def _apply(args: argparse.Namespace) -> int:
                     "completed": 0,
                 },
             },
-            separators=(",", ":"),
-        )
     )
-    return 0
 
 
 def _parser() -> argparse.ArgumentParser:

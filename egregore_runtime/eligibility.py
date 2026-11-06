@@ -15,7 +15,7 @@ from typing import Any, Callable
 from .contracts import TemporalScope
 from .errors import AuthorizationDenied, EgregoreRuntimeError
 from .lifecycle import AuthorityState
-from .policy import scope_allows_path
+from .policy import check
 
 ELIGIBILITY_VERSION = 'egregore-eligibility/v1'
 MAX_DOCUMENTS = 50_000
@@ -51,7 +51,7 @@ class EligibilitySnapshot:
                 'documents': [document.to_wire() for document in self.documents]}
 
 
-def build_eligibility(retriever, request, *, actor, admin_gate=None, lifecycle=None,
+def build_eligibility(retriever, request, *, actor, decision, lifecycle=None,
                       path_filter: Callable[[str], bool] | None = None,
                       metadata_filter: Callable[[str, Any], bool] | None = None):
     """Read current scoped files once and fence the resulting view by revision.
@@ -66,19 +66,12 @@ def build_eligibility(retriever, request, *, actor, admin_gate=None, lifecycle=N
     root = retriever.memory_root.resolve()
     rows = []
     warnings = []
-    is_admin = admin_gate is None or admin_gate.actor_is_admin(actor)
     for path in sorted(root.rglob('*.md')):
         canonical = 'memory/' + path.relative_to(root).as_posix()
-        if not scope_allows_path(canonical, request.authorized_scopes):
-            continue
-        resolved = path.resolve()
-        if not path.is_file() or not resolved.is_relative_to(root):
-            continue
-        if not scope_allows_path('memory/' + resolved.relative_to(root).as_posix(), request.authorized_scopes):
+        verdict = check(decision, canonical, "read", root=root)
+        if not verdict.allowed or not verdict.resolved.is_file():
             continue
         if path_filter and not path_filter(canonical):
-            continue
-        if not is_admin and admin_gate.path_is_admin(canonical):
             continue
         metadata = retriever.describe_source(canonical)
         if request.allowed_artifact_ids and metadata.artifact_id not in request.allowed_artifact_ids:
@@ -98,7 +91,7 @@ def build_eligibility(retriever, request, *, actor, admin_gate=None, lifecycle=N
         try:
             lifecycle_by_path, _ = lifecycle.resolve_paths(
                 [row.canonical_path for row in rows], source_revision=revision,
-                authorized_scopes=request.authorized_scopes,
+                decision=decision,
                 allowed_artifact_ids=request.allowed_artifact_ids)
         except Exception as error:
             # Preserve Observe's advisory lifecycle fallback, but do not claim

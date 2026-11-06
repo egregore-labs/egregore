@@ -1,0 +1,9 @@
+# Keep the API job's installation and pip cache inputs together.
+-r ../api/requirements.txt
+pytest
+respx
+pytest-html
+pytest-asyncio
+pytest-metadata
+pglast
+neo4j

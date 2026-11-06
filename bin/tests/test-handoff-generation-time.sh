@@ -121,6 +121,17 @@ else
   fail "$COMP_F checks failed: $COMP_FAILS"
 fi
 
+# Tests 3–5 publish to the live production API. Opt in with
+# EGREGORE_LIVE_INTEGRATION=1; otherwise the local checks above decide.
+if [ "${EGREGORE_LIVE_INTEGRATION:-}" != 1 ]; then
+  echo ""
+  echo "## Tests 3–5 — skipped: they publish to the live API; set EGREGORE_LIVE_INTEGRATION=1 to run"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "$PASS passed, $FAIL failed"
+  [ "$FAIL" -gt 0 ] && exit 1 || exit 0
+fi
+
 # ── Test 3: Publish round-trip (live API) ─────────────────────────
 echo ""
 echo "## Test 3 — Publish round-trip (live API)"

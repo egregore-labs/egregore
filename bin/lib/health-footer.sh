@@ -22,6 +22,76 @@
 # Output: the footer lines on stdout, each already indented two spaces.
 # Returns 0 when nothing failed, 1 when at least one dimension failed.
 
+# Dated, release-delivered incident copy, not a live availability check. Keep
+# the launcher counterpart aligned; launcher-connected-status.test.js checks
+# the actual output of both implementations. No network or credential reads.
+_hosted_recovery_notice() {
+  [ "${LOCAL_MODE:-true}" != "true" ] || return 0
+  local origin now
+  [ -f "${CONFIG:-}" ] || return 0
+  origin=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null) || return 0
+  case "$origin" in
+    https://api.egregore.xyz|https://api.egregore.xyz/|https://egregore-production-55f2.up.railway.app|https://egregore-production-55f2.up.railway.app/) ;;
+    *) return 0 ;;
+  esac
+  now=$(date -u +%s 2>/dev/null) || now=0
+  # A stale bundled notice never presents itself as current service status.
+  if [ "$now" -ge 1792627200 ] 2>/dev/null && [ "$now" -lt 1792800000 ] 2>/dev/null; then
+    printf '%s\n' '  ◐ Service recovery · 22 Oct 2026' \
+      '    Some connected services are temporarily unavailable' \
+      '    during security recovery.'
+  else
+    printf '%s\n' '  ◐ Service recovery · last update 22 Oct 2026' \
+      '    Some connected services were unavailable at this update.' \
+      '    Current hosted availability has not been checked.'
+  fi
+  printf '%s\n' '    Local memory and search remain available.' \
+    '    Keep your existing Egregore; you do not need to set it up again.'
+}
+
+# Recorded in .egregore-state.json by bin/runtime-identity.sh when it renews,
+# or cannot renew, an organization key retired in the October 2026 security
+# reset. Local state only; no network. The renewal shows once; the sign-in
+# line shows each session until a renewal works.
+_hosted_key_notice() {
+  [ "${LOCAL_MODE:-true}" != "true" ] || return 0
+  local state_file="${STATE_FILE:-}" file tmp
+  [ -n "$state_file" ] && [ -f "$state_file" ] || return 0
+  case "$(jq -r '.hosted_key_notice.state // empty' "$state_file" 2>/dev/null)" in
+    renewed)
+      printf '%s\n' "  ↻ Hosted services renewed this organization's key after" \
+        '    the October security reset. Your memory, files and' \
+        '    history are untouched.'
+      file=$(realpath "$state_file" 2>/dev/null) || file="$state_file"
+      tmp=$(mktemp "$file.XXXXXX" 2>/dev/null) || return 0
+      jq 'if .hosted_key_notice.state == "renewed" then del(.hosted_key_notice) else . end' \
+        "$file" > "$tmp" 2>/dev/null && [ -s "$tmp" ] && mv "$tmp" "$file" || rm -f "$tmp"
+      ;;
+    needs_sign_in)
+      printf '%s\n' '  ◐ Hosted services need a fresh key after the October' \
+        '    security reset. Your memory, files and history are' \
+        '    untouched. Run bash bin/github-auth.sh and start a new' \
+        '    session — it renews on its own.'
+      ;;
+  esac
+  return 0
+}
+
+# A Connected org whose saved api_url is not a plain web address sends nothing
+# to hosted services (bin/lib/config.sh refuses it), and /update rewrites only
+# a plain retired address. Say so each session until egregore.json is fixed.
+# Needs config.sh's resolver; reads local config only.
+_hosted_address_notice() {
+  [ "${LOCAL_MODE:-true}" != "true" ] || return 0
+  [ -f "${CONFIG:-}" ] || return 0
+  command -v _config_api_url >/dev/null 2>&1 || return 0
+  EGREGORE_ADDRESS_NOTICE=shown _config_api_url >/dev/null 2>&1 && return 0
+  printf '%s\n' "  ◐ Hosted services are off: api_url in egregore.json isn't" \
+    '    a plain web address, so nothing is sent to it. Correct it' \
+    "    (the hosted address is ${EGREGORE_HOSTED_API_ORIGIN:-https://api.egregore.xyz})" \
+    '    and start a new session. Local memory and search work.'
+}
+
 _health_footer_label() {
   case "$1" in
     github) printf 'github' ;;
@@ -65,7 +135,16 @@ _health_footer_check() {
 }
 
 _render_health_footer() {
-  local width="${LINE_WIDTH:-65}" failed=0
+  local width="${LINE_WIDTH:-65}" failed=0 recovery_notice key_notice address_notice local_only=""
+  address_notice=$(_hosted_address_notice)
+  [ -z "$address_notice" ] || { printf '%s\n' "$address_notice"; local_only=1; }
+  recovery_notice=$(_hosted_recovery_notice)
+  [ -z "$recovery_notice" ] || printf '%s\n' "$recovery_notice"
+  key_notice=$(_hosted_key_notice)
+  [ -z "$key_notice" ] || printf '%s\n' "$key_notice"
+  # Hosted services stay out of reach for this person until the key renews.
+  [ -z "$recovery_notice" ] || local_only=1
+  case "$key_notice" in *"need a fresh key"*) local_only=1 ;; esac
   _health_footer_check github "${HEALTH_GITHUB:-skip}" || failed=1
   _health_footer_check git "${HEALTH_GIT:-skip}" || failed=1
   _health_footer_check memory "${HEALTH_MEMORY:-skip}" || failed=1
@@ -87,7 +166,9 @@ _render_health_footer() {
   fi
 
   local left right pad
-  if [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
+  if [ -n "$local_only" ]; then
+    left="  ✓ local checks ready"
+  elif [ "${FRAMEWORK_UPDATED:-false}" = "true" ]; then
     left="  ◆ updated"
   else
     left="  ✓ ready"

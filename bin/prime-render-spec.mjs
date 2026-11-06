@@ -74,7 +74,6 @@ function adapt(sourceSpec) {
     ["Egregore on Codex", "Egregore on Prime Agent"],
     ["Codex-native", "Prime-native"],
     ["Codex sessions", "Prime Agent sessions"],
-    ["On Codex", "On Prime Agent"],
     ["bin/codex-session-start.sh", "bin/prime-session-start.sh"],
     [".codex/hooks/branch-guard.js", ".prime/agent/extensions/egregore.ts"],
     ["PreToolUse hook (launcher `--enable hooks`)", "`tool_call` gate (loaded from the project-local extension)"],

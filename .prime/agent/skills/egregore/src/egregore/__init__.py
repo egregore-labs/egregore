@@ -20,6 +20,11 @@ from pathlib import Path
 
 __all__ = [
     "activity",
+    "capabilities_list",
+    "capabilities_find",
+    "capabilities_describe",
+    "capabilities_explain",
+    "system_explain",
     "branch",
     "handoff",
     "instance_root",
@@ -111,13 +116,15 @@ def save(
 
     Set ``draft=True`` while work continues or ``draft=False`` after local
     QA/review to mark ready. ``None`` preserves existing PR readiness.
+    Marking ready first runs the checks CI would select, which can take as
+    long as a CI run, so that save gets the longer limit.
     """
     args = ["bin/agent.sh", "save", "--message", message, "--topic", topic]
     if pr_body:
         args += ["--pr-body", pr_body]
     if draft is not None:
         args += ["--draft" if draft else "--ready"]
-    return _run_script(args, timeout=300)
+    return _run_script(args, timeout=300 if draft is not False else 2 * 60 * 60)
 
 
 def handoff(
@@ -174,3 +181,61 @@ def run() -> str:
         "notify_plan(recipient, message). notify_plan is proposal-only: "
         "approval and dispatch require an explicit human checkpoint."
     )
+
+
+def _discover_capabilities(request: dict) -> str:
+    """Pass bounded JSON to the shared reader; selectors never become argv."""
+    error = json.dumps({
+        "schema": "egregore.capability-query-error/v1",
+        "error": "invalid-or-unavailable-discovery",
+        "execution_authority": False,
+    })
+    try:
+        # ASCII escaping transports even malformed Unicode to the shared
+        # validator. The CLI owns operation, selector and Unicode policy.
+        encoder = json.JSONEncoder(ensure_ascii=True, allow_nan=False)
+        chunks, size = [], 0
+        for chunk in encoder.iterencode(request):
+            size += len(chunk)
+            if size > 4096:
+                return error
+            chunks.append(chunk)
+        result = subprocess.run(
+            ["bash", "bin/spirit-discovery-prime.sh", "--json"],
+            input="".join(chunks), cwd=instance_root(),
+            capture_output=True, encoding="utf-8", timeout=15,
+            start_new_session=True,
+        )
+        if result.returncode != 0:
+            return error
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or value.get("schema") != "egregore.capability-query/v1" or value.get("execution_authority") is not False:
+            return error
+        return result.stdout.strip()
+    except (OSError, ValueError, TypeError, UnicodeError, RecursionError, RuntimeError, subprocess.TimeoutExpired):
+        return error
+
+
+def capabilities_list() -> str:
+    """Read this Prime installation's capability evidence; grants no authority."""
+    return _discover_capabilities({"operation": "capabilities.list"})
+
+
+def capabilities_find(query: str) -> str:
+    """Find declared capabilities; installation and permissions stay separate."""
+    return _discover_capabilities({"operation": "capabilities.find", "query": query})
+
+
+def capabilities_describe(identifier: str) -> str:
+    return _discover_capabilities({"operation": "capabilities.describe", "id": identifier})
+
+
+def capabilities_explain(identifier: str) -> str:
+    return _discover_capabilities({"operation": "capabilities.explain", "id": identifier})
+
+
+def system_explain(identifier: str | None = None) -> str:
+    request = {"operation": "system.explain"}
+    if identifier is not None:
+        request["id"] = identifier
+    return _discover_capabilities(request)

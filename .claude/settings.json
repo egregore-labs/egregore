@@ -82,6 +82,15 @@
             "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/session-autosave.sh --debounce 600"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/bin/session-record.sh --mode checkpoint --debounce 600"
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -186,7 +195,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Read|Edit|Write|Bash|Glob|Grep",
+        "matcher": "Read|Edit|Write|NotebookEdit|Bash|Glob|Grep",
         "hooks": [
           {
             "type": "command",

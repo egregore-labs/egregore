@@ -48,7 +48,7 @@ main-loop-only: render inline, then print
 `bash bin/loom.sh footer view --override` and mark telemetry as an override.
 For the deterministic renderer:
 
-1. Resolve `ROUTE=$(bash bin/loom.sh route view)`. When `bin/loom.sh` is not
+1. Resolve the route: run `bash bin/loom.sh route view` and read the JSON line it prints. When `bin/loom.sh` is not
    present (Loom is internal-only and does not ship in the OSS distribution),
    skip route resolution and the footer entirely and follow the script route
    below — it is the framework default and needs no Loom.
@@ -151,7 +151,8 @@ authorized result path; everything else is `document`.
 
 **On the script route, `bin/view-render.sh` owns everything in this section**:
 it resolves the packaged renderer locally (checked-out
-`packages/egregore-artifacts` first, then the installed `egregore-artifacts`;
+`packages/egregore-artifacts` with dependencies first, then the instance's
+managed renderer, then an installed `egregore-artifacts` on PATH;
 never `npx`, never a registry fetch), stages complete `memory/...` documents
 through the existing authorized `Runtime.open_source` adapter (ordinary model
 evidence reads remain bounded), serves unchanged content from the content-addressed
@@ -182,11 +183,14 @@ Picking the five ids is judgment and stays in the main loop; the brief file
 rides into the render through `--` and participates in the cache key.
 
 Pick the five ids from the substance, one line of judgment each (e.g. a
-strategy prep doc → decide · operators · editorial · vellum · decisive; a
-public explainer → persuade · newcomer · marketing · loam · quiet). The brief
-drives palette + grammar treatment; the designed layout (nav · hero · anchored
-sections) renders regardless. If the checked-out generative-ui layer is
-unavailable, render without `--brief`; never fetch it or block on the trace.
+strategy prep doc → decide · operators · editorial · ledger · decisive; a
+public explainer → persuade · newcomer · marketing · ledger · quiet). For the
+palette, use `ledger`, the registry default pair (`sovereign`), unless the
+content has a stated reason for another registered pair; a palette with no
+registered pair is never a default pick. The brief drives palette + grammar
+treatment; the designed layout (nav · hero · anchored sections) renders
+regardless. If the checked-out generative-ui layer is unavailable, render
+without `--brief`; never fetch it or block on the trace.
 
 The deterministic renderer already owns its light/dark theme contract. Do not
 invoke or reread a separate visual-theme skill for an ordinary render. Apply
@@ -215,14 +219,36 @@ picking wrong is the single most common way a composed render lands badly.
 
 **Procedure (run inline — never delegate; see the compose note in Loom routing):**
 
-1. Read the source document in full.
+1. Read the source document in full. Then read what people have said they
+   like in generated interfaces and keep it as context: words to consider,
+   never a template to copy. `{task}` is a few words naming this work:
+
+   ```bash
+   bash bin/genui.sh taste --task '{task}' --form view
+   ```
+
 2. Start from the scaffold: `.claude/skills/view/compose-scaffold.html` (copy it;
-   it carries the complete Meridian chrome — vellum/nocturne/loam tokens, fonts,
-   sticky nav, theme toggle, contours — and a documented component kit). You fill
-   content; you do **not** rebuild the chrome or re-pick colors.
+   it carries the chrome — fonts, sticky nav, theme toggle, contours — and a
+   documented component kit). You fill content; you do **not** rebuild the
+   chrome or invent colors.
 3. Walk the UGI graph for the register/palette/grammar (as above) and stamp the
-   manifest `register`/`grammar` + the footer trail. Pick the palette by
-   substance: vellum (strategy/decision), loam (warm/instructional), etc.
+   manifest `register`/`grammar` + the footer trail. For the palette, use the
+   registry default pair (`sovereign`) unless the content has a stated reason
+   for another registered pair. The scaffold predates the registry: its theme
+   blocks are the `meridian` pair (`vellum`, `nocturne`) plus an older `loam`
+   block, and its header note to leave them in place no longer holds. Take the
+   chosen pair's two theme blocks from the first of these files that exists:
+   - `packages/design-system/dist/egregore-design.css` (the source repository)
+   - `packages/egregore-artifacts/lib/vendor/design-system/dist/egregore-design.css`
+   - `lib/vendor/design-system/dist/egregore-design.css` inside the installed
+     `egregore-artifacts` package that `bin/view-render.sh` runs
+
+   Replace all three scaffold blocks with them; match the `<html>` attributes,
+   the manifest `pair` and `resolvedTheme`, and the toggle's theme ids and
+   label to that pair; and point the scaffold's meridian-only names
+   (`--prussian*`, `--brass*`, `--teal`, `--rose`, `--contour`) at role tokens.
+   If none of the three files exists, keep the scaffold's `meridian` blocks and
+   say so in the report.
 4. **Decide the register FIRST — editorial or technical.** This governs every
    sentence you then write, and it is not a style preference; it is what the
    document *is*. Ask: does a reader come here to be *persuaded of a view*, or
@@ -261,15 +287,25 @@ picking wrong is the single most common way a composed render lands badly.
    - technical renders lean on captioned tables, `Decision:` blocks, numbered
      rationale lists, and `.note`/`.note.caution` for limitations and hazards;
      they use `.hl`/`.readout` sparingly and never as a substitute for a heading
+   - **Highlights: no side stripes.** Never draw a coloured bar down one side
+     of a box. In the scaffold, `.hl` is the quiet status panel (6% tone tint,
+     1px tone hairline, 12px radius) whose `.k` label carries the tone's shape:
+     ● for the plain `.hl`, ▲ and ■ for its warn and critical variants.
+     `.readout` is the key point: bigger type, no box. Typed renders take the
+     same treatments from the kit's recipe classes
+     (`packages/egregore-artifacts/lib/recipe.js`): `.eg-mark` for a marker
+     under the words, `.eg-margin` with an `.eg-label` for a label in the
+     margin, `.eg-quote` for a quote with a hanging opening mark, and
+     `.eg-panel` with a shaped `.eg-label` for status
    - **transformation in technical register means structure, not voice** — split
      prose into tables, number the rationale, surface the decisions; do not
      rewrite the author's claims into slogans
    - nav links: one per composed section, to its `id` anchor
 6. **Never inline a hex in content** — every theme-sensitive color is a
    `var(--token)`, or the toggle breaks dark mode. The kit already obeys this.
-   Verify before opening: every `var(--x)` used must be defined in **both**
-   `[data-theme="vellum"]` and `[data-theme="nocturne"]`, or dark mode breaks
-   silently on that element.
+   Verify before opening: every `var(--x)` used must be defined in **both** of
+   the chosen pair's theme blocks (for `sovereign`: `[data-theme="ledger"]` and
+   `[data-theme="bedrock"]`), or dark mode breaks silently on that element.
 7. Write to `/tmp/egregore-artifacts/composed-{slug}.html` and open directly
    (`open <path>`), then report the path + `Renderer: composed (band 5, inline)`.
 
@@ -301,6 +337,7 @@ manage publication transport itself. If no Runtime publication adapter is
 available, keep the local artifact and say publishing is unavailable rather
 than falling back to a legacy script. Notification consent remains separate.
 
+
 ### 4. Report
 
 Report the exact HTML path returned by the renderer or written by composition;
@@ -313,7 +350,7 @@ do not infer a filename from the examples below.
 
 Only after an approved SHARE action returns a URL, append:
 ```
-◆ https://egregore.xyz/view/{org_slug}/board   (stable — refresh for latest)
+◆ {receipt.url}   (use the exact URL returned by the approved publication)
 ```
 Read `org_slug` from `egregore.json`.
 

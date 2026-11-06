@@ -79,7 +79,7 @@ if [ -d "$MEMORY_DIR" ]; then
     git add -A >/dev/null 2>&1
     git commit -m "chore(handoff): backfill PR numbers for $TOPIC" >/dev/null 2>&1 || exit 0
     git pull --rebase origin main --quiet >/dev/null 2>&1
-    git push origin main --quiet >/dev/null 2>&1
+    bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch main >/dev/null 2>&1
   ) || true
 fi
 

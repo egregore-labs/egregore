@@ -20,8 +20,8 @@ from .artifacts import (
     parse_canonical_markdown,
     split_frontmatter,
 )
-from .contracts import ActorContext, CanonicalArtifact, SourceProvenance, WritebackEvent
-from .policy import scope_allows_path
+from .contracts import ActorContext, CanonicalArtifact, SourceProvenance, WritebackEvent, PolicyDecision
+from .policy import check, action_for
 
 
 ISSUE_SCHEMA_VERSION = "egregore-issue/v1"
@@ -145,7 +145,7 @@ class CanonicalIssueService:
         self,
         actor: ActorContext,
         *,
-        authorized_scopes: tuple[str, ...],
+        decision: PolicyDecision,
     ) -> tuple[IssueSnapshot, ...]:
         """Read each authorized canonical source at most once for this operation."""
 
@@ -153,11 +153,12 @@ class CanonicalIssueService:
         for path in self._paths():
             relative = path.relative_to(self.memory_root).as_posix()
             canonical = f"memory/{relative}"
-            if not scope_allows_path(canonical, authorized_scopes):
+            verdict = check(decision, canonical, action_for(decision.permission), root=self.memory_root)
+            if not verdict.allowed:
                 continue
             rows.append(
                 parse_issue_markdown(
-                    path.read_text(encoding="utf-8"),
+                    verdict.resolved.read_text(encoding="utf-8"),
                     canonical_path=relative,
                     org_id=actor.profile.org_id,
                 )
@@ -199,11 +200,15 @@ class CanonicalIssueService:
         topics: Sequence[str] = (),
         context: str | None = None,
         suggested_fix: str | None = None,
+        issue_id: str | None = None,
     ) -> tuple[IssueSnapshot, WritebackEvent]:
         if not title.strip() or not description.strip():
             raise ValueError("issue title and description are required")
         now = self.clock().astimezone(UTC)
-        issue_id = f"{now.date().isoformat()}-{_slug(title)}"
+        if issue_id is None:
+            issue_id = f"{now.date().isoformat()}-{_slug(title)}"
+        elif not isinstance(issue_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,119}", issue_id):
+            raise ValueError("invalid issue identifier")
         relative = f"knowledge/issues/{issue_id}.md"
         if (self.memory_root / relative).exists():
             raise ValueError(f"issue already exists: {issue_id}")
@@ -235,6 +240,7 @@ class CanonicalIssueService:
                     content_hash=digest,
                     observed_at=now,
                     imported_by=actor.actor.actor_id,
+                    execution=actor.execution,
                 ),
             ),
         )

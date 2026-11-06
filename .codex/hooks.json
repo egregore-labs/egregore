@@ -15,6 +15,17 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Bash|exec_command|shell_command|shell|write_stdin|apply_patch|Edit|Write|Read|view_image",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$(git rev-parse --show-toplevel)/bin/boundary-hook.sh\"; if [ -f \"$h\" ]; then exec bash \"$h\" codex; fi; echo 'Environment isolation: boundary guard missing (bin/boundary-hook.sh) — run /update, then restart the session. Every action is blocked until the guard is back.' >&2; exit 2",
+            "timeout": 10,
+            "statusMessage": "Checking Egregore instance boundary"
+          }
+        ]
+      },
+      {
         "matcher": "Bash|exec_command|apply_patch|Edit|Write",
         "hooks": [
           {

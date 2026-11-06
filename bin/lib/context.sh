@@ -77,7 +77,8 @@ if [ -n "${CTX_SEED_TAR:-}" ] && [ -f "${CTX_SEED_TAR:-}" ]; then
     # (process env → .env → committed api_url).
     _NOW_URL="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "${ENV_FILE:-$SCRIPT_DIR/.env}" 2>/dev/null | cut -d'=' -f2- || true)}"
     _NOW_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "${ENV_FILE:-$SCRIPT_DIR/.env}" 2>/dev/null | cut -d'=' -f2- || true)}"
-    [ -n "$_NOW_URL" ] || _NOW_URL=$(jq -r '.api_url // empty' "${CONFIG:-$SCRIPT_DIR/egregore.json}" 2>/dev/null)
+    # A fingerprint only: a refused address counts as none, quietly.
+    _NOW_URL="$(_hosted_api_url "${_NOW_URL:-$(jq -r '.api_url // empty' "${CONFIG:-$SCRIPT_DIR/egregore.json}" 2>/dev/null)}" 2>/dev/null)" || _NOW_URL=""
     _NOW_SCOPE=$(echo -n "${_NOW_URL}|${_NOW_KEY}" | cksum | cut -d' ' -f1)
     _SEED_AGE=$(( $(date +%s) - _SEED_TS ))
     if [ -n "$_SEED_AUTHOR" ] && [ "$_SEED_AUTHOR" = "$AUTHOR" ] \
@@ -267,8 +268,11 @@ fi
     done)
     if [ -n "$FP_FILES" ]; then
       FILE_PRESENCE=$(printf '%s\n' "$FP_FILES" | tr '\n' '\0' | xargs -0 awk '
-        function flush() { if (a != "") printf "%s|%s\n", a, d }
-        FNR == 1 { if (NR != 1) flush(); a=""; d="" }
+        function flush() { if (a != "" && !native) printf "%s|%s\n", a, d }
+        FNR == 1 { if (NR != 1) flush(); a=""; d=""; native=0; frontmatter=($0 == "---") }
+        FNR > 1 && /^---[ \t]*$/ { frontmatter=0 }
+        frontmatter && tolower($0) ~ /^[ \t]*["\047]?(producer|producer_principal_id|producer_identity|record_owner_actor_id)["\047]?[ \t]*:/ { native=1 }
+        frontmatter && tolower($0) ~ /^[ \t]*["\047]?subject_kind["\047]?[ \t]*:/ && !/^subject_kind:[ \t]*("human-session"|human-session)[ \t]*$/ { native=1 }
         a == "" && /^\*\*Author\*\*:/ { s = $0; sub(/^\*\*Author\*\*:[ \t]*/, "", s); a = s }
         d == "" && /^\*\*Date\*\*:/   { s = $0; sub(/^\*\*Date\*\*:[ \t]*/, "", s); d = s }
         END { flush() }
@@ -296,8 +300,11 @@ fi
   WORK_MAP="{}"
   if [ -n "$WM_FILES" ]; then
     WORK_MAP=$(printf '%s\n' "$WM_FILES" | tr '\n' '\0' | xargs -0 awk '
-      function flush() { if (a != "" && t != "") printf "%s\t%s\t%s\n", a, d, t }
-      FNR == 1 { if (NR != 1) flush(); a=""; d=""; t="" }
+      function flush() { if (a != "" && t != "" && !native) printf "%s\t%s\t%s\n", a, d, t }
+      FNR == 1 { if (NR != 1) flush(); a=""; d=""; t=""; native=0; frontmatter=($0 == "---") }
+      FNR > 1 && /^---[ \t]*$/ { frontmatter=0 }
+      frontmatter && tolower($0) ~ /^[ \t]*["\047]?(producer|producer_principal_id|producer_identity|record_owner_actor_id)["\047]?[ \t]*:/ { native=1 }
+      frontmatter && tolower($0) ~ /^[ \t]*["\047]?subject_kind["\047]?[ \t]*:/ && !/^subject_kind:[ \t]*("human-session"|human-session)[ \t]*$/ { native=1 }
       a == "" && /^\*\*Author\*\*:/ { s = $0; sub(/^\*\*Author\*\*:[ \t]*/, "", s); a = s }
       d == "" && /^\*\*Date\*\*:/   { s = $0; sub(/^\*\*Date\*\*:[ \t]*/, "", s); d = s }
       t == "" && /^# / {
@@ -385,8 +392,6 @@ fi
 
 # 6. Handoffs addressed to user (background, enriched with author/topic)
 (
-  JSON="[]"
-  RICH="[]"
   if [ -d "$SCRIPT_DIR/memory/handoffs" ]; then
     # One definition everywhere: Egregore Runtime folds canonical lifecycle
     # state for both Local and Connected instances. Graph is an optional
@@ -404,72 +409,38 @@ fi
         [ -n "$_F" ] && [ -f "$_F" ] && printf '%s\n' "$_F"
       done)
     fi
-    # Match github username, display name, github_name first word, and people-file name
-    # Handoff files may use "to: name", "**To**: name", or "To: name"
-    _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
-    _GH_NAME=$(jq -r '.github_name // empty' "$STATE_FILE" 2>/dev/null)
-    _FIRST_NAME=$(echo "$_GH_NAME" | awk '{print $1}')
-    # Also check people file: memory/people/{author}.md has "# Name" on first line
-    _PEOPLE_NAME=""
-    _PEOPLE_FILE="$SCRIPT_DIR/memory/people/$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]').md"
-    [ -f "$_PEOPLE_FILE" ] && _PEOPLE_NAME=$(sed -n 's/^# *//p' "$_PEOPLE_FILE" 2>/dev/null | head -1)
-    _GREP_PAT="[Tt]o[*]*: *$AUTHOR\|[Tt]o[*]*:$AUTHOR"
-    for _VARIANT in "$_DISPLAY" "$_FIRST_NAME" "$_PEOPLE_NAME"; do
-      [ -z "$_VARIANT" ] && continue
-      [ "$_VARIANT" = "$AUTHOR" ] && continue
-      # Skip if already in pattern (avoid duplicates)
-      echo "$_GREP_PAT" | grep -qF "$_VARIANT" && continue
-      _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_VARIANT\|[Tt]o[*]*:$_VARIANT"
-    done
     # Compatibility fallback for an unavailable Runtime. It reads canonical
     # Markdown directly and never calls graph or a control-plane retrieval API.
     if [ -z "$ADDRESSED" ]; then
+      # Match github username, display name, github_name first word, and people-file name
+      # Handoff files may use "to: name", "**To**: name", or "To: name"
+      _DISPLAY=$(jq -r '.display_name // empty' "$STATE_FILE" 2>/dev/null)
+      _GH_NAME=$(jq -r '.github_name // empty' "$STATE_FILE" 2>/dev/null)
+      _FIRST_NAME=$(echo "$_GH_NAME" | awk '{print $1}')
+      # Also check people file: memory/people/{author}.md has "# Name" on first line
+      _PEOPLE_NAME=""
+      _PEOPLE_FILE="$SCRIPT_DIR/memory/people/$(echo "$AUTHOR" | tr '[:upper:]' '[:lower:]').md"
+      [ -f "$_PEOPLE_FILE" ] && _PEOPLE_NAME=$(sed -n 's/^# *//p' "$_PEOPLE_FILE" 2>/dev/null | head -1)
+      _GREP_PAT="[Tt]o[*]*: *$AUTHOR\|[Tt]o[*]*:$AUTHOR"
+      for _VARIANT in "$_DISPLAY" "$_FIRST_NAME" "$_PEOPLE_NAME"; do
+        [ -z "$_VARIANT" ] && continue
+        [ "$_VARIANT" = "$AUTHOR" ] && continue
+        # Skip if already in pattern (avoid duplicates)
+        echo "$_GREP_PAT" | grep -qF "$_VARIANT" && continue
+        _GREP_PAT="$_GREP_PAT\|[Tt]o[*]*: *$_VARIANT\|[Tt]o[*]*:$_VARIANT"
+      done
       ADDRESSED=$(grep -rli "$_GREP_PAT" "$SCRIPT_DIR/memory/handoffs/" 2>/dev/null | sort -r | head -5 || true)
     fi
-    JSON="["
-    RICH="["
-    FIRST=true
-    for AF in $ADDRESSED; do
-      [ -z "$AF" ] && continue
-      AF_NAME=$(basename "$AF" .md)
-      AF_AUTHOR=$(eg_handoff_author "$AF")
-      AF_TOPIC=$(eg_handoff_topic "$AF")
-      AF_DATE=$(eg_handoff_date "$AF")
-      # Extract repo state table if present
-      AF_REPO_STATE="[]"
-      AF_REPO_TABLE=$(awk '/^## Repo State/{found=1; next} found && /^#/{exit} found && /^\|[^-]/ && !/^\| Repo/{print}' "$AF" 2>/dev/null || true)
-      if [ -n "$AF_REPO_TABLE" ]; then
-        AF_REPO_STATE=$(echo "$AF_REPO_TABLE" | while IFS='|' read -r _ R_REPO R_BRANCH R_PR R_BASE _; do
-          R_REPO=$(echo "$R_REPO" | xargs 2>/dev/null || true)
-          R_BRANCH=$(echo "$R_BRANCH" | xargs 2>/dev/null || true)
-          R_PR=$(echo "$R_PR" | xargs 2>/dev/null | sed 's/^#//' | sed 's/—//' || true)
-          R_BASE=$(echo "$R_BASE" | xargs 2>/dev/null || true)
-          [ -z "$R_REPO" ] && continue
-          if [ -n "$R_PR" ] && [ "$R_PR" -eq "$R_PR" ] 2>/dev/null; then
-            printf '{"repo":"%s","branch":"%s","pr":%s,"base":"%s"}\n' "$R_REPO" "$R_BRANCH" "$R_PR" "$R_BASE"
-          else
-            printf '{"repo":"%s","branch":"%s","pr":null,"base":"%s"}\n' "$R_REPO" "$R_BRANCH" "$R_BASE"
-          fi
-        done | jq -sc '.' 2>/dev/null || echo "[]")
-      fi
-      $FIRST || JSON="$JSON,"
-      $FIRST || RICH="$RICH,"
-      JSON="$JSON\"$AF_NAME\""
-      AF_ENTRY=$(jq -cn \
-        --arg name "$AF_NAME" \
-        --arg author "$AF_AUTHOR" \
-        --arg topic "$AF_TOPIC" \
-        --arg date "$AF_DATE" \
-        --argjson repoState "$AF_REPO_STATE" \
-        '{name:$name, author:$author, topic:$topic, date:$date, repoState:$repoState}' 2>/dev/null || echo "{}")
-      RICH="$RICH$AF_ENTRY"
-      FIRST=false
-    done
-    JSON="$JSON]"
-    RICH="$RICH]"
+    # One process reads every addressed handoff for its name, author, topic,
+    # date and Repo State rows with handoff-meta.sh's semantics; a fork per
+    # field made this the gather's slowest job. $ADDRESSED stays unquoted
+    # for the word splitting the per-file loop had.
+    # shellcheck disable=SC2086
+    [ -n "$ADDRESSED" ] && python3 "$SCRIPT_DIR/bin/lib/handoff_meta.py" addressed \
+      "$CTX_DIR/addressed" "$CTX_DIR/addressed_rich" $ADDRESSED 2>/dev/null && exit 0
   fi
-  echo "$JSON" > "$CTX_DIR/addressed"
-  echo "$RICH" > "$CTX_DIR/addressed_rich"
+  echo "[]" > "$CTX_DIR/addressed"
+  echo "[]" > "$CTX_DIR/addressed_rich"
 ) &
 
 # 6.5. Pending questions addressed to user (background)

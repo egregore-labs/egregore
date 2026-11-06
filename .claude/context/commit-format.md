@@ -59,11 +59,14 @@ Egregore-Session: <session id>
 Co-Authored-By: <harness identity>
 ```
 
-- `Egregore-Session` is the id from `.egregore-session-id`. It links
-  the commit to its session in the graph — commit → session → handoff
-  lineage becomes queryable:
+- `Egregore-Session` is the id `bash bin/session-id.sh` prints: this
+  harness session's own id, resolved from the harness's native session
+  id. Never read `.egregore-session-id` for it — every worktree shares
+  that file and the latest session start anywhere rewrites it. The
+  trailer links the commit to its session in the graph — commit →
+  session → handoff lineage becomes queryable:
   `git log --format='%(trailers:key=Egregore-Session,valueonly)'`.
-  Omit only when no session id exists (bare scripts, CI). A commit
+  Omit only when it prints nothing (bare scripts, CI). A commit
   carrying work from several sessions repeats the trailer, one per
   session; squashes keep every contributing session's trailer, and a
   cherry-pick keeps the source commit's.

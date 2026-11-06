@@ -236,7 +236,7 @@ if $requested_tree; then
     ($path | split("/")[-1]) as $basename | .[$basename] += [$path])' \
     "$scratch/head-paths" > "$scratch/head-basenames.json"
 else
-  for suite in "$SCRIPT_DIR"/tests/*.sh "$SCRIPT_DIR"/tests/*.py "$SCRIPT_DIR"/bin/tests/*.sh "$SCRIPT_DIR"/bin/tests/*.mjs; do
+  for suite in "$SCRIPT_DIR"/tests/*.sh "$SCRIPT_DIR"/tests/*.py "$SCRIPT_DIR"/tests/*.mjs "$SCRIPT_DIR"/bin/tests/*.sh "$SCRIPT_DIR"/bin/tests/*.mjs; do
     if [ -L "$suite" ]; then
       suite_paths_skipped=$((suite_paths_skipped + 1))
       continue
@@ -286,7 +286,7 @@ while IFS= read -r -d '' file; do
     code=0
     if $requested_tree; then
       git -C "$SCRIPT_DIR" grep -l -z -F "${patterns[@]}" "$head_oid" -- \
-        ':(top,glob)tests/*.sh' ':(top,glob)tests/*.py' \
+        ':(top,glob)tests/*.sh' ':(top,glob)tests/*.py' ':(top,glob)tests/*.mjs' \
         ':(top,glob)bin/tests/*.sh' ':(top,glob)bin/tests/*.mjs' > "$scratch/hits" || code=$?
       while IFS= read -r -d '' suite; do
         jq -cn --arg suite "${suite#"$head_oid":}" --arg match "$file" \

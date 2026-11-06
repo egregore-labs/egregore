@@ -16,6 +16,8 @@ trap 'rm -rf "$TMP"' EXIT
 SB="$TMP/instance"
 mkdir -p "$SB/bin" "$SB/memory/handoffs" "$TMP/home/.egregore" "$TMP/shim" "$TMP/results"
 cp "$ROOT/bin/handoff-run.sh" "$SB/bin/handoff-run.sh"
+mkdir -p "$SB/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$SB/bin/lib/config.sh"
+cp "$ROOT/bin/artifact-renderer.sh" "$SB/bin/artifact-renderer.sh"
 printf '%s\n' '# Handoffs' > "$SB/memory/handoffs/index.md"
 printf '%s\n' '{"mode":"local"}' > "$SB/egregore.json"
 printf '%s\n' '{"auth_token":"test-token"}' > "$TMP/home/.egregore/emissary-config.json"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import hashlib
 import json
@@ -13,9 +14,10 @@ import subprocess
 import sys
 from uuid import uuid4
 
+from . import held
 from .contracts import Permission
 from .issues import CanonicalIssueService, IssueSnapshot
-from .policy import scope_allows_path
+from .policy import allows, action_for
 from .runtime import local_runtime
 
 
@@ -49,7 +51,7 @@ def _require_issue_path(runtime, actor, permission: Permission, issue: IssueSnap
     decision = _require(
         runtime, actor, permission, issue.document.artifact.artifact_id
     )
-    if not scope_allows_path(f"memory/{issue.canonical_path}", decision.scopes):
+    if not allows(decision, f"memory/{issue.canonical_path}", action_for(decision.permission), root=runtime.canonical_root):
         raise PermissionError("issue path is outside the actor's authorized scope")
     return decision
 
@@ -57,7 +59,7 @@ def _require_issue_path(runtime, actor, permission: Permission, issue: IssueSnap
 def _snapshot(runtime, actor, service, permission: Permission = Permission.READ):
     _require(runtime, actor, Permission.DISCOVER, "issues")
     decision = _require(runtime, actor, permission, "issues")
-    return service.snapshot(actor, authorized_scopes=decision.scopes), decision
+    return service.snapshot(actor, decision=decision), decision
 
 
 def _resolve(runtime, actor, service, reference: str) -> IssueSnapshot:
@@ -65,9 +67,13 @@ def _resolve(runtime, actor, service, reference: str) -> IssueSnapshot:
     return service.resolve(rows, reference)
 
 
-def _write_result(issue: IssueSnapshot, receipt) -> int:
-    print(json.dumps({"issue": issue.to_dict(), "writeback": receipt.to_dict()}, ensure_ascii=False))
-    return 0 if receipt.status.value in {"accepted", "partial"} else 1
+def _write_result(runtime, actor, issue: IssueSnapshot, receipt) -> int:
+    return held.emit_for(runtime, actor, {"issue": issue.to_dict(), "writeback": receipt.to_dict()}) or (
+        0 if receipt.status.value in {"accepted", "partial"} else 1)
+
+
+def _issues(runtime, actor, rows) -> int:
+    return held.emit_for(runtime, actor, {"issues": rows}, each=("issues", "canonical_path"))
 
 
 def _list(args):
@@ -76,15 +82,14 @@ def _list(args):
     selected = rows if args.status == "all" else tuple(
         row for row in rows if row.status == args.status
     )
-    print(json.dumps({"issues": [row.to_dict() for row in selected]}, ensure_ascii=False))
-    return 0
+    return _issues(runtime, actor, [row.to_dict() for row in selected])
 
 
 def _show(args):
     _, runtime, actor, service = _context()
     issue = _resolve(runtime, actor, service, args.reference)
-    print(json.dumps({"issue": issue.to_dict(include_body=True)}, ensure_ascii=False))
-    return 0
+    return held.emit_for(runtime, actor, {"issue": issue.to_dict(include_body=True)},
+                         paths=(f"memory/{issue.canonical_path}",))
 
 
 def _search(args):
@@ -97,8 +102,7 @@ def _search(args):
         return all(term in haystack for term in terms)
 
     selected = [row.to_dict() for row in rows if matches(row)][: args.limit]
-    print(json.dumps({"issues": selected}, ensure_ascii=False))
-    return 0
+    return _issues(runtime, actor, selected)
 
 
 def _create(args):
@@ -106,10 +110,10 @@ def _create(args):
     date = datetime.now(UTC).date().isoformat()
     prospective = f"memory/knowledge/issues/{date}-{args.title}.md"
     decision = _require(runtime, actor, Permission.WRITE, "issues:new")
-    if not scope_allows_path(prospective, decision.scopes):
+    if not allows(decision, prospective, action_for(decision.permission), root=runtime.canonical_root):
         # Policies commonly authorize the directory rather than a pre-slugged
         # filename; test the canonical directory as the stable resource.
-        if not scope_allows_path("memory/knowledge/issues/", decision.scopes):
+        if not allows(decision, "memory/knowledge/issues/", action_for(decision.permission), root=runtime.canonical_root):
             raise PermissionError("issue path is outside the actor's authorized scope")
     issue, receipt = service.create(
         actor,
@@ -120,7 +124,7 @@ def _create(args):
         context=args.context,
         suggested_fix=args.suggested_fix,
     )
-    return _write_result(issue, receipt)
+    return _write_result(runtime, actor, issue, receipt)
 
 
 def _close(args):
@@ -128,7 +132,7 @@ def _close(args):
     issue = _resolve(runtime, actor, service, args.reference)
     _require_issue_path(runtime, actor, Permission.WRITE, issue)
     closed, receipt = service.close(actor, issue, reason=args.reason)
-    return _write_result(closed, receipt)
+    return _write_result(runtime, actor, closed, receipt)
 
 
 def _share_state_path(root: Path) -> Path:
@@ -157,6 +161,15 @@ def _share_payload(issue: IssueSnapshot, *, action: str, repo: str | None) -> di
     }
 
 
+def _shareable(runtime, actor, issue: IssueSnapshot, payload: dict[str, str]) -> dict[str, str]:
+    """A payload leaves exactly as previewed, so one naming held material is refused, never redacted; it leaves
+    the organization, so it is decided as a hand-over under every policy."""
+    handed = replace(runtime.authorize(actor, Permission.READ), scope="hand-over")
+    if held.package(handed, payload, root=runtime.canonical_root, paths=(f"memory/{issue.canonical_path}",)) != payload:
+        raise PermissionError("this issue names material held from you, so it cannot be shared")
+    return payload
+
+
 def _payload_hash(payload: dict[str, str]) -> str:
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -166,7 +179,7 @@ def _share_preview(args):
     root, runtime, actor, service = _context()
     issue = _resolve(runtime, actor, service, args.reference)
     _require_issue_path(runtime, actor, Permission.SHARE, issue)
-    payload = _share_payload(issue, action=args.action, repo=args.repo)
+    payload = _shareable(runtime, actor, issue, _share_payload(issue, action=args.action, repo=args.repo))
     now = datetime.now(UTC)
     token = secrets.token_hex(24)
     state = {
@@ -183,13 +196,12 @@ def _share_preview(args):
         path.chmod(0o600)
     except OSError:
         pass
-    print(json.dumps({
+    return held.emit_for(runtime, actor, {
         "share_preview": payload,
         "confirmation_token": token,
         "expires_at": state["expires_at"],
         "notice": "No external action has occurred. Confirm this exact unchanged payload separately.",
-    }, ensure_ascii=False))
-    return 0
+    })
 
 
 def _confirmed_payload(root: Path, token: str) -> dict[str, str]:
@@ -221,7 +233,7 @@ def _share_confirm(args):
     # Rebuild from current canonical state so the consent cannot outlive a
     # changed title/body/link.
     repo = payload["destination"].removeprefix("github:") if payload["action"] == "create" else None
-    current = _share_payload(issue, action=payload["action"], repo=repo)
+    current = _shareable(runtime, actor, issue, _share_payload(issue, action=payload["action"], repo=repo))
     if _payload_hash(current) != _payload_hash(payload):
         raise PermissionError("canonical issue changed; prepare a new share preview")
     if payload["action"] == "create":
@@ -252,7 +264,20 @@ def _share_confirm(args):
     }
     if receipt is not None:
         response["writeback"] = receipt.to_dict()
-    print(json.dumps(response, ensure_ascii=False))
+    return held.emit_for(runtime, actor, response)
+
+
+def _readiness(args) -> int:
+    """Local issue-pilot setup, inspected without identity or network: no memory text."""
+    from .issue_readiness import inspect_issue_readiness
+    return _external(inspect_issue_readiness(Path(os.environ.get("EGREGORE_ROOT") or Path.cwd()).resolve(),
+                                             harness=args.harness))
+
+
+def _external(result) -> int:
+    """No memory text: setup checks, a GitHub tracker's own issues, and a person's report and its triage,
+    shown exactly as they would be sent."""
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -337,10 +362,7 @@ def _parser():
 def main() -> int:
     args = _parser().parse_args()
     if args.command == "readiness":
-        from .issue_readiness import inspect_issue_readiness
-        root = Path(os.environ.get("EGREGORE_ROOT") or Path.cwd()).resolve()
-        print(json.dumps(inspect_issue_readiness(root, harness=args.harness), ensure_ascii=False))
-        return 0
+        return _readiness(args)
     from .github_issues import GitHubIssues, configured_repo
     root = Path(os.environ.get("EGREGORE_ROOT") or Path.cwd()).resolve()
     if args.command == "triage":
@@ -350,8 +372,7 @@ def main() -> int:
             args.title, args.description, environment=args.environment, evidence=args.evidence,
             kind=args.kind, area=args.area, severity=args.severity, preview=args.preview,
         )
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return _external(result)
     if args.command in {"report", "upstream", "report-status"}:
         from .issue_reporting import FrameworkReporting, report_payload
         root, runtime, actor, _ = _context()
@@ -365,8 +386,7 @@ def main() -> int:
         else:
             payload = report_payload(args.title, args.description, args.kind or "bug", args.area or "other", args.severity or "normal", public=args.command == "upstream", environment=args.environment, evidence=args.evidence)
             result = reporting.prepare(args.command, payload)
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return _external(result)
     repo = configured_repo(root)
     if repo:
         root, runtime, actor, _ = _context()
@@ -387,8 +407,7 @@ def main() -> int:
             result = service.change_state(args.reference, "closed" if args.command == "close" else "open", args.reason)
         else:
             raise ValueError("the configured GitHub tracker uses create/close directly; share-github is only for canonical issues")
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
+        return _external(result)
     if args.command in {"reopen", "repeat", "duplicates"} or getattr(args, "draft", False) or getattr(args, "request_id", None) or getattr(args, "artifact", None):
         raise ValueError("this operation requires a configured GitHub issue backend")
     return args.handler(args)

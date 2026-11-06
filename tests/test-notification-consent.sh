@@ -85,6 +85,7 @@ echo "test-notification-consent"
 # the Python Runtime CLI. Its existing file reader is dispatch --approval-file.
 mkdir -p "$PROJECT/bin/lib" "$PROJECT/tmp"
 cp "$ROOT/bin/notify.sh" "$PROJECT/bin/notify.sh"
+mkdir -p "$PROJECT/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$PROJECT/bin/lib/config.sh"
 cp "$ROOT/bin/lib/scratch.sh" "$PROJECT/bin/lib/scratch.sh"
 cp -R "$ROOT/egregore_runtime" "$PROJECT/egregore_runtime"
 for receipt_kind in scratch document; do

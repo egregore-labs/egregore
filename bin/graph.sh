@@ -81,7 +81,7 @@ fi
 
 # api_url comes from egregore.json (committed, non-secret)
 # api_key comes from .env only (EGREGORE_API_KEY) — never from egregore.json
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
+API_URL="$(_hosted_api_url "${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}")" || API_URL=""
 API_KEY="${EGREGORE_API_KEY:-}"
 
 # --- Millisecond timer (macOS + Linux compatible) ---

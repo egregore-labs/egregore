@@ -29,7 +29,7 @@ authorize_identity() {
 }
 
 remote_config() {
-  api_url="${EGREGORE_API_URL:-$(_config_val api_url)}"
+  api_url="$(_hosted_api_url "${EGREGORE_API_URL:-$(_config_val api_url)}")" || api_url=""
   api_key="${EGREGORE_API_KEY:-$(_load_env_var EGREGORE_API_KEY)}"
 }
 
@@ -49,11 +49,22 @@ sync_remote_identity() {
       email,
       emails
     }')"
-    api_result="$(curl -q -sf "${api_url}/api/user/ensure" \
+    api_response="$(curl -q -s "${api_url}/api/user/ensure" \
       -H "Authorization: Bearer ${api_key}" \
       -H "Content-Type: application/json" \
       -d "$api_payload" \
+      -w '\n%{http_code}' \
       --max-time 10 2>/dev/null || true)"
+    api_code="${api_response##*$'\n'}"
+    api_result=""
+    case "$api_code" in 2??) api_result="${api_response%$'\n'*}" ;; esac
+    # This is each session's one authenticated call, so it doubles as the
+    # probe: a rejected organization key is renewed through verified GitHub
+    # membership (bin/runtime-identity.sh), never from this response.
+    if [ "$api_code" = 401 ] && [ -f "$ROOT/bin/runtime-identity.sh" ]; then
+      rejected_code="$(printf '%s' "${api_response%$'\n'*}" | jq -r '.code // empty' 2>/dev/null || true)"
+      bash "$ROOT/bin/runtime-identity.sh" recover "$rejected_code" >/dev/null 2>&1 || true
+    fi
     api_status="$(printf '%s' "$api_result" | jq -r '.status // "failed"' 2>/dev/null || echo failed)"
     platform_user_id="$(printf '%s' "$api_result" | jq -r '.user_id // empty' 2>/dev/null || true)"
     if [ "$api_status" = "ok" ]; then

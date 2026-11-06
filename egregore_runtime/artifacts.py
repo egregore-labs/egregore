@@ -18,12 +18,14 @@ import unicodedata
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
-from .contracts import ArtifactRelationship, CanonicalArtifact, SourceProvenance
+from .contracts import ActorKind, ArtifactRelationship, CanonicalArtifact, ExecutionAuthority, SourceProvenance
 
 
 ARTIFACT_SCHEMA_VERSION = "egregore-artifact/v1"
+# Names frontmatter keys whose block value the reader could not represent.
+UNPARSED_FRONTMATTER = "unparsed frontmatter"
 _FRONTMATTER_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):(?:[ \t]*(.*))?$")
 # Existing hosted artifact ids are URL-safe opaque tokens and may begin with
 # ``-`` or ``_``.  Keep those stable during explicit v1 migration.
@@ -54,6 +56,9 @@ class CanonicalDocument:
     replaces_existing: bool = False
     # Optimistic concurrency for a mutable lifecycle update; never serialized.
     expected_revision: str | None = None
+    # Stricter optimistic concurrency: the SHA-256 of the stored file's full
+    # bytes (header included), checked under the write lock; never serialized.
+    expected_sha256: str | None = None
 
 
 @runtime_checkable
@@ -156,33 +161,136 @@ def _parse_scalar(raw: str) -> Any:
     return value
 
 
-def split_frontmatter(markdown: str) -> tuple[dict[str, Any], str]:
-    """Parse the deterministic JSON-in-YAML subset used by v1 and legacy scalars.
+class _Unsupported(Exception):
+    """A frontmatter block outside the supported YAML subset."""
 
-    JSON values are valid YAML and let the runtime round-trip nested provenance
-    without a YAML dependency.  Unknown indented legacy fields are ignored and
-    preserved in the original file until an explicit migration/write occurs.
-    """
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _dash(text: str) -> bool:
+    return text == "-" or text.startswith("- ")
+
+
+def _block_scalar(raw: str) -> Any:
+    """A scalar inside a block. A plain value carrying a YAML comment is refused
+    rather than read with the comment as data (``- oz # owner``)."""
+
+    if raw.startswith("#") or " #" in raw or "\t#" in raw:  # YAML: whitespace, then "#"
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            raise _Unsupported from None
+    return _parse_scalar(raw)
+
+
+def _block(lines: list[str], index: int, indent: int) -> tuple[Any, int]:
+    """One block-style YAML value at ``indent``: a list of scalars or a mapping."""
+
+    if _dash(lines[index][indent:]):
+        items = []
+        while index < len(lines) and _indent(lines[index]) == indent and _dash(lines[index][indent:]):
+            item = lines[index][indent + 1:].strip()
+            index += 1
+            if not item or (index < len(lines) and _indent(lines[index]) > indent):
+                raise _Unsupported  # an empty or nested list item
+            items.append(_block_scalar(item))
+        return items, index
+    mapping: dict[str, Any] = {}
+    while index < len(lines) and _indent(lines[index]) == indent and not _dash(lines[index][indent:]):
+        match = _FRONTMATTER_KEY.match(lines[index][indent:])
+        if match is None or match.group(1) in mapping:
+            raise _Unsupported
+        key, raw = match.group(1), (match.group(2) or "").strip()
+        index += 1
+        child = _indent(lines[index]) if index < len(lines) else -1
+        nested = child > indent or (child == indent and _dash(lines[index][indent:]))
+        if raw:
+            if nested or raw[:1] in {"|", ">"}:
+                raise _Unsupported  # a multi-line scalar
+            mapping[key] = _block_scalar(raw)
+        elif nested:
+            mapping[key], index = _block(lines, index, child)
+        else:
+            mapping[key] = None
+    if index < len(lines) and _indent(lines[index]) > indent:
+        raise _Unsupported
+    return mapping, index
+
+
+def _parse_frontmatter(markdown: str) -> tuple[dict[str, Any], str, tuple[str, ...]]:
     normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
     if not normalized.startswith("---\n"):
-        return {}, normalized
+        return {}, normalized, ()
     closing = normalized.find("\n---\n", 4)
     if closing < 0:
         raise ArtifactSchemaError("incomplete frontmatter block")
-    raw_header = normalized[4:closing]
+    # Only a comment at column 0 is dropped: inside a block, a "#" line may be
+    # content (a literal block), so it stays and makes that block unsupported.
+    numbered = [(number, line) for number, line in enumerate(normalized[4:closing].splitlines(), 2)
+                if line.strip() and not line.startswith("#")]
+    lines = [line for _, line in numbered]
     result: dict[str, Any] = {}
-    for line_number, line in enumerate(raw_header.splitlines(), 2):
-        if not line.strip() or line.lstrip().startswith("#") or line[:1].isspace():
+    unparsed: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line[:1].isspace():
+            index += 1  # an indented line no key above it could own
             continue
         match = _FRONTMATTER_KEY.match(line)
         if match is None:
-            raise ArtifactSchemaError(f"invalid frontmatter line {line_number}")
+            raise ArtifactSchemaError(f"invalid frontmatter line {numbered[index][0]}")
         key, raw = match.groups()
         if key in result:
             raise ArtifactSchemaError(f"duplicate frontmatter key: {key}")
         result[key] = _parse_scalar(raw or "")
-    return result, normalized[closing + 5 :]
+        index += 1
+        if index < len(lines) and lines[index][:1].isspace():
+            # A block value under this key. Keep the one-line reading when the
+            # block is outside the subset, and name the key so no write drops it.
+            following = index
+            while following < len(lines) and lines[following][:1].isspace():
+                following += 1
+            if (raw or "").strip():
+                unparsed.append(key)
+            else:
+                try:
+                    value, stop = _block(lines, index, _indent(lines[index]))
+                    if stop != following:
+                        raise _Unsupported
+                    result[key] = value
+                except _Unsupported:
+                    unparsed.append(key)
+            index = following
+    return result, normalized[closing + 5 :], tuple(unparsed)
+
+
+def split_frontmatter(markdown: str) -> tuple[dict[str, Any], str]:
+    """Parse the deterministic JSON-in-YAML subset used by v1 and legacy records.
+
+    JSON values are valid YAML and let the runtime round-trip nested provenance
+    without a YAML dependency. Legacy block values (an indented list of
+    scalars, or a mapping of them) are read too. Anything else under a key
+    keeps its one-line reading; ``unparsed_frontmatter`` names those keys so a
+    write never drops them.
+    """
+
+    fields, body, _ = _parse_frontmatter(markdown)
+    return fields, body
+
+
+def unparsed_frontmatter(markdown: str) -> tuple[str, ...]:
+    """Keys whose block value is outside the supported subset."""
+
+    return _parse_frontmatter(markdown)[2]
+
+
+def _refuse_unparsed(warnings: tuple[str, ...]) -> None:
+    unread = next((note for note in warnings if note.startswith(UNPARSED_FRONTMATTER)), None)
+    if unread:
+        raise ArtifactSchemaError(f"{unread}; rewriting this record would drop them")
 
 
 def _as_strings(value: Any) -> tuple[str, ...]:
@@ -263,6 +371,11 @@ def _infer_type(fields: Mapping[str, Any], canonical_path: str) -> str:
     return "artifact"
 
 
+def plain_revision(markdown: str) -> str:
+    """Version of a plain canonical file: a hash of its exact text."""
+    return "sha256:" + hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16]
+
+
 def store_managed_reason(markdown: str) -> str | None:
     """Say why raw Markdown belongs to the artifact store, or None if it does not.
 
@@ -303,6 +416,34 @@ def _relationships(value: Any) -> tuple[ArtifactRelationship, ...]:
     return tuple(rows)
 
 
+def _execution_provenance(value: Any) -> ExecutionAuthority | None:
+    """Read bounded historical attribution, never usable as a credential."""
+    if value is None:
+        return None
+    text_fields = (
+        "executor_actor_id", "worker_id", "member_account_id", "member_actor_id",
+        "membership_id", "org_id", "grant_id", "binding_id", "audience", "revision",
+    )
+    if not isinstance(value, Mapping) or set(value) != {*text_fields, "executor_kind", "expires_at"}:
+        raise ArtifactSchemaError("invalid execution provenance")
+    if any(not isinstance(value[key], str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value[key])
+           for key in text_fields):
+        raise ArtifactSchemaError("invalid execution provenance reference")
+    try:
+        kind = ActorKind(value["executor_kind"])
+        if kind not in {ActorKind.AGENT, ActorKind.SERVICE}:
+            raise ValueError("invalid executor kind")
+        expires = datetime.fromisoformat(str(value["expires_at"]).replace("Z", "+00:00"))
+        if expires.tzinfo is None:
+            raise ValueError("timezone required")
+    except (ValueError, TypeError):
+        raise ArtifactSchemaError("invalid execution provenance") from None
+    return ExecutionAuthority(
+        **{key: value[key] for key in text_fields},
+        executor_kind=kind, expires_at=expires,
+    )
+
+
 def _provenance(value: Any) -> tuple[SourceProvenance, ...]:
     if value is None:
         return ()
@@ -326,6 +467,7 @@ def _provenance(value: Any) -> tuple[SourceProvenance, ...]:
                 observed_at=_datetime(item["observed_at"], field_name="provenance.observed_at"),
                 source_uri=str(item["source_uri"]) if item.get("source_uri") else None,
                 imported_by=str(item["imported_by"]) if item.get("imported_by") else None,
+                execution=_execution_provenance(item.get("execution")),
             )
         )
     return tuple(rows)
@@ -356,6 +498,11 @@ def validate_artifact(artifact: CanonicalArtifact, body: str) -> CanonicalArtifa
         raise ArtifactSchemaError("content_hash does not match the normalized Markdown body")
     if any(not row.relation or not row.target_id for row in artifact.relationships):
         raise ArtifactSchemaError("relationships require relation and target_id")
+    for source in artifact.provenance:
+        if source.execution is not None:
+            if not isinstance(source.execution, ExecutionAuthority):
+                raise ArtifactSchemaError("invalid execution provenance")
+            _execution_provenance(source.execution.to_dict())
     return replace(
         artifact,
         canonical_path=canonical_path,
@@ -382,7 +529,7 @@ def parse_canonical_markdown(
     """
 
     path = canonical_relative_path(canonical_path)
-    fields, raw_body = split_frontmatter(markdown)
+    fields, raw_body, unparsed = _parse_frontmatter(markdown)
     body = normalize_markdown_body(raw_body)
     schema = fields.get("schema_version") or fields.get("schema")
     is_v1 = schema == ARTIFACT_SCHEMA_VERSION
@@ -406,6 +553,7 @@ def parse_canonical_markdown(
         or fields.get("date")
         or fields.get("ingested_at")
         or fields.get("started")
+        or fields.get("created")
         or (default_created_at if not is_v1 else None)
     )
     if created_raw is None:
@@ -482,6 +630,8 @@ def parse_canonical_markdown(
         if key in fields:
             policy_hints[key] = fields[key]
     warnings = () if is_v1 else ("legacy frontmatter migrated in memory; source file was not rewritten",)
+    if unparsed:
+        warnings += (f"{UNPARSED_FRONTMATTER}: {', '.join(unparsed)}",)
     return CanonicalDocument(
         artifact=artifact,
         body=body,
@@ -533,7 +683,7 @@ class LocalMarkdownArtifactStore:
         root: Path,
         *,
         mutable_types: frozenset[str] = frozenset(
-            {"scroll", "thread", "question", "quest", "todo", "issue"}
+            {"scroll", "thread", "question", "quest", "todo", "issue", "design"}
         ),
     ):
         self.root = root.resolve()
@@ -567,8 +717,18 @@ class LocalMarkdownArtifactStore:
                 # stale digest, decides whether that replacement is legitimate.
                 recompute_digest=document.replaces_existing,
             )
+            identical = (artifact.artifact_type not in self.mutable_types and not document.replaces_existing
+                         and existing.artifact.content_hash == artifact.content_hash and document.migrated_from is None)
+            if not identical:
+                # The reader keeps only a one-line reading of an unparsed key,
+                # so replacing a stored file that has one would drop the rest.
+                # Refusing here, in the check, stops a batch before any write.
+                _refuse_unparsed(existing.warnings)
             if document.expected_revision is not None and existing.artifact.revision != document.expected_revision:
                 raise ArtifactConflictError("canonical source revision changed; reopen before retrying")
+            if (document.expected_sha256 is not None
+                    and hashlib.sha256(target.read_bytes()).hexdigest() != document.expected_sha256):
+                raise ArtifactConflictError("canonical source changed; reopen before retrying")
             if existing.artifact.artifact_id != artifact.artifact_id:
                 raise ArtifactConflictError("artifact path belongs to a different stable id")
             if artifact.artifact_type not in self.mutable_types and not document.replaces_existing:
@@ -579,6 +739,7 @@ class LocalMarkdownArtifactStore:
                         return target
                 else:
                     raise ArtifactConflictError(f"{artifact.artifact_type} artifacts are append-only")
+        _refuse_unparsed(document.warnings)  # a document built from such a read drops them too
         return target
 
     @contextmanager
@@ -611,6 +772,51 @@ class LocalMarkdownArtifactStore:
             if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != expected_sha256:
                 raise ArtifactConflictError("canonical source changed during identity transfer")
             return self._persist(document)
+
+    def replace_plain_if_unchanged(self, canonical_path: str, expected_revision: str, text: str) -> Path:
+        """Replace a plain canonical Markdown file while its bytes still match.
+
+        For files that carry no artifact envelope (people pages, ledgers, older
+        notes). ``expected_revision`` is ``sha256:`` plus the first 16 hex of the
+        current file. A file the store manages is refused: those go through a
+        document write so their envelope stays valid.
+        """
+        with self._write_lock(canonical_path):
+            target = self._target(canonical_path)
+            if not target.is_file():
+                raise ArtifactConflictError("canonical source disappeared; reopen before retrying")
+            current = target.read_text(encoding="utf-8")
+            if plain_revision(current) != expected_revision:
+                raise ArtifactConflictError("canonical source revision changed; reopen before retrying")
+            for markdown in (current, text):
+                reason = store_managed_reason(markdown)
+                if reason is not None:
+                    raise ArtifactConflictError(f"this file is store-managed ({reason}); write it as a document")
+            temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+            temporary.write_text(text, encoding="utf-8")
+            temporary.replace(target)
+            return target
+
+    def restore_if(self, canonical_path: str, previous: str, holds: Callable[[str], bool]) -> bool:
+        """Put ``previous`` back while the file still holds a write nothing versioned.
+
+        ``holds`` says whether the current text is that write. Under the same
+        lock as every store write. True when the file holds ``previous`` again
+        (or never left it); False when it moved on, so nothing was touched.
+        """
+        with self._write_lock(canonical_path):
+            target = self._target(canonical_path)
+            if not target.is_file():
+                return False
+            current = target.read_text(encoding="utf-8")
+            if current == previous:
+                return True
+            if not holds(current):
+                return False
+            temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+            temporary.write_text(previous, encoding="utf-8")
+            temporary.replace(target)
+            return True
 
     def _persist(self, document: CanonicalDocument) -> Path:
         target = self.check_write(document)

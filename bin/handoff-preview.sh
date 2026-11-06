@@ -110,13 +110,11 @@ preview() {
 
   local render_ok=0
   if [ -n "$composed" ]; then
-    if bash "$ROOT/bin/node-run.sh" \
-      "$ROOT/packages/egregore-artifacts/bin/cli.js" composed "$spec_file" \
+    if bash "$ROOT/bin/artifact-renderer.sh" composed "$spec_file" \
       --source "$content_file" --verify-fidelity; then
       render_ok=1
     fi
-  elif bash "$ROOT/bin/node-run.sh" \
-    "$ROOT/packages/egregore-artifacts/bin/cli.js" handoff "$content_file" \
+  elif bash "$ROOT/bin/artifact-renderer.sh" handoff "$content_file" \
     --verify-fidelity; then
     render_ok=1
   fi

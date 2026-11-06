@@ -64,7 +64,9 @@ if grep -q 'bin/activity-data.sh' "$CTX" && ! grep -q 'graph-op.sh" open-handoff
 else
   fail "greeting still bypasses Runtime for addressed handoffs"
 fi
-if grep -q 'LOCAL_MODE:-false' "$CTX" && grep -A2 'if \[ -z "\$ADDRESSED" \]' "$CTX" | grep 'grep -rli' >/dev/null; then
+# The fallback block runs from `if [ -z "$ADDRESSED" ]` to its closing `fi`.
+if grep -q 'LOCAL_MODE:-false' "$CTX" \
+  && awk '/if \[ -z "\$ADDRESSED" \]/ { on = 1 } on && /grep -rli/ { found = 1 } on && /^    fi$/ { exit } END { exit !found }' "$CTX"; then
   pass "greeting keeps the local/offline file-grep fallback"
 else
   fail "greeting fallback to file grep missing"

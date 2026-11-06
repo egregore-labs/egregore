@@ -15,6 +15,8 @@ set +x
 NOTIFY_CHECKOUT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$NOTIFY_CHECKOUT/bin/lib/scratch.sh"
+# shellcheck source=bin/lib/config.sh
+source "$NOTIFY_CHECKOUT/bin/lib/config.sh"
 SCRIPT_DIR="${EGREGORE_NOTIFY_PROJECT_DIR:-$NOTIFY_CHECKOUT}"
 CONFIG="$SCRIPT_DIR/egregore.json"
 
@@ -32,7 +34,7 @@ SESSION_ID="$(sed -n '1p' "$SCRIPT_DIR/.egregore-session-id" 2>/dev/null || true
 SESSION_ID="${SESSION_ID:-no-session}"
 PROJECT_HASH="$(printf '%s' "$SCRIPT_DIR" | cksum | awk '{print $1}')"
 STATE_DIR="${EGREGORE_NOTIFY_STATE_DIR:-$HOME/.egregore/notifications/$PROJECT_HASH}"
-RELAY_URL="${EGREGORE_NOTIFY_RELAY_URL:-https://egregore-production-55f2.up.railway.app}"
+RELAY_URL="$(_hosted_api_url "${EGREGORE_NOTIFY_RELAY_URL:-$EGREGORE_HOSTED_API_ORIGIN}")" || RELAY_URL=""
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
@@ -41,7 +43,7 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
   SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-$(grep '^SLACK_BOT_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}"
+API_URL="$(_hosted_api_url "${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}")" || API_URL=""
 API_KEY="${EGREGORE_API_KEY:-}"
 
 die() {
@@ -438,6 +440,7 @@ dispatch_local_telegram() {
       group_link=""
       ;;
   esac
+  [ -n "$RELAY_URL" ] || die "The notification relay address isn't a plain web address, so nothing was sent."
   curl -q -sS -X POST "${RELAY_URL}/api/notify/relay" \
     -H "Content-Type: application/json" \
     -d "$(jq -nc \

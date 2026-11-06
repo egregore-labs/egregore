@@ -8,6 +8,48 @@
 
 Every shell script in `bin/`, what it does, what depends on it, and what it touches.
 
+### Placement and delivered instruction blocks
+
+`capability-distribution.json` governs both npm bundles and public sync. Only
+`oss` / `available` components ship on these paths. Component locations include
+all governed sources; shared paths selected by an available component remain.
+Regenerate `skill-distribution.json` with `generate-skill-view`, and the capability
+artifacts with `bin/build-capability-pipeline.mjs` and
+`bin/build-feature-release-governance.mjs` after changing placement.
+
+Markdown can gate instructions on one component using standalone lines:
+
+```markdown
+<!-- capability: tool.search-runtime -->
+Instructions that ship with the search runtime.
+<!-- /capability -->
+```
+
+`stripCapabilityBlocks` in `bin/capability-distribution.mjs` removes an unselected
+block including its markers; selected blocks retain their exact body without
+markers. Unknown IDs, nested blocks, unmatched or malformed markers are errors.
+Markers inside backtick or tilde fenced code are literal text. LF/CRLF endings
+and UTF-8 BOMs are preserved. Non-UTF-8 Markdown fails closed, with its path in
+the error. Applying the pass twice has the same result as applying it once.
+
+Fences may open inside list and blockquote containers; closing indentation is
+measured from the opening fence's column (tabs count as four spaces). Outside a
+container, four-space indentation is code, not a fence. Delivery and public audit
+also scan for surviving known, unselected opening markers independently of fence
+parsing, including inline markers and fenced examples. Use a selected component
+or an unknown placeholder such as `ID` in fenced examples. The delivery pass
+validates every copied Markdown file before writing any edits.
+
+Builders pass the Markdown files they copy to `stripCapabilityTree`. Public sync
+uses `bin/sync-public-tree.sh` for its `.syncignore` and placement selection,
+rsync, cleanup of previously delivered held paths, and the same strip pass via
+`strip-capability-blocks --candidate TREE --paths-file FILE`. The file contains
+one copied relative path per line; destination-owned files are not rewritten.
+Without `--paths-file`, the CLI processes regular Markdown files in the candidate
+tree, never following symlinks. `audit-public-tree` rejects surviving unselected
+blocks as well as held paths. The command adapters retain markers when rendered
+from CLAUDE.md; only delivery strips them.
+
 ### Core Infrastructure (LOAD-BEARING)
 
 #### `graph.sh`
@@ -90,7 +132,7 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **Purpose**: Session initialization — syncs develop, fixes API key, displays greeting, tracks health
 - **Called by**: SessionStart hook (runs every session)
 - **Reads**: `.env`, `egregore.json`, `.egregore-state.json`
-- **Writes**: `.egregore-state.json` (auto-fix), `.egregore-session-id`, `~/.egregore/session-*.id`, `~/.egregore/boundary-*.json`, `~/.egregore/instances.json`
+- **Writes**: `.egregore-state.json` (auto-fix), `.egregore-session-id`, `~/.egregore/session-*.id`, `~/.egregore/sessions/claude-*.id` (via `bin/session-id.sh`), `~/.egregore/boundary-*.json`, `~/.egregore/instances.json`
 - **External deps**: git, curl, jq, md5, date
 
 #### `telemetry.sh`
@@ -131,6 +173,7 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 - **External deps**: git, wc, tr, basename
 
 ### Data & Memory
+
 
 #### `sync-graph.sh`
 - **Purpose**: Sync all missing nodes from memory files into Neo4j
@@ -204,17 +247,20 @@ Every shell script in `bin/`, what it does, what depends on it, and what it touc
 
 ### Security & Isolation
 
-#### `boundary.sh`
-- **Purpose**: Path validation for environment isolation (multi-tenant safety)
-- **Called by**: PreToolUse hook (boundary-check.sh)
-- **Reads**: `egregore.json` (repos[])
-- **Writes**: Nothing
-- **External deps**: jq, realpath
+#### `boundary-guard.cjs` (with `boundary-hook.sh` and `boundary.sh`)
+- **Purpose**: Environment isolation (multi-tenant safety). `bin/boundary-guard.cjs` is the one implementation of the policy, run before each action on every runtime: Claude Code through `.claude/hooks/boundary-check.sh` and Codex through `.codex/hooks.json`, both via `bin/boundary-hook.sh` (PreToolUse); Pi and Prime through their `tool_call` gate. `boundary-hook.sh` turns any failure to start or finish the check (missing Node, crash, inherited `NODE_OPTIONS` preload) into a denial; a missing `bin/boundary-hook.sh` or `bin/boundary-guard.cjs` blocks every action with "boundary guard missing — run /update" (exit 2 from the Claude adapter and the Codex hook command, never a non-blocking 127). An upgrade rollback that keeps the merged Codex hook manifest keeps the guard files with it. `boundary.sh check` / `compute-denied` delegate to the module; `boundary.sh validate-repos` warns about unsafe `repos[]` entries.
+- **Called by**: the runtime adapters above; `write-cache` from `session-start.sh`, `codex-session-start.sh` (Codex, Pi, Prime), and `worktree-create.sh`; `native-denials` from `session-start.sh`, which writes the result as Claude Code's native deny rules
+- **Reads**: `egregore.json` (repos[], org_id, boundary), `.egregore-boundary.local.json`, `~/.egregore/instances.json` (on every check), the boundary cache
+- **Writes**: the boundary cache (`write-cache` only). The instance registry is written only by session start, through `bin/lib/instance-registry.sh` (register, and prune entries that are another instance's runtime state: a checkout inside a registered instance's `.egregore/`, such as an evaluation sandbox, never registers and is pruned)
+- **External deps**: node
+- **Fails closed**: denied instances = registry ∪ session cache, read on every check, never fewer: a registry that disappears after session start keeps the cached denials. Known denials are enforced first, before any core-boundary allowance, on the normal, damaged-registry and internal-error paths alike. An unreadable, empty or malformed registry then denies every path outside the core boundary (the parent-directory allowance included); an internal error denies paths outside the core boundary and allows those inside. The registry and the boundary cache are readable and never changed through a tool: structured writes, and shell `rm` / `unlink` / `mv` / `cp` or `ln` over / `truncate` / `tee` / `sed -i` / `>` / `>>` / `find -delete`, and interpreters naming them, are denied.
 - **Session boundary** = this project directory + memory directory (resolved symlink) + managed repos from `egregore.json`
 - **Allowed paths**: this project dir, memory repo (via symlink), managed repos in `egregore.json` → `repos[]`, `~/.claude`, `/tmp`, system paths (`/usr`, `/etc`, `/bin`)
-- **Two-tier enforcement** (boundary-check.sh, decided 2026-07-08 — see `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md`):
-  - **Hard tier — other Egregore instance directories** (from `~/.egregore/instances.json`): denied for every tool including Bash (path-literal grep). No consent path.
-  - **Soft tier — everything else outside the boundary**: consent-gated for every tool. Read roots (`~/Downloads`, `~/Desktop` by default) are readable without consent; other reads and all outside writes prompt a consent flow whose grant lands in `.egregore-boundary-consent` (session) or `.egregore-boundary.local.json` (instance). Bash is checked best-effort for user-home path literals — a miss degrades to "no prompt", never a hard-tier breach.
+- **Two-tier enforcement** (boundary-guard.cjs, decided 2026-07-08 — see `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md`):
+  - **Hard tier — other Egregore instance directories** (from `~/.egregore/instances.json`): denied for every tool, the working directory included. Paths are resolved physically (symlinks, `..` after a link, letter case). Shell text is read literally and in linear time: words after quote removal; `~`, `$HOME`, `${HOME}`, `$PWD`; names relative to the working directory as literal `cd` / `pushd` / `popd` steps change it (restored after a subshell or substitution); `bash -c` / `eval` scripts and heredoc bodies; brace lists up to 64 items. A wildcard is judged by its literal directory prefix: denied when the prefix is, or (outside the project's own tree) contains, an instance; inside the project only when it names a nested instance or its first wildcard matches a symlink into one. A recursive walk (`grep -r`, `rg`, `find`, `ls -R`, `du`, `tar`, `rsync`, `cp -r`, `Grep`, `Glob`) is denied when its root outside the project contains an instance; an instance registered inside the project (gitignored runtime state) stops only walks that skip ignore rules (`rg -u` / `--no-ignore`, `grep -r`, `find`, `ls -R`), with a message naming it. Nothing is guessed: a relative name is read from the known working directory only. No consent path.
+  - **Soft tier — everything else outside the boundary**: consent-gated for every tool. Read roots (`~/Downloads`, `~/Desktop` by default) are readable without consent; other reads and all outside writes prompt a consent flow whose grant lands in `.egregore-boundary-consent` (session) or `.egregore-boundary.local.json` (instance, reads only — a blocked write is never offered it). Bash is checked best-effort for user-home path literals — a miss degrades to "no prompt", never a hard-tier breach.
+  - **Guarantees**: literal paths into another instance are denied on every runtime, through structured tools and in shell text; the isolation state fails closed and cannot be removed through a tool; ordinary project work is never denied by guessing; a decision runs in linear time.
+  - **Does not guarantee**: the shell check reads text before it runs. It cannot see a path built at run time (a variable root such as `p=../; cat "${p}rival/x"`, command output, interpreter path arithmetic, encoded commands), a command split across separate `write_stdin` calls or a directory changed in an earlier call, a symlink reached below a wildcard's first level, or a recursive walk that follows a symlink planted inside the project. On Claude Code and Codex only the tools their hook matchers name reach the check (file, search, shell and patch tools); an MCP or other unlisted tool does not, while Pi and Prime check every tool call. It is a seatbelt against literal mistakes, not a sandbox against an adversarial shell. Confining those is the job of the OS-level layer, the planned follow-up. `tests/test-boundary-parity.mjs` lists each known limit as an explicit row.
 - **Posture** `strict | standard | open` + `locked` from `egregore.json` → `boundary { posture, read[], locked }` merged with the personal local file at session start into `/tmp/egregore-boundary-*.json`. `open` allows outside reads (writes still gated); sessions in `bypassPermissions` skip the soft tier entirely; `locked: true` disables personal extensions, consent, and bypass relaxation — hard tier only ever says no.
 
 #### `preflight.sh`
@@ -561,6 +607,14 @@ Single line: `20260316T170632-oguzhan-4709` (ISO timestamp, author, PID)
 | Who reads | Who writes |
 |-----------|------------|
 | observe.sh, subagent-context.sh, telemetry.sh, commands | session-start.sh |
+
+Every worktree links this one file, so the latest session start on the
+machine owns it. Commit trailers resolve the calling session's own id with
+`bin/session-id.sh`: each harness session's native id (Claude's SessionStart
+`session_id`, a Codex thread at its first prompt, a Pi or Prime session file)
+maps to the Egregore id its start minted, in
+`~/.egregore/sessions/<harness>-<native-id>.id`. Without a map it falls back
+to this file.
 
 ### Runtime/Cached Files
 

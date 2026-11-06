@@ -49,19 +49,8 @@ _open() {
 }
 
 # --- Resolve the packaged deterministic renderer (never fetch, never npx) ---
-if [ -f "$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-  RENDER=(bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js")
-  RENDER_ID="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
-elif [ -f "$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js" ]; then
-  echo "The checked-out artifact renderer is missing its local dependencies." >&2
-  exit 1
-elif command -v egregore-artifacts >/dev/null 2>&1; then
-  RENDER=(bash "$SCRIPT_DIR/bin/node-run.sh" "$(command -v egregore-artifacts)")
-  RENDER_ID="$(command -v egregore-artifacts)"
-else
-  echo "The local artifact renderer is not installed for this instance." >&2
-  exit 1
-fi
+RENDER_ID="$(bash "$SCRIPT_DIR/bin/artifact-renderer.sh" --resolve)" || exit 1
+RENDER=(bash "$SCRIPT_DIR/bin/node-run.sh" "$RENDER_ID")
 
 # --- Live surfaces render fresh every time (their data is the present) ------
 case "$TYPE" in

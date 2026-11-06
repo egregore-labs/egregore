@@ -169,9 +169,45 @@ _notice_flush() {
   _NOTICE_FOLD=""
   [ "$_NOTICE_ENABLED" = "true" ] || return 0
   [ -n "$_NOTICE_LEDGER" ] || return 0
+  if [ -n "${EGREGORE_NOTICE_STAGE:-}" ]; then
+    # A background render (bin/lib/card-delivery.sh): its card reaches the
+    # reader at a later launch, if ever, so its showings wait in a stage
+    # that _notice_promote applies when that card is on screen.
+    printf '%s' "$_NOTICE_JSON" \
+      | jq -c --arg target "$_NOTICE_LEDGER" '{target: $target, ledger: .}' \
+        > "$EGREGORE_NOTICE_STAGE" 2>/dev/null \
+      || rm -f "$EGREGORE_NOTICE_STAGE" 2>/dev/null
+    return 0
+  fi
   mkdir -p "$(dirname "$_NOTICE_LEDGER")" 2>/dev/null || return 0
   printf '%s\n' "$_NOTICE_JSON" > "$_NOTICE_LEDGER.tmp.$$" 2>/dev/null \
     && mv "$_NOTICE_LEDGER.tmp.$$" "$_NOTICE_LEDGER" 2>/dev/null \
     || rm -f "$_NOTICE_LEDGER.tmp.$$" 2>/dev/null
+  return 0
+}
+
+# _notice_promote <stage> — the staged render's card is on screen now: merge
+# its showings into the ledger it was rendered against (staged entries win;
+# entries other renders recorded meanwhile stay), then drop the stage. An
+# unreadable ledger starts over from the stage, as _notice_init would.
+_notice_promote() {
+  local stage="$1" target base='{}'
+  [ -f "$stage" ] || return 0
+  if [ "${EGREGORE_NOTICE_LEDGER:-}" = "off" ]; then
+    rm -f "$stage" 2>/dev/null
+    return 0
+  fi
+  target=$(jq -r '.target // empty' "$stage" 2>/dev/null)
+  if [ -n "$target" ] && mkdir -p "$(dirname "$target")" 2>/dev/null; then
+    [ -s "$target" ] && base=$(cat "$target" 2>/dev/null)
+    printf '%s' "$base" | jq -e 'type == "object"' >/dev/null 2>&1 || base='{}'
+    printf '%s' "$base" \
+      | jq -c --slurpfile s "$stage" \
+          '(if type == "object" then . else {} end) * ($s[0].ledger // {})' \
+        > "$target.tmp.$$" 2>/dev/null \
+      && mv "$target.tmp.$$" "$target" 2>/dev/null \
+      || rm -f "$target.tmp.$$" 2>/dev/null
+  fi
+  rm -f "$stage" 2>/dev/null
   return 0
 }

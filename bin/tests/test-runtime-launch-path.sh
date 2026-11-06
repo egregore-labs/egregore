@@ -102,6 +102,8 @@ else
 fi
 
 for launcher in bin/thread.sh bin/issue.sh; do
+  # bin/thread.sh is held out of delivered trees by placement.
+  [ -f "$SCRIPT_DIR/$launcher" ] || continue
   out=$(cd "$DECOY" && bash "$SCRIPT_DIR/$launcher" --help 2>&1)
   rc=$?
   if grep -q DECOY-PACKAGE <<< "$out"; then

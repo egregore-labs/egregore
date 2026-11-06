@@ -62,6 +62,8 @@ fi
 
 # --- Read config ---
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh" 2>/dev/null || true
 if [ ! -f "$CONFIG" ]; then
   exit 0
 fi
@@ -177,7 +179,7 @@ gzip -c "$TRANSCRIPT_PATH" > "$TMP_FILE" 2>/dev/null || exit 0
 # --- Background: API upload + optional git ---
 (
   ENV_FILE="$SCRIPT_DIR/.env"
-  API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)
+  API_URL=$(_hosted_api_url "$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)") || API_URL=""
   API_KEY=""
   if [ -f "$ENV_FILE" ]; then
     API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)

@@ -5,19 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import hashlib
+import importlib.util
+from functools import lru_cache
 import json
 from pathlib import Path
 import re
+import sys
 from typing import Any, Iterable, Mapping
 
 from .artifacts import artifact_id_from_path, split_frontmatter
-from .contracts import ActorContext, Permission
+from .contracts import ActorContext, Permission, PolicyDecision
+from .line_ids import unmarked
 from .identity import actor_presentation_name
-from .policy import scope_allows_path
+from .policy import check, is_admin
+from .record_subject import classify_record, record_subject
 from .questions import actor_aliases
-from .quests import CanonicalQuestService
+from .quests import parse_quest_markdown
 from .runtime import EgregoreRuntime
-from .todos import CanonicalTodoService
+from .todos import CanonicalTodoService, parse_todo_markdown
 
 
 STATUS_SCHEMA_VERSION = "egregore-status-snapshot/v1"
@@ -27,6 +32,29 @@ MAX_SESSION_RESULTS = 40
 MAX_QUEST_RESULTS = 20
 MAX_HANDOFF_RESULTS = 30
 MAX_QUESTION_RESULTS = 20
+
+
+@lru_cache(maxsize=1)
+def _record_controls():
+    lib = Path(__file__).resolve().parents[1] / "bin/lib"
+    sys.path.insert(0, str(lib))
+    spec = importlib.util.spec_from_file_location("egregore_status_records", lib / "session_record.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _native_control_held(root: Path, control_id: str) -> bool:
+    """Reuse public record controls without importing the private producer.
+
+    A personal hold can precede the canonical stub after an interrupted write.
+    Failure to inspect that control must not reveal the earlier full record.
+    """
+    try:
+        module = _record_controls()
+        return module.native_record_held(module.Context(root), control_id)
+    except (OSError, ImportError, ValueError, KeyError, TypeError):
+        return True
 
 
 def _scalar(fields: Mapping[str, Any], *names: str) -> str:
@@ -120,7 +148,7 @@ def _extract_open_threads(markdown: str) -> list[str]:
         return []
     rows = []
     for line in match.group(1).splitlines():
-        item = re.match(r"^\s*(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.+)$", line)
+        item = re.match(r"^\s*(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.+)$", unmarked(line))
         if item and item.group(1).strip():
             rows.append(item.group(1).strip())
     return rows[:3]
@@ -147,16 +175,10 @@ class CanonicalStatusSnapshotService:
             raise PermissionError("organizational status read denied")
         return decision
 
-    def _admin_visible(self, actor: ActorContext) -> bool:
+    def _admin_visible(self, decision: PolicyDecision) -> bool:
         """Egregore-surface admin protection for listings — fails closed."""
 
-        gate = getattr(self.runtime, "admin_gate", None)
-        if gate is None:
-            return True
-        try:
-            return bool(gate.actor_is_admin(actor))
-        except Exception:
-            return False
+        return is_admin(decision)
 
     @staticmethod
     def _fields_admin(fields: Mapping[str, Any]) -> bool:
@@ -166,7 +188,7 @@ class CanonicalStatusSnapshotService:
         self,
         actor: ActorContext,
         *,
-        scopes: tuple[str, ...],
+        decision: PolicyDecision,
         cutoff: datetime,
     ) -> tuple[list[dict[str, Any]], int]:
         candidates: list[Path] = []
@@ -176,16 +198,24 @@ class CanonicalStatusSnapshotService:
                 candidates.extend(base.rglob("*.md"))
         candidates = [path for path in candidates if not path.name.startswith("index")]
         candidates.sort(key=lambda path: path.as_posix(), reverse=True)
-        considered = min(len(candidates), MAX_SESSION_SOURCES)
-        admin_visible = self._admin_visible(actor)
+        admin_visible = self._admin_visible(decision)
         rows: list[dict[str, Any]] = []
-        for path in candidates[:MAX_SESSION_SOURCES]:
+        visible_sources = 0
+        for path in candidates:
             relative = path.relative_to(self.memory_root).as_posix()
             canonical = f"memory/{relative}"
-            if not scope_allows_path(canonical, scopes):
+            verdict = check(decision, canonical, root=self.memory_root)
+            if not verdict.allowed and not verdict.reason.startswith("held:"):
                 continue
+            # Unreadable paths cannot consume the visible-content budget and
+            # displace authorized records merely by sorting ahead of them.
+            if visible_sources >= MAX_SESSION_SOURCES:
+                break
+            visible_sources += 1
             try:
-                markdown = path.read_text(encoding="utf-8")
+                # Held rows may need legacy body dates; only the masked row is emitted.
+                source = verdict.resolved if verdict.allowed else path.resolve()
+                markdown = source.read_text(encoding="utf-8")
                 fields, _ = split_frontmatter(markdown)
             except (OSError, ValueError):
                 continue
@@ -205,7 +235,10 @@ class CanonicalStatusSnapshotService:
             kind = relative.split("/", 1)[0]
             if not status:
                 status = "wrapped" if kind == "wraps" else "handed_off" if kind == "handoffs" else "active"
-            if not admin_visible and self._fields_admin(fields):
+            subject = classify_record(fields, markdown)
+            projection = record_subject(fields, markdown) if subject != "human-session" else None
+            control_held = subject != "human-session" and _native_control_held(self.root, str(fields.get("session", "")))
+            if verdict.reason.startswith("held:") or (not admin_visible and self._fields_admin(fields)) or control_held or projection and projection.get("held"):
                 # Tag-not-hide: existence stays visible, identity does not.
                 rows.append(
                     {
@@ -216,11 +249,18 @@ class CanonicalStatusSnapshotService:
                         "author": "[admin]",
                         "by": "[admin]",
                         "status": "[admin]",
-                        "type": kind,
+                        "type": kind if subject == "human-session" else "held-record",
                         "filePath": "[admin]",
                         "openThreads": [],
                     }
                 )
+                continue
+            if subject != "human-session":
+                if subject == "unsupported-native":
+                    rows.append({"subject_kind": subject, "date": occurred.isoformat().replace("+00:00", "Z")})
+                else:
+                    rows.append({**projection, "date": occurred.isoformat().replace("+00:00", "Z"),
+                                 "id": projection["control_id"], "type": "spirit-record", "filePath": canonical})
                 continue
             rows.append(
                 {
@@ -237,19 +277,24 @@ class CanonicalStatusSnapshotService:
                 }
             )
         rows.sort(key=lambda row: row["date"], reverse=True)
-        return rows[:MAX_SESSION_RESULTS], considered
+        # Only expose sources represented by authorized (possibly masked) rows.
+        # The pre-authorization inventory size would disclose unreadable records.
+        return rows, len(rows)
 
-    def _quests(self, actor: ActorContext, scopes: tuple[str, ...]) -> list[dict[str, Any]]:
-        service = CanonicalQuestService(memory_root=self.memory_root, write_document=self.runtime.write_document)
-        rows = []
-        admin_visible = self._admin_visible(actor)
-        gate = getattr(self.runtime, "admin_gate", None)
-        for quest in service.list(actor, authorized_scopes=scopes)[:MAX_QUEST_RESULTS]:
-            if (
-                not admin_visible
-                and gate is not None
-                and gate.path_is_admin(f"memory/quests/{quest.slug}.md")
-            ):
+    def _quests(self, actor: ActorContext, decision: PolicyDecision) -> list[dict[str, Any]]:
+        rows, quests = [], []
+        for path in sorted((self.memory_root / "quests").glob("*.md")):
+            if path.name in {"_template.md", "index.md"}:
+                continue
+            verdict = check(decision, f"memory/quests/{path.name}", root=self.memory_root)
+            if not verdict.allowed and not verdict.reason.startswith("held:"):
+                continue
+            source = verdict.resolved if verdict.allowed else path.resolve()
+            quest = parse_quest_markdown(source.read_text(encoding="utf-8"), slug=path.stem, org_id=actor.profile.org_id)
+            if quest.status != "completed":
+                quests.append((quest.priority, quest.started, quest if verdict.allowed else None))
+        for _, _, quest in sorted(quests, key=lambda row: row[:2], reverse=True)[:MAX_QUEST_RESULTS]:
+            if quest is None:
                 rows.append(
                     {
                         "quest": "[admin]",
@@ -280,7 +325,7 @@ class CanonicalStatusSnapshotService:
         return rows
 
     def _todos(
-        self, actor: ActorContext, scopes: tuple[str, ...]
+        self, actor: ActorContext, decision: PolicyDecision
     ) -> list[dict[str, Any]]:
         aliases = [actor.actor.display_name, *actor.actor.aliases.values()]
         person = next((str(value) for value in aliases if str(value).strip()), actor.actor.actor_id)
@@ -288,9 +333,10 @@ class CanonicalStatusSnapshotService:
             memory_root=self.memory_root,
             write_document=self.runtime.write_document,
         )
-        if not scope_allows_path(service.canonical_path(person), scopes):
+        verdict = check(decision, service.canonical_path(person), root=self.memory_root)
+        if not verdict.allowed or not verdict.resolved.exists():
             return []
-        snapshot = service.read(person)
+        snapshot = parse_todo_markdown(verdict.resolved.read_text(encoding="utf-8"), person=person)
         return [dict(row) for row in snapshot.todos if row.get("status") in {"open", "blocked", "deferred"}]
 
     def _questions(self, actor: ActorContext, limit: int) -> list[dict[str, Any]]:
@@ -305,15 +351,16 @@ class CanonicalStatusSnapshotService:
         for path in sorted(directory.glob("*.md"), reverse=True):
             relative = path.relative_to(self.memory_root).as_posix()
             canonical = f"memory/{relative}"
-            if not scope_allows_path(canonical, decision.scopes):
+            verdict = check(decision, canonical, root=self.memory_root)
+            if not verdict.allowed:
                 continue
             try:
-                fields, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+                fields, _ = split_frontmatter(verdict.resolved.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if str(fields.get("status") or "pending") != "pending":
                 continue
-            if not self._admin_visible(actor) and self._fields_admin(fields):
+            if not self._admin_visible(decision) and self._fields_admin(fields):
                 continue
             recipient_actor = str(fields.get("to_actor_id") or "").strip()
             recipient_alias = str(fields.get("to") or fields.get("addressed_to") or "").strip().removeprefix("@").casefold()
@@ -341,11 +388,15 @@ class CanonicalStatusSnapshotService:
         decision = self._decision(actor)
         days = {"P1D": 1, "P7D": 7, "P30D": 30, "P365D": 365}.get(time_range, 7)
         now = self.clock().astimezone(UTC)
-        sessions, source_count = self._session_rows(
+        rows, source_count = self._session_rows(
             actor,
-            scopes=decision.scopes,
+            decision=decision,
             cutoff=now - timedelta(days=days),
         )
+        sessions = [row for row in rows if "subject_kind" not in row and row.get("type") != "held-record"][:MAX_SESSION_RESULTS]
+        spirits = [row for row in rows if row.get("subject_kind") == "durable-intent"][:MAX_SESSION_RESULTS]
+        held_records = [row for row in rows if row.get("type") == "held-record"][:MAX_SESSION_RESULTS]
+        unsupported = sum(row.get("subject_kind") == "unsupported-native" for row in rows)
         aliases = _actor_aliases(actor)
         mine = [row for row in sessions if row["author"].casefold() in aliases]
         team = [row for row in sessions if row["author"] and row["author"].casefold() not in aliases]
@@ -354,8 +405,8 @@ class CanonicalStatusSnapshotService:
         handoffs = [_handoff_row(actor, row) for row in plan.records][:MAX_HANDOFF_RESULTS]
         active_handoffs = [row for row in handoffs if row["status"] in {"pending", "read", "claimed"}]
         questions = self._questions(actor, MAX_QUESTION_RESULTS)
-        quests = self._quests(actor, decision.scopes)
-        todos = self._todos(actor, decision.scopes)
+        quests = self._quests(actor, decision)
+        todos = self._todos(actor, decision)
         open_threads = [
             {"id": row["id"], "date": row["date"], "topic": row["topic"], "threads": row["openThreads"]}
             for row in mine
@@ -379,6 +430,12 @@ class CanonicalStatusSnapshotService:
             "sessions": sessions,
             "my_sessions": mine,
             "team_sessions": team,
+            "spirit_records": spirits,
+            "my_spirit_records": [row for row in spirits if row["record_owner_actor_id"] == actor.actor.actor_id],
+            "spirit_intents": len(spirits),
+            "unsupported_native_records": unsupported,
+            "held_records": held_records,
+            "spirit_coverage": "bounded",
             "handoffs_to_me": handoffs,
             "handoffs": active_handoffs,
             "pending_questions": questions,

@@ -53,14 +53,16 @@ Full spec: `.claude/context/commit-format.md`. Wording:
   paragraph:
 
   ```bash
-  cat .egregore-session-id
+  bash bin/session-id.sh
   git commit -m "feat(mcp): add API key authentication" -m "Egregore-Session: {session-id}
   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
   ```
 
   Read the id with the first command (a plain command) and paste it as
-  `{session-id}`. When the file is absent, omit the `Egregore-Session` line;
-  use your harness's own identity line. Humans committing by hand skip trailers.
+  `{session-id}`. It prints this session's own id; the shared
+  `.egregore-session-id` names whichever session started last. When it
+  prints nothing, omit the `Egregore-Session` line; use your harness's own
+  identity line. Humans committing by hand skip trailers.
 - One logical change per commit — split when the parts are
   independently revertable.
 

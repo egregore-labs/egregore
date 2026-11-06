@@ -1,6 +1,6 @@
 ---
 name: dark-mode
-description: 'Use when authoring or modifying browser-rendered visual output: HTML, CSS, React SSR, artifact templates, markdown renderers, design tokens, themes, or composed pages. Do not invoke for an ordinary /view render—the checked-in renderer already owns its theme contract. The load-bearing rule is that theme-sensitive colors must be emitted as `var(--token)`, never resolved inline hex.'
+description: 'Use when authoring or modifying browser-rendered visual output: HTML, CSS, React SSR, artifact templates, markdown renderers, design tokens, themes, or composed pages. Do not invoke for an ordinary /view render—the checked-in renderer already owns its theme contract. The load-bearing rule is that theme-sensitive colors must be emitted as `var(--token)`, never resolved inline hex; the colors themselves come from the design system registry.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

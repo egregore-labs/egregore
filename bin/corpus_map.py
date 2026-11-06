@@ -799,6 +799,11 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = parser().parse_args()
+    root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root))
+    from egregore_runtime.admin_entry import require_admin
+
+    require_admin("The corpus map", root)  # admin-only: it reads the corpus outside the predicate
     return args.func(args)
 
 

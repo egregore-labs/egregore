@@ -39,26 +39,29 @@ to send one immutable message.
 
 1. Finish the message first. Publish any artifact and insert its real URL
    before planning; never change the message after preview.
-2. Resolve the exact delivery without sending:
+2. Resolve the exact delivery without sending. Write the recipient and the
+   message as literal arguments; the command prints the plan as JSON:
 
    ```bash
-   PLAN_JSON=$(bash bin/notify.sh plan send "$RECIPIENT" "$MESSAGE")
+   bash bin/notify.sh plan send '<recipient>' '<message>'
    # or
-   PLAN_JSON=$(bash bin/notify.sh plan group "$MESSAGE")
+   bash bin/notify.sh plan group '<message>'
    ```
 
-3. Read `plan_id` and `digest` from `PLAN_JSON`. Show the organization,
+3. Read `plan_id` and `digest` from the printed plan. Show the organization,
    recipient, all `channels`/`deliveries`, and exact `message` in a dedicated
    Send / Edit / Cancel question. Use the harness's structured question UI
    when available. Otherwise show the same fields in plain text and stop for
    the user's answer.
-4. Only if the user selects Send for that exact preview:
+4. Only if the user selects Send for that exact preview, record the approval
+   to a file and dispatch from that file. Two plain commands, no shell
+   variable and no substitution: a worktree-isolated session refuses those
+   shapes (`.claude/context/plain-shell.md`), and the file carries the
+   single-use token between the two steps:
 
    ```bash
-   APPROVAL_JSON=$(bash bin/notify.sh approve \
-     "$PLAN_ID" "$DIGEST" APPROVE_EXACT_NOTIFICATION)
-   APPROVAL_TOKEN=$(printf '%s' "$APPROVAL_JSON" | jq -r '.approval_token')
-   bash bin/notify.sh dispatch "$PLAN_ID" "$APPROVAL_TOKEN"
+   bash bin/notify.sh approve <plan-id> <digest> APPROVE_EXACT_NOTIFICATION --out tmp/notify-approval.json
+   bash bin/notify.sh dispatch <plan-id> --approval-file tmp/notify-approval.json
    ```
 
 5. If the user chooses Edit, cancel the old plan, edit, create a new plan, and

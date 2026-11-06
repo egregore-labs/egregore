@@ -27,6 +27,8 @@ exec 1>/dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 GS="$SCRIPT_DIR/bin/graph.sh"
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 WAL="$SCRIPT_DIR/bin/graph-wal.sh"
@@ -65,13 +67,14 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 ENV_FILE="$SCRIPT_DIR/.env"
-API_URL=$(jq -r '.api_url // empty' "$CONFIG")
+API_URL=$(_hosted_api_url "$(jq -r '.api_url // empty' "$CONFIG")") || API_URL=""
 API_KEY=""
 if [ -f "$ENV_FILE" ]; then
   API_KEY=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
   _url=$(grep '^EGREGORE_API_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
   [ -n "$_url" ] && API_URL="$_url"
 fi
+API_URL="$(EGREGORE_ADDRESS_NOTICE=shown _hosted_api_url "$API_URL" 2>/dev/null)" || API_URL=""
 
 if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
   exit 0

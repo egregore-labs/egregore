@@ -16,6 +16,7 @@ from .contracts import (
     CanonicalArtifact,
     Capability,
     Entitlements,
+    ExecutionAuthority,
     EgregoreProfile,
     EvidenceItem,
     GraphProjection,
@@ -47,7 +48,8 @@ from .contracts import (
 )
 from .errors import AuthorizationDenied, ContextBudgetError, EgregoreRuntimeError
 from .observe import DefaultOrgContextCompiler
-from .policy import ActorGrant, StaticPolicy, all_access_dogfood_policy, scope_allows_path
+from .policy import ActorGrant, StaticPolicy, allows, check, policy_for
+from .access import authorization_inputs, AuthorizationInputs, Principal, PRINCIPAL_KINDS
 from .telemetry import (
     ALLOWED_METRIC_KEYS,
     TELEMETRY_SCHEMA_VERSION,
@@ -140,7 +142,7 @@ from .ingest import (
     LocalQuarantine,
     NormalizedIngest,
 )
-from .runtime import EgregoreRuntime, local_runtime
+from .runtime import EgregoreRuntime, authenticated_member_runtime, local_runtime
 from .questions import (
     QUESTION_SCHEMA_VERSION,
     CanonicalQuestionService,
@@ -200,16 +202,20 @@ from .lifecycle import (
     LifecycleTransition,
     ObligationState,
 )
-from .threads import (
-    THREAD_CONFIRMATION,
-    THREAD_EVENT_SCHEMA_VERSION,
-    THREAD_SCHEMA_VERSION,
-    CanonicalThreadService,
-    ThreadError,
-    ThreadFoldReceipt,
-    ThreadSnapshot,
-    parse_thread_markdown,
-)
+from .optional_modules import optional_module as _optional_module
+
+# Threads are held out of installs (runtime.thread is queued in placement).
+if _optional_module(".threads") is not None:
+    from .threads import (
+        THREAD_CONFIRMATION,
+        THREAD_EVENT_SCHEMA_VERSION,
+        THREAD_SCHEMA_VERSION,
+        CanonicalThreadService,
+        ThreadError,
+        ThreadFoldReceipt,
+        ThreadSnapshot,
+        parse_thread_markdown,
+    )
 from .scrolls import (
     EXACT_SHARE_CONFIRMATION,
     SCROLL_EVENT_SCHEMA_VERSION,

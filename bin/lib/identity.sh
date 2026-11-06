@@ -7,10 +7,12 @@
 #   3. Graph person lookup (existing team member on new machine)
 #   4. Global git config user.name (last resort)
 #
-# Inputs:  STATE_FILE, ENV_FILE, SCRIPT_DIR, HEALTH_GITHUB
+# Inputs:  STATE_FILE, ENV_FILE, SCRIPT_DIR, HEALTH_GITHUB; optionally
+#          EGREGORE_START_HARNESS with EGREGORE_NATIVE_SESSION_ID/_HARNESS
 # Outputs: AUTHOR, DISPLAY_NAME_STATE, FIRST_SESSION, HEALTH_GITHUB,
 #          EGREGORE_USER, EGREGORE_ORG, EGREGORE_SESSION_ID
-#          Writes .egregore-session-id and ~/.egregore/session-*.id
+#          Writes .egregore-session-id and ~/.egregore/session-*.id, and
+#          maps the native session id via bin/session-id.sh
 
 STORED_USERNAME=""
 FIRST_SESSION=""
@@ -192,16 +194,35 @@ fi
 # --- Export telemetry identity env vars ---
 export EGREGORE_USER="$AUTHOR"
 export EGREGORE_ORG="$(jq -r '.slug // .github_org // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null || true)"
-export EGREGORE_SESSION_ID="$(date -u +%Y%m%dT%H%M%S)-${AUTHOR}-$$"
-
-# Persist session ID to file so telemetry.sh can read it
-# (env vars from hooks don't propagate into the Claude Code agent)
 SESSION_ID_DIR="$HOME/.egregore"
 mkdir -p "$SESSION_ID_DIR"
-PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
-echo "$EGREGORE_SESSION_ID" > "$SESSION_ID_DIR/session-${PROJ_HASH}.id"
-# Also write project-local file (CLAUDE.md reads this — no glob needed)
-echo "$EGREGORE_SESSION_ID" > "$SCRIPT_DIR/.egregore-session-id"
+if [ -n "${_EGREGORE_REUSE_SESSION_ID:-}" ]; then
+  # Background refresh of a session the quick startup pass already identified
+  # (bin/lib/card-delivery.sh): keep its id, and leave the id files and the
+  # native mapping as that pass wrote them; a newer session may own them now.
+  export EGREGORE_SESSION_ID="$_EGREGORE_REUSE_SESSION_ID"
+  unset _EGREGORE_REUSE_SESSION_ID
+else
+  export EGREGORE_SESSION_ID="$(date -u +%Y%m%dT%H%M%S)-${AUTHOR}-$$"
+
+  # Persist session ID to file so telemetry.sh can read it
+  # (env vars from hooks don't propagate into the Claude Code agent)
+  PROJ_HASH=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
+  echo "$EGREGORE_SESSION_ID" > "$SESSION_ID_DIR/session-${PROJ_HASH}.id"
+  # Also write project-local file (CLAUDE.md reads this — no glob needed)
+  echo "$EGREGORE_SESSION_ID" > "$SCRIPT_DIR/.egregore-session-id"
+fi
+# Every worktree links that file, so a parallel session start rewrites it
+# under this session. Map the starting harness session's own id to this id
+# (bin/session-id.sh) so its commits keep their own Egregore-Session trailer.
+# Each entry point names the harness it starts; a native id inherited from
+# another session's shell never matches that name.
+if [ -n "${EGREGORE_START_HARNESS:-}" ] && [ -n "${EGREGORE_NATIVE_SESSION_ID:-}" ] \
+  && [ "${EGREGORE_NATIVE_HARNESS:-}" = "$EGREGORE_START_HARNESS" ] \
+  && [ -f "$SCRIPT_DIR/bin/session-id.sh" ]; then
+  bash "$SCRIPT_DIR/bin/session-id.sh" record "$EGREGORE_START_HARNESS" \
+    "$EGREGORE_NATIVE_SESSION_ID" "$EGREGORE_SESSION_ID" --root "$SCRIPT_DIR" >/dev/null 2>&1 || true
+fi
 
 # Model stamp hashes the git common-dir root because telemetry.sh resolves it that way.
 MODEL_REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||') || MODEL_REPO_ROOT="$SCRIPT_DIR"

@@ -45,7 +45,7 @@ if [ -n "$_ENV_FILE" ] && [ -f "$_ENV_FILE" ]; then
   EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$_ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
+API_URL="$(_hosted_api_url "${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}")" || API_URL=""
 API_KEY="${EGREGORE_API_KEY:-}"
 
 if [ -z "$API_URL" ]; then

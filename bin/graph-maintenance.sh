@@ -28,6 +28,10 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   exit 0
 fi
 
+# Admin-only: it reads and repairs the whole hosted index. Refuses before any query.
+(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -m egregore_runtime.admin_entry "Hosted index maintenance") || exit 5
+
 GB="$SCRIPT_DIR/bin/graph-batch.sh"
 GO="$SCRIPT_DIR/bin/graph-op.sh"
 

@@ -15,6 +15,7 @@ Writes:
 
 import json
 import os
+import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -27,9 +28,28 @@ def log(msg):
     print(f"[workspace-init] {msg}", flush=True)
 
 
+def hosted_api_url(value):
+    """The address to call: the shell resolver beside this script maps the
+    retired October 2026 origin to the hosted API and refuses an address that
+    is not plain. Empty, so nothing is sent, when it refuses or cannot run."""
+    config_sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "config.sh")
+    try:
+        done = subprocess.run(
+            ["bash", "-c", 'source "$1" && _hosted_api_url "$2"', "hosted-api-url", config_sh, value or ""],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.stderr and exc.stderr.strip():
+            log(exc.stderr.strip())
+        return ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip()
+
+
 def fetch_config():
     """Fetch workspace config from the Egregore API."""
-    api_url = os.environ.get("API_URL", "").rstrip("/")
+    api_url = hosted_api_url(os.environ.get("API_URL", ""))
     api_key = os.environ.get("EGREGORE_API_KEY", "")
     slug = os.environ.get("ORG_SLUG", "")
     username = os.environ.get("CODER_USERNAME", "")
@@ -41,18 +61,36 @@ def fetch_config():
         return None
 
     url = f"{api_url}/api/hosting/workspace-config/{slug}?username={username}"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {api_key}",
-    })
+    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
 
-    try:
+    def get(with_token):
+        req = urllib.request.Request(url)
+        # urllib copies only req.headers to a redirect: the key and token are
+        # unredirected headers, so neither follows one to another host.
+        req.add_unredirected_header("Authorization", f"Bearer {api_key}")
+        if with_token:
+            # The person's own GitHub token is what lets the API include
+            # their stored Anthropic key; the org key alone never does.
+            req.add_unredirected_header("X-GitHub-Token", github_token)
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
+
+    try:
+        try:
+            return get(bool(github_token))
+        except urllib.error.HTTPError as e:
+            if not github_token or e.code not in (401, 403):
+                raise
+            # GITHUB_TOKEN is not this person's own (e.g. an org-level token):
+            # take the config without the stored key rather than fail start.
+            log(f"Stored Anthropic key not available ({e.code}); continuing without it")
+            return get(False)
     except urllib.error.HTTPError as e:
         log(f"API error: {e.code} {e.reason}")
         return None
     except Exception as e:
-        log(f"Failed to fetch config: {e}")
+        # Type only: the message of a rejected header carries the token.
+        log(f"Failed to fetch config: {type(e).__name__}")
         return None
 
 
@@ -117,7 +155,7 @@ def main():
             "org_name": os.environ.get("ORG_NAME", ""),
             "github_org": os.environ.get("GITHUB_ORG", ""),
             "memory_repo": os.environ.get("MEMORY_URL", ""),
-            "api_url": os.environ.get("API_URL", ""),
+            "api_url": hosted_api_url(os.environ.get("API_URL", "")),
             "slug": os.environ.get("ORG_SLUG", ""),
             "repos": [],
         }

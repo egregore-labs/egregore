@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 
 if [ ! -f "$CONFIG" ]; then
   echo "Error: egregore.json not found." >&2
@@ -15,7 +17,7 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
   EGREGORE_API_KEY="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
 fi
 
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}"
+API_URL="$(_hosted_api_url "${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG")}")" || API_URL=""
 API_KEY="${EGREGORE_API_KEY:-}"
 GS="$SCRIPT_DIR/bin/graph.sh"
 

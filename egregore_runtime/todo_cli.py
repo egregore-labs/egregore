@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 from uuid import uuid4
 
+from . import held
 from .contracts import Permission
-from .policy import scope_allows_path
+from .policy import action_for, check
 from .runtime import local_runtime
 from .todos import CanonicalTodoService
 
@@ -40,22 +40,25 @@ def _require(
     decision = runtime.authorize(actor, permission, (resource,))
     if not decision.allowed:
         raise PermissionError("; ".join(decision.reasons) or f"todo {permission.value} denied")
-    if canonical_path and not scope_allows_path(canonical_path, decision.scopes):
+    if not canonical_path:
+        return decision, None
+    verdict = check(decision, canonical_path, action_for(decision.permission), root=runtime.canonical_root)
+    if not verdict.allowed:
         raise PermissionError("todo path is outside the actor's authorized scope")
-    return decision
+    return decision, verdict.resolved  # readers open the path the predicate resolved
 
 
 def _list(args):
     runtime, actor, service, default_person = _context()
     person = args.person or default_person
-    _require(
+    decision, source = _require(
         runtime,
         actor,
         Permission.READ,
         f"todos:{person}",
         canonical_path=service.canonical_path(person),
     )
-    snapshot = service.read(person)
+    snapshot = service.read(person, source=source)
     rows = list(snapshot.todos)
     if not args.all:
         rows = [row for row in rows if row.get("status") in {"open", "blocked", "deferred"}]
@@ -63,8 +66,8 @@ def _list(args):
         key=lambda row: (int(row.get("priority") or 0), str(row.get("created") or "")),
         reverse=True,
     )
-    print(json.dumps({"person": snapshot.person, "todos": rows}, ensure_ascii=False))
-    return 0
+    return held.emit(decision, {"person": snapshot.person, "todos": rows}, root=runtime.canonical_root,
+                     paths=(service.canonical_path(person),))
 
 
 def _add(args):
@@ -84,8 +87,8 @@ def _add(args):
         priority=args.priority,
         quest=args.quest,
     )
-    print(json.dumps({"todo": row, "writeback": receipt.to_dict()}, ensure_ascii=False))
-    return 0 if receipt.status.value in {"accepted", "partial"} else 1
+    return held.emit_for(runtime, actor, {"todo": row, "writeback": receipt.to_dict()}) or (
+        0 if receipt.status.value in {"accepted", "partial"} else 1)
 
 
 def _transition(args):
@@ -104,8 +107,8 @@ def _transition(args):
         todo_id=args.id,
         status=args.command,
     )
-    print(json.dumps({"todo": row, "writeback": receipt.to_dict()}, ensure_ascii=False))
-    return 0 if receipt.status.value in {"accepted", "partial"} else 1
+    return held.emit_for(runtime, actor, {"todo": row, "writeback": receipt.to_dict()}) or (
+        0 if receipt.status.value in {"accepted", "partial"} else 1)
 
 
 def _parser():

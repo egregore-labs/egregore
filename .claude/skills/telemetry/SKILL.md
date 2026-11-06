@@ -86,9 +86,9 @@ command containing its one-time token. A changed target, changed buffer,
 expired token, or bad token requires a new proposal. Local events remain after
 a successful share.
 
-Local instances have no default outbound sink. They may export, name an
-explicit endpoint, or explicitly opt into the legacy public relay with
-`--legacy-public-relay`; never select that relay automatically.
+Local instances have no default outbound sink. They may export or name an
+explicit endpoint. The former public relay is retired: `--legacy-public-relay`
+now refuses and sends nothing.
 
 ### clear
 

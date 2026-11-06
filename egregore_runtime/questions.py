@@ -24,7 +24,7 @@ from .artifacts import (
 )
 from .contracts import ActorContext, CanonicalArtifact, Permission, WritebackEvent, WritebackStatus
 from .errors import AuthorizationDenied
-from .policy import scope_allows_path
+from .policy import check
 from .runtime import EgregoreRuntime
 
 
@@ -191,8 +191,9 @@ class CanonicalQuestionService:
         rows: list[Path] = []
         for path in sorted(directory.glob("*.md"), reverse=True):
             canonical = f"memory/{path.relative_to(self.memory_root).as_posix()}"
-            if scope_allows_path(canonical, decision.scopes):
-                rows.append(path)
+            verdict = check(decision, canonical, "read", root=self.memory_root)
+            if verdict.allowed:
+                rows.append(verdict.resolved)
         return tuple(rows)
 
     @staticmethod
@@ -235,18 +236,17 @@ class CanonicalQuestionService:
     def open(self, actor: ActorContext, canonical_path: str) -> str:
         relative = self._relative_path(canonical_path)
         decision = self.runtime.authorize(actor, Permission.READ)
-        if not decision.allowed or not scope_allows_path(
-            f"memory/{relative}", decision.scopes
-        ):
+        verdict = check(decision, f"memory/{relative}", "read", root=self.memory_root)
+        if not verdict.allowed:
             raise AuthorizationDenied("question is outside the actor read scope")
-        source = (self.memory_root / relative).resolve()
-        fields, _ = split_frontmatter(source.read_text(encoding="utf-8"))
+        raw = verdict.resolved.read_text(encoding="utf-8")
+        fields, _ = split_frontmatter(raw)
         if not self._addressed_to_actor(fields, actor):
             raise AuthorizationDenied("question is not addressed to the active actor")
 
-        content = self.runtime.open_source(actor, f"memory/{relative}")
+        content = self.runtime.open_source(actor, f"memory/{relative}")  # redacted: the type is read from the source
         document = parse_canonical_markdown(
-            content,
+            raw,
             canonical_path=relative,
             default_org_id=actor.profile.org_id,
         )

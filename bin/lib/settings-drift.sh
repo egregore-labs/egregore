@@ -122,7 +122,7 @@ export SETTINGS_CP_SYNCED="false"
 
 settings_drift_pull() {
   local api_url api_key resp revision applied local_subset server_settings
-  api_url=$(jq -r '.api_url // empty' egregore.json 2>/dev/null)
+  api_url=$(_hosted_api_url "$(jq -r '.api_url // empty' egregore.json 2>/dev/null)") || return 0
   [ -n "$api_url" ] || return 0
   api_key=$(grep '^EGREGORE_API_KEY=' .env 2>/dev/null | cut -d'=' -f2-)
   [ -n "$api_key" ] || return 0
@@ -145,7 +145,7 @@ settings_drift_pull() {
       SETTINGS_POSTURE_HELD="$incoming_posture"
       export SETTINGS_POSTURE_HELD
     fi
-    local merged tmp
+    local merged tmp state_file
     merged=$(printf '%s' "$server_settings" | jq -c \
       --argjson keys "$_SETTINGS_OWNED_KEYS" --argjson hold "$hold" --slurpfile cfg egregore.json '
       . as $s | $cfg[0] as $local |
@@ -163,9 +163,12 @@ settings_drift_pull() {
       export SETTINGS_SYNCED_FROM_ORG
       # A held posture keeps the revision unapplied so the next start retries.
       if [ "$hold" = "false" ] && [ -f .egregore-state.json ]; then
-        tmp=$(mktemp ".egregore-state.json.XXXXXX") || return 0
-        jq --arg rev "$revision" '.org_settings_revision = $rev' .egregore-state.json > "$tmp" 2>/dev/null \
-          && [ -s "$tmp" ] && mv "$tmp" .egregore-state.json || rm -f "$tmp"
+        # A worktree links the checkout's state file: the rename lands on the
+        # file it points to, so the link stays and the installation keeps one state.
+        state_file=$(realpath .egregore-state.json 2>/dev/null) || state_file=.egregore-state.json
+        tmp=$(mktemp "$state_file.XXXXXX") || return 0
+        jq --arg rev "$revision" '.org_settings_revision = $rev' "$state_file" > "$tmp" 2>/dev/null \
+          && [ -s "$tmp" ] && mv "$tmp" "$state_file" || rm -f "$tmp"
         SETTINGS_CP_SYNCED="true"; export SETTINGS_CP_SYNCED
       fi
     fi

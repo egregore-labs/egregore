@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 from .artifacts import parse_canonical_markdown, render_canonical_markdown, split_frontmatter
 from .contracts import ActorContext, Permission
-from .policy import scope_allows_path
+from .policy import allows, action_for
 from .runtime import local_runtime
 
 SCHEMA = "egregore-identity-transfer/v1"
@@ -145,7 +145,7 @@ def _document(before: str, path: str, pair: Mapping[str, Any], transfer_id: str)
 
 def _authorize(runtime, source: ActorContext, path: str, permission: Permission) -> None:
     decision = runtime.authorize(source, permission, (f"memory/{path}",))
-    if not decision.allowed or not scope_allows_path(f"memory/{path}", decision.scopes):
+    if not decision.allowed or not allows(decision, f"memory/{path}", action_for(decision.permission), root=runtime.canonical_root):
         raise IdentityTransferError("current actor cannot authorize ownership transfer for the canonical path")
 
 
@@ -191,6 +191,10 @@ def _inventory(memory: Path, runtime, source: ActorContext, destination_id: str)
 class _RevisionStore:
     def __init__(self, store, path: str, expected: str):
         self.store, self.path, self.expected = store, path, expected
+
+    @property
+    def root(self):
+        return self.store.root
 
     def check_write(self, document):
         if document.artifact.canonical_path != self.path:

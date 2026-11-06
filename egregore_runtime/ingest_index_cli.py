@@ -8,6 +8,7 @@ legacy JSON shape consumed by the ingest boundary filter.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 import sys
@@ -17,9 +18,7 @@ from pathlib import Path, PurePosixPath
 from egregore_runtime.adapters.qmd import QmdAdapterError, QmdLocalRetriever
 from egregore_runtime.contracts import RetrievalMode, RetrievalRequest
 from egregore_runtime.identity import LocalIdentityResolver
-from egregore_runtime.observe import DefaultOrgContextCompiler
-from egregore_runtime.policy import all_access_dogfood_policy
-from egregore_runtime.telemetry import LocalTelemetrySink
+from egregore_runtime.runtime import local_runtime
 
 
 def _root() -> Path:
@@ -76,19 +75,8 @@ def _query(args: argparse.Namespace) -> int:
         mode=RetrievalMode.HYBRID,
         open_sources=False,
     )
-    policy = all_access_dogfood_policy(
-        org_id=actor.profile.org_id,
-        actor_id=actor.actor.actor_id,
-    )
-    compiler = DefaultOrgContextCompiler(
-        authorizer=policy,
-        retriever=retriever,
-        telemetry=LocalTelemetrySink(
-            state_file=root / ".egregore-state.json",
-            instance_root=(root / "memory").resolve(),
-        ),
-    )
-    context = compiler.observe(
+    runtime = replace(local_runtime(root, push_remote=False), retriever=retriever)
+    context = runtime.observe(
         actor,
         request,
         token_budget=actor.profile.default_context_budget,

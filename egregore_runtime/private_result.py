@@ -116,6 +116,7 @@ def consume(root, identifier, runtime, actor, *, session_id, native_turn_id=None
     elif episode_binding.requires_binding(root):
         raise EgregoreRuntimeError('private receipt has no native prompt binding')
     validator.check_response(response)
+    rendered=validator._redacted(packet['rendered'])  # held names as decided now, before the packet is spent
     with locked_state(root,episode_id) as state_file:
         state=json.loads(state_file.read_text())
         validator.restore(state)
@@ -132,7 +133,7 @@ def consume(root, identifier, runtime, actor, *, session_id, native_turn_id=None
         receipt['status']='attachment_prepared'
         _save_state(state_file,state)
         path.unlink()
-    return packet['rendered']
+    return rendered
 
 
 def record_stdout(root, response, rendered):

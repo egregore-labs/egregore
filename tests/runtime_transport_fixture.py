@@ -26,8 +26,10 @@ def prepare(root):
     shutil.copy2(ROOT / 'tests/harness_observe_fixture.py', tools / 'harness_observe_fixture.py')
     (tools / 'sitecustomize.py').write_text(
         'from harness_observe_fixture import FakeRuntime\n'
+        'from pathlib import Path\n'
         'import egregore_runtime.runtime as runtime\n'
         'class FixtureRuntime(FakeRuntime):\n'
+        f'    canonical_root = Path({str(root / "memory")!r})\n'
         '    def open_source(self, actor, path):\n'
         '        self.open_calls.append((actor, path))\n'
         '        return "The fixture courier departs at 09:30 UTC.\\n"\n'

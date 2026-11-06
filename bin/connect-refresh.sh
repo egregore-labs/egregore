@@ -16,6 +16,22 @@ if [ "$MODE" != "connected" ] && [ -z "$API_URL" ]; then
   exit 0
 fi
 
+# The refresh runs whichever create-egregore npx has cached, which may be a
+# release from before the October 2026 security reset: it sends the org key
+# to the saved address exactly as written. Run it only when that address needs
+# no resolving, so it never reaches the retired origin or an address the
+# resolver refuses (bin/lib/config.sh). Those wait for /update, quietly.
+# shellcheck source=lib/config.sh
+source "$SCRIPT_DIR/lib/config.sh" 2>/dev/null || exit 0
+SAVED="$API_URL"
+SAVED="${SAVED#"${SAVED%%[![:space:]]*}"}"
+SAVED="${SAVED%"${SAVED##*[![:space:]]}"}"
+while [ "${SAVED%/}" != "$SAVED" ]; do SAVED="${SAVED%/}"; done
+RESOLVED="$(EGREGORE_ADDRESS_NOTICE=shown _hosted_api_url "$API_URL" 2>/dev/null)" || exit 0
+if [ -z "$RESOLVED" ] || [ "$RESOLVED" != "$SAVED" ]; then
+  exit 0
+fi
+
 LOG_DIR="$ROOT/.egregore"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG="$LOG_DIR/connect-refresh.log"

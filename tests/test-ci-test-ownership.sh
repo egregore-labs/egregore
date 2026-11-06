@@ -212,7 +212,7 @@ check("Loom convenience group is outside shell-suite discovery",
 workflow = (source / ".github/workflows/ci.yml").read_text()
 check("each Loom leaf has one strict owner and one direct CI invocation",
       all([entry for entry in real_manifest["excluded_from_baseline"] if entry["suite"] == suite]
-          == [{"suite": suite, "workflow": ".github/workflows/ci.yml", "job": "shell-contracts"}]
+          == [{"suite": suite, "workflow": ".github/workflows/ci.yml", "job": "shell-contracts-loom"}]
           and len(re.findall(r"^\s*run: bash " + re.escape(suite) + r"$", workflow, re.M)) == 1
           for suite in loom_leaves))
 with tempfile.TemporaryDirectory(prefix="test-loom-group.") as temporary:

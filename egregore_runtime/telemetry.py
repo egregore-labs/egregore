@@ -24,6 +24,7 @@ from urllib import request as urllib_request
 from uuid import uuid4
 
 from .contracts import TelemetryEvent
+from .sandbox import state_directory
 
 
 TELEMETRY_SCHEMA_VERSION = "egregore.telemetry/v1"
@@ -138,6 +139,7 @@ class TelemetryStatus:
     storage_path: Path
     local_only: bool = True
     retention: Mapping[str, Any] | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +238,8 @@ def validate_event(event: TelemetryEvent) -> None:
 
     for artifact_id in event.artifact_ids:
         _safe_identifier(artifact_id, field="artifact_ids[]", max_length=256)
+        if artifact_id.startswith(("memory/", "/", ".", "~")) or artifact_id.endswith((".md", ".html")):
+            raise TelemetryPrivacyError("artifact_ids[] must be opaque identifiers, never paths")
 
     if event.event_type in {"operation.start", "operation.result"}:
         required = {"operation", "layer", "invocation_id", "harness"}
@@ -368,7 +372,10 @@ class LocalTelemetrySink:
     ``~/.egregore/telemetry/``: on-device, outside canonical repositories, and
     unable to mix multiple Egregore instances. ``EGREGORE_TELEMETRY_DIR`` or
     an explicit ``storage_dir`` may relocate one sink for tests or managed
-    local deployments.
+    local deployments. When that per-user directory refuses writes (a
+    sandboxed session), the buffer moves to the workspace's own
+    ``.egregore/telemetry/``, and ``status()`` names the cause first, and
+    names both failures when that copy is refused too.
     """
 
     def __init__(
@@ -382,6 +389,9 @@ class LocalTelemetrySink:
         instance_root: Path | None = None,
     ) -> None:
         env_dir = os.environ.get("EGREGORE_TELEMETRY_DIR")
+        # Set when the per-user directory refuses writes: with the workspace
+        # copy in use, or naming why that copy was refused too.
+        self.state_warning: str | None = None
         if storage_dir is not None:
             self.storage_dir = storage_dir
         elif env_dir:
@@ -390,6 +400,16 @@ class LocalTelemetrySink:
             root = instance_root or (state_file.parent if state_file else Path.cwd())
             namespace = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:20]
             self.storage_dir = Path.home() / ".egregore" / "telemetry" / namespace
+            if state_file is not None:
+                # The state file names the workspace, the one place a
+                # sandboxed session can still write.
+                workspace = state_file.parent
+                self.storage_dir, self.state_warning = state_directory(
+                    self.storage_dir,
+                    workspace / ".egregore" / "telemetry",
+                    workspace=workspace,
+                    home=Path.home(),
+                )
         self.buffer_path = self.storage_dir / "telemetry.jsonl"
         self.lock_path = self.storage_dir / "telemetry.lock"
         self.share_consent_path = self.storage_dir / "telemetry-share-consent.json"
@@ -550,6 +570,7 @@ class LocalTelemetrySink:
             byte_count=byte_count,
             storage_path=self.buffer_path,
             retention=self._retention() if self.retention_path.exists() else None,
+            warnings=(self.state_warning,) if self.state_warning else (),
         )
 
     def set_enabled(self, enabled: bool) -> None:
@@ -722,11 +743,13 @@ class HttpSharedTelemetrySink:
             "Content-Type": "application/x-ndjson",
             "User-Agent": "egregore-runtime-telemetry/1",
         }
-        if self.bearer_token:
-            headers["Authorization"] = f"Bearer {self.bearer_token}"
         outbound = urllib_request.Request(
             self.endpoint, data=payload, headers=headers, method="POST"
         )
+        if self.bearer_token:
+            # urllib copies only Request.headers to a redirect; the bearer
+            # token stays with this request and never reaches another host.
+            outbound.add_unredirected_header("Authorization", f"Bearer {self.bearer_token}")
         with urllib_request.urlopen(outbound, timeout=self.timeout_seconds) as response:
             body = response.read(4096).decode("utf-8", errors="replace")
             return body or str(response.status)

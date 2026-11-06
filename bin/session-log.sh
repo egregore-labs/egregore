@@ -21,6 +21,25 @@ INPUT=$(cat /dev/stdin 2>/dev/null || echo "{}")
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
+# Route known native transcript locations before reading their contents.
+RUNTIME=$(printf '%s' "$INPUT" | jq -r '.runtime // empty' 2>/dev/null || true)
+RECORD_TRANSCRIPT=false
+if [ -n "${HOME:-}" ]; then
+  if [[ "$TRANSCRIPT_PATH" == "$HOME/.claude/projects/"* ]] && \
+      printf '%s' "$INPUT" | jq -e 'has("hook_event_name")' >/dev/null 2>&1; then
+    RECORD_TRANSCRIPT=true
+  elif { [ "$RUNTIME" = pi ] && [[ "$TRANSCRIPT_PATH" == "$HOME/.pi/agent/sessions/"* ]]; } || \
+       { [ "$RUNTIME" = prime ] && [[ "$TRANSCRIPT_PATH" == "$HOME/.prime/agent/sessions/"* ]]; }; then
+    RECORD_TRANSCRIPT=true
+  fi
+fi
+if [ "$RECORD_TRANSCRIPT" = true ]; then
+  source "$SCRIPT_DIR/bin/lib/config.sh"
+  if _session_records_enabled; then
+    exec bash "$SCRIPT_DIR/bin/session-record.sh" --mode end <<< "$INPUT"
+  fi
+fi
+
 if [ -z "$SESSION_ID" ]; then
   exit 0
 fi

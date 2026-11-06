@@ -153,6 +153,30 @@ class Entitlements(Serializable):
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionAuthority(Serializable):
+    """Non-secret attribution for a verified member mandate.
+
+    This records the original verified admission, not the latest authorization
+    decision. It is not a credential or permission. An authenticated resolver
+    must revalidate current authority before each protected operation. Spirit
+    ownership, funding and parent_actor_id confer none of this authority.
+    """
+
+    executor_actor_id: str
+    executor_kind: ActorKind
+    worker_id: str
+    member_account_id: str
+    member_actor_id: str
+    membership_id: str
+    org_id: str
+    grant_id: str
+    binding_id: str
+    audience: str
+    revision: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ActorContext(Serializable):
     account: AccountIdentity | None
     actor: ActorIdentity
@@ -161,6 +185,13 @@ class ActorContext(Serializable):
     entitlements: Entitlements
     session_id: str
     harness: str
+    execution: ExecutionAuthority | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result = Serializable.to_dict(self)
+        if self.execution is None:
+            result.pop("execution")
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +204,14 @@ class PolicyDecision(Serializable):
     resource_ids: tuple[str, ...] = ()
     scopes: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
+    audience: str = "member"
+    scope: str = "read"
+    read_prefixes: tuple[str, ...] = ()
+    write_prefixes: tuple[str, ...] = ()
+    append_prefixes: tuple[str, ...] = ()
+    holds_epoch: str = ""
+    released: tuple[str, ...] = ()
+    memory_revision: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +223,13 @@ class SourceProvenance(Serializable):
     observed_at: datetime
     source_uri: str | None = None
     imported_by: str | None = None
+    execution: ExecutionAuthority | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result = Serializable.to_dict(self)
+        if self.execution is None:
+            result.pop("execution")
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -512,6 +558,8 @@ class ArtifactWriteback(Protocol):
         self,
         actor: ActorContext,
         document: "CanonicalDocument",
+        *,
+        message: str | None = None,
     ) -> WritebackEvent: ...
 
     def write_documents(
@@ -521,12 +569,29 @@ class ArtifactWriteback(Protocol):
     ) -> Sequence[WritebackEvent]: ...
 
 
+class CommitMessage(str):
+    """A commit's subject (and body) that names its own trailers, as ``Key: value`` lines.
+
+    It is a string, so every transport can commit it as text. The Git transport
+    writes ``trailers`` as the message's one trailer paragraph and adds only the
+    provenance trailers they do not name. The caller keeps every value on one line.
+    """
+
+    trailers: tuple[str, ...]
+
+    def __new__(cls, text: str, trailers: Sequence[str] = ()) -> "CommitMessage":
+        made = super().__new__(cls, text)
+        made.trailers = tuple(trailers)
+        return made
+
+
 @runtime_checkable
 class SyncTransport(Protocol):
     def status(self) -> SyncStatus: ...
 
     def pull(self) -> SyncStatus: ...
 
+    # ``message`` may be a CommitMessage that carries its own trailers.
     def push(self, *, message: str, paths: Sequence[str] = ()) -> SyncStatus: ...
 
 

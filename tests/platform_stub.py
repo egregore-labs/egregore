@@ -13,6 +13,7 @@ serves api.main:app with this stub installed).
 
 import hashlib
 import json
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -281,6 +282,8 @@ def _parse_ts(value):
 class FakeSupabase:
     def __init__(self):
         self.tables = {}
+        # Stands in for migration 070's per-organization advisory lock.
+        self.key_renewal_lock = threading.Lock()
 
     def table(self, name):
         if name not in self.tables:
@@ -312,6 +315,27 @@ class FakeSupabase:
 
     def call_rpc(self, fn, params):
         now = datetime.now(timezone.utc)
+
+        if fn == "api_key_ensure_active":
+            # Mirrors api/migrations/070_org_key_renewal.sql.
+            slug = params["p_org_slug"]
+            orgs = self.tables.get("orgs", _Table("orgs")).rows
+            if not any(row.get("slug") == slug for row in orgs):
+                return {"status": "missing"}
+            with self.key_renewal_lock:
+                keys = self.tables.setdefault("api_keys", _Table("api_keys"))
+                active = [row for row in keys.rows
+                          if row.get("org_slug") == slug and row.get("is_active")]
+                active.sort(key=lambda row: row.get("key_plaintext") is None)
+                if active:
+                    return {"status": "existing", "api_key": active[0].get("key_plaintext")}
+                keys.rows.append({
+                    "id": len(keys.rows) + 1, "org_slug": slug,
+                    "key_prefix": params["p_key_prefix"], "key_hash": params["p_key_hash"],
+                    "key_plaintext": params["p_key_plaintext"], "is_active": True,
+                    "created_at": now.isoformat(), "revoked_at": None,
+                })
+                return {"status": "renewed", "api_key": params["p_key_plaintext"]}
 
         if fn == "emissary_commit_publish_v1":
             operations = self.tables.setdefault(

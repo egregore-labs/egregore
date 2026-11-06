@@ -13,11 +13,11 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import secrets
 import time
 
 from .errors import EgregoreRuntimeError
+from .installation import installation_root
 
 MAX_QUESTION_BYTES = 262144
 
@@ -25,9 +25,20 @@ class EpisodeBindingError(EgregoreRuntimeError):
     pass
 
 
+def _store(root):
+    """One binding store per installation, shared by its main checkout and task worktrees.
+
+    A prompt is bound from wherever its hook runs (Claude keeps CLAUDE_PROJECT_DIR
+    at the launch checkout after the session enters a worktree, and a prompt that
+    names a worktree moves the hook there); its tools, a subagent's included, run
+    in whichever checkout they stand in. All of them must see one current prompt.
+    """
+    return installation_root(root) / ".egregore/runtime/bindings"
+
+
 def _directory(root):
-    directory = Path(root) / ".egregore/runtime/bindings"
-    if not directory.resolve().is_relative_to(Path(root).resolve()):
+    directory = _store(root)
+    if not directory.resolve().is_relative_to(installation_root(root)):
         raise EpisodeBindingError("episode bindings must remain inside this instance")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -148,7 +159,7 @@ def resolve(root, episode_id):
 
 
 def requires_binding(root):
-    directory = Path(root) / ".egregore/runtime/bindings"
+    directory = _store(root)
     return directory.exists() and any(directory.glob("*.current"))
 
 
@@ -168,7 +179,7 @@ def resolve_native(root, *, harness, session_id):
     if not session_id or len(session_id) > 200:
         raise EpisodeBindingError('native session identity is required')
     conversation = _key(f'{harness}:{session_id}')
-    path = Path(root) / '.egregore/runtime/bindings' / (conversation + '.current')
+    path = _store(root) / (conversation + '.current')
     if not path.exists():
         return None
     current = _load(path)

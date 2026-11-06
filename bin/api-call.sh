@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/bin/lib/config.sh"
 source "$SCRIPT_DIR/bin/lib/scratch.sh"
 
 usage() {
-  echo 'Usage: bash bin/api-call.sh <METHOD> <path-or-url> [--auth github|egregore|resend] [--json-file <file>] [--out <file>] [--error-out <file>]' >&2
+  echo 'Usage: bash bin/api-call.sh <METHOD> <path-or-url> [--auth github|egregore|resend|egregore+github] [--json-file <file>] [--out <file>] [--error-out <file>]' >&2
   echo 'Failed responses are discarded unless --error-out requests a private HTTP error body.' >&2
   exit 2
 }
@@ -34,7 +34,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --auth)
       [ -z "$auth" ] || usage
-      case "$2" in github|egregore|resend) auth="$2" ;; *) usage ;; esac
+      case "$2" in github|egregore|resend|egregore+github) auth="$2" ;; *) usage ;; esac
       ;;
     --json-file) [ -z "$json_file" ] || usage; json_file="$2" ;;
     --out) [ -z "$out" ] || usage; out="$2" ;;
@@ -99,41 +99,59 @@ fi
 
 url="$target"
 if [[ "$target" == /* ]]; then
-  api_url=$(bash "$SCRIPT_DIR/bin/config-get.sh" api_url)
+  # config-get.sh refuses an address that is not plain, and says why.
+  api_url=$(bash "$SCRIPT_DIR/bin/config-get.sh" api_url) || exit 2
   if [ -z "$api_url" ]; then
     echo 'api-call: api_url is not set' >&2
     exit 2
   fi
   url="${api_url%/}$target"
 fi
+# The retired hosted origin (October 2026 reset) never receives a credential,
+# whether it came from egregore.json or an absolute target, and neither does an
+# origin that is not plain. Resolve the final address before any key is
+# loaded; curl runs with --globoff, so the path and query stay literal.
+url="$(_hosted_api_target "$url")" || exit 2
 
-token=''
-if [ -n "$auth" ]; then
-  case "$auth" in
-    github) key_name=GITHUB_TOKEN ;;
-    egregore) key_name=EGREGORE_API_KEY ;;
-    resend) key_name=RESEND_API_KEY ;;
-  esac
-  token=$(_load_env_var "$key_name")
+# load_key KEY_NAME: the key from .env, edges trimmed; GITHUB_TOKEN falls
+# back to `gh auth token`. Sets `loaded`; exits 2 when the key is missing.
+loaded=''
+load_key() {
+  loaded=$(_load_env_var "$1")
   # Strip surrounding whitespace, including CRLF, without evaluating .env.
-  token="${token#"${token%%[![:space:]]*}"}"
-  token="${token%"${token##*[![:space:]]}"}"
-  if [ "$auth" = resend ]; then
+  loaded="${loaded#"${loaded%%[![:space:]]*}"}"
+  loaded="${loaded%"${loaded##*[![:space:]]}"}"
+  if [ "$1" = RESEND_API_KEY ]; then
     # The email skill historically removes all whitespace from Resend keys.
-    token=$(printf '%s' "$token" | tr -d '[:space:]')
-  elif [ "$auth" = github ] && [ -z "$token" ]; then
-    token=$(gh auth token 2>/dev/null) || token=''
-    token="${token#"${token%%[![:space:]]*}"}"
-    token="${token%"${token##*[![:space:]]}"}"
+    loaded=$(printf '%s' "$loaded" | tr -d '[:space:]')
+  elif [ "$1" = GITHUB_TOKEN ] && [ -z "$loaded" ]; then
+    loaded=$(gh auth token 2>/dev/null) || loaded=''
+    loaded="${loaded#"${loaded%%[![:space:]]*}"}"
+    loaded="${loaded%"${loaded##*[![:space:]]}"}"
   fi
-  if [ -z "$token" ]; then
-    printf 'api-call: %s is not set in .env\n' "$key_name" >&2
+  if [ -z "$loaded" ]; then
+    printf 'api-call: %s is not set in .env\n' "$1" >&2
     exit 2
   fi
-fi
+}
+
+# egregore+github: the org key names the organisation (Authorization) and the
+# caller's own GitHub token proves the person (X-GitHub-Token).
+token=''
+person_token=''
+case "$auth" in
+  github) load_key GITHUB_TOKEN; token="$loaded" ;;
+  egregore) load_key EGREGORE_API_KEY; token="$loaded" ;;
+  resend) load_key RESEND_API_KEY; token="$loaded" ;;
+  egregore+github)
+    load_key EGREGORE_API_KEY; token="$loaded"
+    load_key GITHUB_TOKEN; person_token="$loaded"
+    ;;
+esac
+loaded=''
 
 response_file=$(mktemp "$SCRIPT_DIR/tmp/api-call.XXXXXX")
-args=(-q -sS --max-time 60 --request "$method" --url "$url"
+args=(-q -sS --globoff --max-time 60 --request "$method" --url "$url"
   --output "$response_file" --write-out '%{http_code}' -H @-)
 if [ -n "$json_file" ]; then
   args+=(--data-binary "@$json_file")
@@ -142,6 +160,9 @@ fi
 headers() {
   if [ -n "$token" ]; then
     printf 'Authorization: Bearer %s\n' "$token"
+  fi
+  if [ -n "$person_token" ]; then
+    printf 'X-GitHub-Token: %s\n' "$person_token"
   fi
   # Preserve delete-user's JSON header even on its bodyless DELETE request.
   if [ -n "$json_file" ] || [ "$method" = DELETE ]; then

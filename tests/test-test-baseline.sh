@@ -130,6 +130,7 @@ exit 1
 EOF
 printf '%s\n' 'echo written > tests/written-here.txt' > "$scratch/topic/tests/test-writer.sh"
 printf '%s\n' 'sleep 30' > "$scratch/topic/tests/test-slow.sh"
+printf '%s\n' '#!/usr/bin/env bash' '# test-baseline: timeout=6' 'sleep 2' 'echo "PASS: waited past the default"' > "$scratch/topic/tests/test-declared-limit.sh"
 printf '%s\n' 'process.exit(0)' > "$scratch/topic/tests/test-node.mjs"
 printf '%s\n' 'def test_ok(): pass' > "$scratch/topic/tests/test_py.py"
 printf '%s\n' '@test "x" { true; }' > "$scratch/topic/tests/test-bats.bats"
@@ -493,6 +494,30 @@ for timeout_side in head base; do
   else fail 'base timeout lost the completed head result'; fi
   rm -f "$scratch/tmp"/timeout-*.pid
 done
+# A suite may declare a longer deadline than --timeout; the default still applies elsewhere.
+capture baseline --head-first --timeout 1 --json tests/test-declared-limit.sh
+if [ "$EXIT_CODE" -eq 0 ] && json_is '.suites[0].status == "passed" and .suites[0].head.timed_out == false'; then
+  pass 'a suite can declare a longer deadline than --timeout'
+else fail 'declared suite deadline'; fi
+# Another run adding a worktree at the same moment can fail one `git worktree add`
+# (seen on CI); the runner tries again instead of stopping as an environment failure.
+real_git=$(command -v git)
+mkdir -p "$scratch/racing-git"
+cat > "$scratch/racing-git/git" <<EOF
+#!/usr/bin/env bash
+if [[ " \$* " == *" worktree add "* ]] && [ ! -e "$scratch/racing-git/failed" ]; then
+  : > "$scratch/racing-git/failed"
+  echo 'fatal: failed to read .git/worktrees/base/commondir: Success' >&2
+  exit 128
+fi
+exec "$real_git" "\$@"
+EOF
+chmod +x "$scratch/racing-git/git"
+capture fixture_env env PATH="$scratch/racing-git:$PATH" bash "$scratch/topic/bin/test-baseline.sh" --json tests/test-clean.sh
+if [ "$EXIT_CODE" -eq 0 ] && [ -e "$scratch/racing-git/failed" ] && json_is '.suites[0].status == "clean"'; then
+  pass 'a base worktree add that collides with another run is tried again'
+else fail 'racing base worktree add'; cat "$scratch/stderr" >&2; fi
+
 # Suites can deliberately create their own child groups and clean them in TERM
 # handlers. The timeout grace must let that cleanup finish without passing them.
 start_baseline "$scratch/detached.json" "$scratch/detached.err" \

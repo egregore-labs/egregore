@@ -37,9 +37,19 @@ case "$PATH_VALUE" in
 esac
 [ -f "$ABS_PATH" ] || exit 0
 
-# Restrict scope to memory/**/*.md (handoffs, notes, knowledge, quests, etc.)
+# Restrict scope to this project's memory/**/*.md (handoffs, notes, knowledge,
+# quests, etc.). Both sides resolve to physical paths, so the memory symlink
+# and its target count as one place. A path that merely contains "/memory/"
+# elsewhere, such as a harness's own notes under the home directory, is not
+# organisational memory and gets no prompt.
 case "$ABS_PATH" in
-  *"/memory/"*.md) ;;
+  *.md) ;;
+  *) exit 0 ;;
+esac
+MEMORY_DIR=$(cd "$PROJECT_DIR/memory" 2>/dev/null && pwd -P) || exit 0
+FILE_DIR=$(cd "$(dirname "$ABS_PATH")" 2>/dev/null && pwd -P) || exit 0
+case "$FILE_DIR/" in
+  "$MEMORY_DIR/"*) ;;
   *) exit 0 ;;
 esac
 
@@ -47,8 +57,8 @@ esac
 # Canvas files aggregate product/feature text and routinely mention fundraising,
 # investors, etc. as topics, not as sensitive content. Re-prompting on every
 # canvas edit is pure noise.
-case "$ABS_PATH" in
-  *"/memory/knowledge/canvas/"*) exit 0 ;;
+case "${FILE_DIR#"$MEMORY_DIR"}/" in
+  /knowledge/canvas/*) exit 0 ;;
 esac
 
 # --- Source helpers ---

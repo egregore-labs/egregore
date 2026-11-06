@@ -7,7 +7,7 @@ Use find for discovery (query is compatibility-only). Use search.sh open for sou
 reads; never use raw file tools or shell reads on memory. Answer from sufficient
 excerpts without opening again."""
 
-INVESTIGATION_GUIDANCE = RECALL_WORKFLOW_GUIDANCE + "\n" + """Search organizational memory through Runtime; reuse evidence already in context.
+INVESTIGATION_GUIDANCE = RECALL_WORKFLOW_GUIDANCE + "\n" + """Reuse evidence already in context; never bypass Runtime with raw memory reads or direct QMD access.
 For exact handoff status/order, use `bash bin/search.sh handoffs --mine --status open --order newest --limit 1 --open`; adjust filters to the question.
 Choose a lookup and call `bash bin/search.sh find "<query>" --kind <kind>`:
 filename for known path fragments; literal for exact wording; dates for dated
@@ -30,17 +30,11 @@ Up to 10 sources per call; --offset N is a nonnegative character offset and
 result budget, so windows may be shorter. Follow the printed per-source
 continuation only when that source needs more context; do not assume a partial
 window is the complete document. Keep each source batch in its own tool result.
-In Codex, set the outer functions.exec output budget with
-`// @exec: {"max_output_tokens": 20000}` and exec_command.max_output_tokens to
-20000 for source reads; a larger inner limit alone cannot prevent outer truncation.
 Known paths may be opened directly. Use find --cursor TOKEN only when another
 page is needed. Do not fetch or reread this contract when it is already attached.
 Runtime retains date bounds and resolves the native session automatically.
 Do not supply episode IDs, request IDs, or gap explanations in normal calls.
-If native binding is unavailable, use this prompt's supplied --episode reference;
-never borrow another prompt's reference. A new prompt resets retrieval limits.
-Use a normal completion wait (at least 10 seconds for yield_time_ms); do not
-create polling turns with one-second waits. Batch independent work in the harness.
+A new prompt resets retrieval limits. Batch independent work in the harness.
 Stop when the question is supported. Ranked matches are not exhaustive; verify
 coverage before claiming something is newest or absent. Document dates need not
 be event dates. Distinguish proposals/conditions from completed work and cite sources.
@@ -52,7 +46,18 @@ failure or index-coverage warning into the final answer. Say what could not be
 verified and how the gap limits that conclusion; do not turn a search gap into a fact.
 Authorization, source checks, retained evidence and budgets remain inside Runtime:
 8 discoveries, 20 source windows, 50 calls and 120,000 result characters per prompt.
-Never bypass Runtime with raw memory filesystem or direct QMD access. Code search
-and tests use ordinary tools. Emit the memory retrieval beat once per question.
-On Claude append --context-packet; never reproduce internal JSON or ranking traces.
+Never reproduce internal JSON or ranking traces.
 """
+
+# Codex-only tool budgets; other harnesses never see these names.
+CODEX_GUIDANCE = """In Codex, set the outer functions.exec output budget with
+`// @exec: {"max_output_tokens": 20000}` and exec_command.max_output_tokens to
+20000 for source reads; a larger inner limit alone cannot prevent outer truncation.
+Use a normal completion wait (at least 10 seconds for yield_time_ms); do not
+create polling turns with one-second waits."""
+
+
+def investigation_guidance(harness: str) -> str:
+    """The shared contract plus the lines only this harness can act on."""
+    base = INVESTIGATION_GUIDANCE.rstrip("\n")
+    return base + "\n" + CODEX_GUIDANCE if harness == "codex" else base

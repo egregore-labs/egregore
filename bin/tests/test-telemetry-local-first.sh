@@ -66,6 +66,18 @@ EXPORT="$TEST_TMP/exported.jsonl"
 bash "$TELEMETRY" export "$EXPORT" >/dev/null
 cmp "$BUFFER" "$EXPORT"
 
+# The former public relay is retired: the flag refuses and sends nothing.
+if retired=$(bash "$TELEMETRY" share --legacy-public-relay 2>&1); then
+  echo "retired public relay flag unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'former public relay is retired; nothing was sent' <<< "$retired"
+[ ! -e "$CALLS" ]
+if grep -q 'railway' "$TELEMETRY"; then
+  echo "telemetry still names the retired relay host" >&2
+  exit 1
+fi
+
 proposal=$(bash "$TELEMETRY" share --endpoint "$ENDPOINT")
 [ ! -e "$CALLS" ]
 grep -q 'nothing sent' <<< "$proposal"
@@ -86,6 +98,7 @@ fi
 bash "$TELEMETRY" share --confirm "$token" >/dev/null
 [ "$(wc -l < "$CALLS")" -eq 1 ]
 ! grep -q 'must-not-leak' "$CALLS"
+head -1 "$CALLS" | grep -q '^-q --globoff '  # glob characters stay literal; no ~/.curlrc
 jq -e '.data.shared == true and .data.artifact_ids == ["artifact_1"]' "$SHARED" >/dev/null
 [ "$(wc -l < "$BUFFER")" -eq 1 ]
 
@@ -107,6 +120,14 @@ token=$(printf '%s' "$proposal_json" | jq -r '.token')
 bash "$TELEMETRY" share --confirm "$token" >/dev/null
 [ "$(wc -l < "$CALLS")" -eq 3 ]
 
+# An explicit endpoint never gets the org key, so it is proposed as typed;
+# only the retired API host is mapped to the hosted one.
+share_target() { bash "$TELEMETRY" share --endpoint "$1" --json 2>/dev/null | jq -r '.target'; }
+[ "$(share_target 'http://[::1]:8799/ingest')" = 'http://[::1]:8799/ingest' ]
+[ "$(share_target 'https://collector.example/ingest?org=x')" = 'https://collector.example/ingest?org=x' ]
+[ "$(share_target 'https://egregore-production-55f2.up.railway.app/api/telemetry/ingest')" = 'https://api.egregore.xyz/api/telemetry/ingest' ]
+[ "$(wc -l < "$CALLS")" -eq 3 ]  # proposals send nothing
+
 bash "$TELEMETRY" disable >/dev/null
 count_disabled=$(wc -l < "$BUFFER")
 bash "$TELEMETRY" emit command '{"command":"save"}'
@@ -117,7 +138,9 @@ printf '%s\n' "  ✓ local emit + v1 envelope"
 printf '%s\n' "  ✓ content-bearing metrics rejected"
 printf '%s\n' "  ✓ flush performs no network I/O"
 printf '%s\n' "  ✓ export remains local"
+printf '%s\n' "  ✓ retired public relay sends nothing"
 printf '%s\n' "  ✓ share requires disclosed, dataset-bound confirmation"
 printf '%s\n' "  ✓ staged snapshot survives events emitted between proposal and confirm"
 printf '%s\n' "  ✓ machine-readable proposal completes the same consent protocol"
+printf '%s\n' "  ✓ explicit endpoints are proposed as typed; only the retired host is mapped"
 printf '%s\n' "  ✓ disabled collection preserves local inspection"

@@ -7,16 +7,18 @@ composed here and are not part of the harness contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
+import json
 import os
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 from uuid import uuid4
 
 from .adapters.qmd import QmdLocalRetriever
-from .admin_gate import AdminGate, document_is_admin
+from .held import document_is_admin, redact
+from .access import authorization_inputs
 from .artifacts import (
     CanonicalArtifactStore,
     CanonicalDocument,
@@ -59,11 +61,20 @@ from .lifecycle import (
     LifecycleRecord,
 )
 from .observe import DefaultOrgContextCompiler
+from .observers import MAX_EVENT_PATHS, Observer, RuntimeEvent
 from .sync_health import grade_retrieval, sync_remedy
-from .policy import all_access_dogfood_policy, scope_allows_path
+from .policy import check, is_admin, policy_for
+from .projection import observer as projection_observer
+from .optional_modules import optional_module
+
+_record = optional_module(".record")
+record_observer = _record.observer if _record is not None else None
 from .sync import LocalGitSyncTransport
 from .telemetry import LocalTelemetrySink, TELEMETRY_SCHEMA_VERSION
 from .writeback import CanonicalArtifactWriteback
+
+if TYPE_CHECKING:
+    from .member_authority import AuthenticatedMemberResolver
 
 
 PolicyFactory = Callable[[ActorContext], ActionAuthorizer]
@@ -82,8 +93,20 @@ class EgregoreRuntime:
     policy_factory: PolicyFactory
     lifecycle: CanonicalLifecycleService | None = None
     canonical_root: Path | None = None
-    admin_gate: AdminGate | None = None
     instance_root: Path | None = None
+    observers: list[Observer] = field(default_factory=list)
+
+    def _notify(self, kind, actor, paths):
+        paths = tuple(dict.fromkeys(path for path in paths if path))[:MAX_EVENT_PATHS]
+        if not paths:
+            return
+        event = RuntimeEvent(kind, actor.actor.actor_id, actor.session_id, actor.harness, paths,
+                             execution=actor.execution)
+        for observer in self.observers:
+            try:
+                observer(event)
+            except Exception:
+                pass
 
     def resolve_actor(self, *, session_id: str, harness: str) -> ActorContext:
         return self.identity.resolve(session_id=session_id, harness=harness)
@@ -108,13 +131,15 @@ class EgregoreRuntime:
             retriever=self.retriever,
             telemetry=self.telemetry,
             lifecycle=self.lifecycle,
-            admin_gate=self.admin_gate,
+            memory_root=self.canonical_root,
         )
-        return compiler.observe(
+        context = compiler.observe(
             actor,
             request,
             token_budget=token_budget or actor.profile.default_context_budget,
         )
+        self._notify("observed", actor, (item.canonical_path for item in context.evidence))
+        return context
 
     def retrieval_health(self) -> RetrieverHealth:
         return self.retriever.health()
@@ -236,43 +261,7 @@ class EgregoreRuntime:
     def open_source(self, actor: ActorContext, canonical_path: str) -> str:
         """Authorize, open, and record one canonical source through Runtime."""
 
-        path = canonical_path.strip().replace("\\", "/")
-        relative = path.removeprefix("memory/")
-        artifact_id = artifact_id_from_path(relative)
-        # Authorize the canonical path before reading even its frontmatter. The
-        # stable declared id is resolved from the authorized source and then
-        # checked separately before content is returned to the harness.
-        decision = self.authorize(actor, Permission.READ)
-        if not decision.allowed or not scope_allows_path(path, decision.scopes):
-            raise AuthorizationDenied("canonical source is outside the actor read scope")
-
-        content = self.retriever.open_source(
-            RetrievalHit(
-                artifact_id=artifact_id,
-                canonical_path=path,
-                rank=1,
-                score=1,
-                retrieval_types=(RetrievalMode.LEX,),
-            )
-        )
-        # Egregore-surface admin protection: admin-marked content is served
-        # only to organization admins. Repository members can still read the
-        # raw Git file — this guards the product surface, not the filesystem.
-        if (
-            self.admin_gate is not None
-            and document_is_admin(content)
-            and not self.admin_gate.actor_is_admin(actor)
-        ):
-            raise AuthorizationDenied(
-                "this document is admin-marked; Egregore serves it to organization admins only"
-            )
-        stable_artifact_id = canonical_artifact_id(content, path)
-        stable_decision = self.authorize(actor, Permission.READ, (stable_artifact_id,))
-        if not stable_decision.allowed:
-            raise AuthorizationDenied(
-                "canonical artifact identity is outside the actor read scope"
-            )
-        artifact_id = stable_artifact_id
+        content, artifact_id, canonical = self._served(actor, canonical_path)
         try:
             self.telemetry.emit(
                 TelemetryEvent(
@@ -284,7 +273,7 @@ class EgregoreRuntime:
                     actor_id=actor.actor.actor_id,
                     session_id=actor.session_id,
                     org_revision=actor.profile.revision,
-                    index_spec_version=self.retriever.health().index_spec_version,
+                    index_spec_version=self._index_spec_version(),
                     metrics={
                         "opened_count": 1,
                         "result": "authorized",
@@ -296,7 +285,79 @@ class EgregoreRuntime:
         except Exception:
             # Source access is canonical behavior; telemetry is disposable.
             pass
+        self._notify("opened", actor, (canonical,))
         return content
+
+    def serve_source(self, actor: ActorContext, canonical_path: str) -> str:
+        """One canonical source as ``open_source`` serves it (authorized, the admin guard, redacted), without
+        recording it as opened: for a listing that reads many files to show a few (``shown`` records those)."""
+
+        return self._served(actor, canonical_path)[0]
+
+    def shown(self, actor: ActorContext, canonical_paths: Sequence[str]) -> None:
+        """Record that a listing showed the actor what these canonical sources hold, as an observe does."""
+
+        self._notify("observed", actor, canonical_paths)
+
+    def _index_spec_version(self) -> str:
+        """The retriever's index spec: its own constant when it states one, since its health check can be a
+        subprocess (QMD's runs ``qmd status``) that every source open would pay for."""
+
+        known = getattr(self.retriever, "index_spec_version", None)
+        return known if isinstance(known, str) and known else self.retriever.health().index_spec_version
+
+    def _served(self, actor: ActorContext, canonical_path: str) -> tuple[str, str, str]:
+        """(content, stable artifact id, canonical path) of one authorized, redacted canonical source."""
+
+        path = canonical_path.strip().replace("\\", "/")
+        relative = path.removeprefix("memory/")
+        artifact_id = artifact_id_from_path(relative)
+        # Authorize the canonical path before reading even its frontmatter. The
+        # stable declared id is resolved from the authorized source and then
+        # checked separately before content is returned to the harness.
+        decision = self.authorize(actor, Permission.READ)
+        verdict = check(decision, path, "read", root=self.canonical_root)
+        if not verdict.allowed:
+            raise AuthorizationDenied("canonical source is outside the actor read scope")
+
+        content = self.retriever.open_source(
+            RetrievalHit(
+                artifact_id=artifact_id,
+                canonical_path=verdict.canonical,
+                rank=1,
+                score=1,
+                retrieval_types=(RetrievalMode.LEX,),
+            )
+        )
+        # Egregore-surface admin protection: admin-marked content is served
+        # only to organization admins. Repository members can still read the
+        # raw Git file — this guards the product surface, not the filesystem.
+        if (
+            not is_admin(decision) and document_is_admin(content)
+        ):
+            raise AuthorizationDenied(
+                "this document is admin-marked; Egregore serves it to organization admins only"
+            )
+        stable_artifact_id = canonical_artifact_id(content, path)
+        stable_decision = self.authorize(actor, Permission.READ, (stable_artifact_id,))
+        if not stable_decision.allowed or (
+            stable_decision.resource_ids and stable_artifact_id not in stable_decision.resource_ids
+        ):
+            raise AuthorizationDenied(
+                "canonical artifact identity is outside the actor read scope"
+            )
+        if not check(stable_decision, path, "read", root=self.canonical_root).allowed:
+            raise AuthorizationDenied(
+                "canonical source is outside the current actor read scope"
+            )
+        if not is_admin(stable_decision) and document_is_admin(content):
+            raise AuthorizationDenied(
+                "this document is admin-marked; Egregore serves it to organization admins only"
+            )
+        artifact_id = stable_artifact_id
+        # The one packaging: names of the documents held from this reader leave the text.
+        content = redact(stable_decision, content, root=self.canonical_root)
+        return content, artifact_id, verdict.canonical
 
     def write_artifact(
         self,
@@ -304,21 +365,36 @@ class EgregoreRuntime:
         artifact: CanonicalArtifact,
         content: str,
     ) -> WritebackEvent:
-        return self._writeback(actor).write(actor, artifact, content)
+        receipt = self._writeback(actor).write(actor, artifact, content)
+        if receipt.status in (WritebackStatus.ACCEPTED, WritebackStatus.PARTIAL):
+            self._notify("wrote", actor, ("memory/" + receipt.artifact.canonical_path,))
+        return receipt
 
     def write_document(
         self,
         actor: ActorContext,
         document: CanonicalDocument,
+        *,
+        message: str | None = None,
     ) -> WritebackEvent:
-        return self._writeback(actor).write_document(actor, document)
+        """``message``: the commit's own message (a document edit's file, why and trailers); every other
+        write keeps the writeback's."""
+        receipt = self._writeback(actor).write_document(actor, document, **({"message": message} if message else {}))
+        if receipt.status in (WritebackStatus.ACCEPTED, WritebackStatus.PARTIAL):
+            self._notify("wrote", actor, ("memory/" + receipt.artifact.canonical_path,))
+        return receipt
 
     def write_documents(
         self,
         actor: ActorContext,
         documents: tuple[CanonicalDocument, ...],
     ) -> tuple[WritebackEvent, ...]:
-        return self._writeback(actor).write_documents(actor, documents)
+        receipts = self._writeback(actor).write_documents(actor, documents)
+        self._notify("wrote", actor, (
+            "memory/" + receipt.artifact.canonical_path for receipt in receipts
+            if receipt.status in (WritebackStatus.ACCEPTED, WritebackStatus.PARTIAL)
+        ))
+        return receipts
 
     def commit_canonical_files(
         self,
@@ -331,9 +407,12 @@ class EgregoreRuntime:
 
         if self.canonical_root is None:
             raise RuntimeError("canonical file writeback is unavailable")
-        return self._writeback(actor).commit_files(
+        receipt = self._writeback(actor).commit_files(
             actor, paths, memory_root=self.canonical_root, message=message,
         )
+        if receipt.status in (WritebackStatus.ACCEPTED, WritebackStatus.PARTIAL):
+            self._notify("wrote", actor, ("memory/" + path for path in receipt.canonical_paths))
+        return receipt
 
     def register_ingest_manifest(
         self,
@@ -385,7 +464,7 @@ class EgregoreRuntime:
                 aliases.update(str(value) for value in actor.account.provider_aliases.values())
             recipient_aliases = tuple(sorted(value for value in aliases if value.strip()))
         return self.lifecycle.scan(
-            authorized_scopes=decision.scopes,
+            decision=decision,
             artifact_types=artifact_types,
             user=recipient_aliases,
         )
@@ -413,12 +492,8 @@ class EgregoreRuntime:
         matches = [record for record in plan.records if record.artifact_id == target_artifact_id]
         if len(matches) != 1:
             raise LifecycleError("lifecycle target is missing or ambiguous")
-        administer = bool(
-            actor.membership
-            and {role.casefold() for role in actor.membership.roles}
-            & {"admin", "administrator", "owner", "founder"}
-            and self.authorize(actor, Permission.ADMINISTER, (target_artifact_id,)).allowed
-        )
+        admin = self.authorize(actor, Permission.ADMINISTER, (target_artifact_id,))
+        administer = is_admin(admin)
         if self.lifecycle is None:
             raise LifecycleError("canonical lifecycle service is unavailable")
         transition = self.lifecycle.prepare_transition(
@@ -477,6 +552,8 @@ def local_runtime(
     *,
     push_remote: bool = True,
     policy_factory: PolicyFactory | None = None,
+    identity: IdentityResolver | None = None,
+    observers: Sequence[Observer] | None = None,
 ) -> EgregoreRuntime:
     """Compose the Local architecture; all projections remain disposable."""
 
@@ -488,14 +565,12 @@ def local_runtime(
         state_dir=Path.home() / ".egregore" / "runtime" / "lifecycle" / instance_id,
     )
 
-    def dogfood(actor: ActorContext) -> ActionAuthorizer:
-        return all_access_dogfood_policy(
-            org_id=actor.profile.org_id,
-            actor_id=actor.actor.actor_id,
-        )
-
+    active_observers = list(observers) if observers is not None else [
+        *([record_observer(repository_root)] if record_observer is not None else []),
+        projection_observer(repository_root),
+    ]
     return EgregoreRuntime(
-        identity=LocalIdentityResolver(repository_root),
+        identity=identity if identity is not None else LocalIdentityResolver(repository_root),
         retriever=QmdLocalRetriever(
             repository_root=repository_root,
             memory_root=memory_root,
@@ -511,9 +586,43 @@ def local_runtime(
         lifecycle=lifecycle,
         canonical_root=memory_root,
         instance_root=repository_root,
-        policy_factory=policy_factory or dogfood,
-        admin_gate=AdminGate(
-            config_path=repository_root / "egregore.json",
-            memory_root=memory_root,
-        ),
+        observers=active_observers,
+        policy_factory=policy_factory or (lambda actor: policy_for(authorization_inputs(repository_root))),
+    )
+
+
+def authenticated_member_runtime(
+    root: Path,
+    *,
+    identity: AuthenticatedMemberResolver,
+    push_remote: bool = True,
+    policy_factory: PolicyFactory | None = None,
+    observers: Sequence[Observer] = (),
+) -> EgregoreRuntime:
+    """Compose current member authority over Local policy, without Local login.
+
+    The trusted host supplies an authenticated resolver. Missing/unavailable
+    verification never falls back to the machine owner's identity. This factory
+    does not issue grants, connect transports, or grant paid capabilities.
+    """
+    from .member_authority import AuthenticatedMemberResolver, MemberAuthorityPolicy
+
+    if not isinstance(identity, AuthenticatedMemberResolver):
+        raise ValueError("authenticated member identity is required")
+    repository_root = runtime_root(root)
+    # Verify the configured workspace independently of the server response.
+    # Merely presenting a valid grant for another organization cannot select it.
+    try:
+        config = json.loads((repository_root / "egregore.json").read_text())
+        if config.get("org_id") != identity.expected.org_id:
+            raise ValueError("different organization")
+    except (OSError, ValueError, AttributeError):
+        raise ValueError("member authority does not match this workspace") from None
+    base = policy_factory or (lambda actor: policy_for(authorization_inputs(repository_root)))
+    return local_runtime(
+        repository_root, push_remote=push_remote, identity=identity,
+        policy_factory=lambda actor: MemberAuthorityPolicy(identity, base),
+        # Legacy projection refresh resolves Local identity during composition.
+        # Hosts opt into observers only after adapting their authority boundary.
+        observers=observers,
     )

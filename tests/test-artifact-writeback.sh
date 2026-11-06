@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/artifact-writeback-XXXXXX")"
+FIXTURE_DIR="$(cd "$FIXTURE_DIR" && pwd -P)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 INSTANCE_DIR="$FIXTURE_DIR/fixture instance"
 MEMORY_DIR="$INSTANCE_DIR/memory"
@@ -10,6 +11,29 @@ ORIGIN_DIR="$FIXTURE_DIR/memory-origin.git"
 mkdir -p "$INSTANCE_DIR/bin" "$MEMORY_DIR" "$FIXTURE_DIR/fake-bin"
 cp "$ROOT_DIR/bin/artifact-writeback.sh" "$INSTANCE_DIR/bin/artifact-writeback.sh"
 cp -R "$ROOT_DIR/egregore_runtime" "$INSTANCE_DIR/egregore_runtime"
+export PYTHONPATH=""
+# A fixture host adapter selects the existing constructor option for this exact
+# disposable repository. The copied Runtime, its background module, and every
+# history/destination/CAS check remain unchanged. No production env knob exists.
+python3 - "$INSTANCE_DIR" "$MEMORY_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+root, memory = map(Path, sys.argv[1:])
+(root / "sitecustomize.py").write_text(f'''from pathlib import Path
+from egregore_runtime.sync import LocalGitSyncTransport
+
+_fixture_memory = Path({str(memory.resolve())!r})
+_production_init = LocalGitSyncTransport.__init__
+
+def _fixture_init(self, repository, *, push_remote=True, allow_local_transport=False):
+    if Path(repository).resolve() != _fixture_memory:
+        raise ValueError("fixture transport selected a non-fixture repository")
+    _production_init(self, repository, push_remote=push_remote, allow_local_transport=True)
+
+LocalGitSyncTransport.__init__ = _fixture_init
+''')
+PY
 
 # Exercise the real Runtime and Git transport, with every writable state path
 # inside this fixture. Retrieval deliberately fails offline; partial receipts
@@ -302,6 +326,28 @@ expect_exit 0 commit --help
 [ "$(grep -c '^usage:' "$FIXTURE_DIR/last.stdout")" -eq 1 ]
 mv "$FIXTURE_DIR/actor.json" "$INSTANCE_DIR/.egregore-state.json"
 echo 'PASS: syntax and canonical path usage errors exit 2, even without configured identity'
+
+# The host's local transport option cannot publish a native record, even after
+# it disappears from the tip. Verify the Runtime's synchronous caller preserves
+# both the remote ref and the receiver's object boundary.
+mkdir -p "$MEMORY_DIR/sessions"
+printf '%s\n' '---' 'kind: session-record' 'producer: pi-durable.metadata/v1' '---' \
+  'Private native fixture.' > "$MEMORY_DIR/sessions/native.md"
+git -C "$MEMORY_DIR" add -- sessions/native.md
+git -C "$MEMORY_DIR" commit --quiet -m 'fixture native ancestor' -- sessions/native.md
+native_blob="$(git -C "$MEMORY_DIR" rev-parse HEAD:sessions/native.md)"
+git -C "$MEMORY_DIR" rm --quiet sessions/native.md
+git -C "$MEMORY_DIR" commit --quiet -m 'fixture removes native tip' -- sessions/native.md
+printf '  guarded: true\n' >> "$MEMORY_DIR/infrastructure/services.yml"
+bash "$INSTANCE_DIR/bin/artifact-writeback.sh" commit --path 'infrastructure/services.yml' \
+  --message 'docs(memory): retain fixture update locally' > "$FIXTURE_DIR/native-withheld.json"
+check_receipt "$FIXTURE_DIR/native-withheld.json" 'infrastructure/services.yml'
+jq -e '.status == "partial" and (.warnings | any(contains("native_history_requires_admission")))' \
+  "$FIXTURE_DIR/native-withheld.json" >/dev/null
+[ "$(git -C "$ORIGIN_DIR" rev-parse refs/heads/main)" = "$remote_before" ]
+! git -C "$ORIGIN_DIR" cat-file -e "$native_blob" 2>/dev/null
+[ "$(git -C "$MEMORY_DIR" diff --cached --name-only)" = 'unrelated.txt' ]
+echo 'PASS: explicit local transport still withholds hidden native ancestry and its objects'
 
 jq '.membership_status = "suspended"' "$INSTANCE_DIR/.egregore-state.json" > "$FIXTURE_DIR/suspended.json"
 mv "$FIXTURE_DIR/suspended.json" "$INSTANCE_DIR/.egregore-state.json"

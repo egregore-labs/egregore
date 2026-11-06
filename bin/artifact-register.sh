@@ -184,7 +184,13 @@ REL="artifacts/$(basename "$FILE")"
   git commit -m "chore(artifacts): register ${TITLE}" -- "$REL" >/dev/null 2>&1 || exit 0
   for _ in 1 2 3; do
     before="$(git rev-parse HEAD 2>/dev/null)" || break
-    git pull --rebase --no-edit >/dev/null 2>&1 && git push >/dev/null 2>&1 && break
+    if git pull --rebase --no-edit >/dev/null 2>&1; then
+      if bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$SCRIPT_DIR/memory" --branch main >/dev/null 2>&1; then
+        break
+      else
+        case "$?" in 75) ;; *) break ;; esac
+      fi
+    fi
     if [ "$(rebase_start)" = "$before" ]; then
       if [ "$(git diff --name-only --diff-filter=U 2>/dev/null)" = "$REL" ] \
         && git checkout --ours -- "$REL" 2>/dev/null && git add -- "$REL" 2>/dev/null; then

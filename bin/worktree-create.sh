@@ -94,52 +94,22 @@ fi
 # egregore.json
 [ -f "$REPO_ROOT/egregore.json" ] && [ ! -f "$WT_PATH/egregore.json" ] && ln -sfn "$REPO_ROOT/egregore.json" "$WT_PATH/egregore.json"
 
+# Installed tools (node_modules, .egregore/tools), so tests and the renderer
+# run without an install step. Same helper as worktree.sh setup, loaded from
+# this script's own bin/. Its one diagnostic, a link git cannot be made to
+# ignore, goes to stderr, keeping stdout the worktree path only.
+# shellcheck source=bin/lib/worktree-links.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/worktree-links.sh" && egregore_link_tools "$WT_PATH" "$REPO_ROOT" >&2
+
 # --- Compute boundary for worktree (so isolation hook works) ---
-# session-start.sh doesn't re-run for worktrees, so we compute it here.
-HASH=$(echo -n "$WT_PATH" | md5 2>/dev/null || echo -n "$WT_PATH" | md5sum 2>/dev/null | cut -d' ' -f1)
-BOUNDARY_FILE="/tmp/egregore-boundary-${HASH}.json"
-MEMORY_DIR=""
-[ -L "$WT_PATH/memory" ] && MEMORY_DIR=$(realpath "$WT_PATH/memory" 2>/dev/null || true)
-# Managed repos: include main repo (worktree symlinks resolve there) + sibling repos
-MANAGED_REPOS_JSON="[\"$REPO_ROOT\""
-PARENT_DIR="$(dirname "$REPO_ROOT")"
-_repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$WT_PATH/egregore.json" 2>/dev/null || true)
-for _r in $_repos; do
-  [[ "$_r" == *".."* ]] && continue
-  _resolved=$(realpath "$PARENT_DIR/$_r" 2>/dev/null || true)
-  [ -z "$_resolved" ] && continue
-  MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON,\"$_resolved\""
-done
-MANAGED_REPOS_JSON="$MANAGED_REPOS_JSON]"
-# Denied paths: shared computation (bin/boundary.sh compute-denied). The main
-# repo is passed as the caller-proven same-instance allowance — this worktree
-# was just created from it and physically shares its git dir — so it stays
-# excluded even on legacy registries whose entries carry no org_id yet.
-DENIED_JSON="[]"
-REGISTRY="$HOME/.egregore/instances.json"
-if [ -f "$REGISTRY" ]; then
-  WT_ORG=$(jq -r '.org_id // empty' "$WT_PATH/egregore.json" 2>/dev/null || true)
-  DENIED_JSON=$(bash "$REPO_ROOT/bin/boundary.sh" compute-denied \
-    "$REGISTRY" "$WT_PATH" "$WT_ORG" "$REPO_ROOT" 2>/dev/null || echo "[]")
-  case "$DENIED_JSON" in "["*) ;; *) DENIED_JSON="[]" ;; esac
-fi
-# Inherit posture, locked, and read roots from the main checkout's boundary
-# cache: a worktree that silently dropped them fell back to `standard` and
-# stopped honoring `locked: true` (found in the 6b.3 enforcement audit).
-MAIN_DIGEST=$(printf '%s' "$REPO_ROOT" | md5 2>/dev/null || printf '%s' "$REPO_ROOT" | md5sum | cut -d' ' -f1)
-MAIN_BOUNDARY="/tmp/egregore-boundary-${MAIN_DIGEST}.json"
-POSTURE_JSON='{}'
-if [ -f "$MAIN_BOUNDARY" ]; then
-  POSTURE_JSON=$(jq -c '{posture: (.posture // "standard"), locked: (.locked // false), read_roots: (.read_roots // [])}' "$MAIN_BOUNDARY" 2>/dev/null || echo '{}')
-fi
-jq -n \
-  --arg project_dir "$WT_PATH" \
-  --arg memory_dir "$MEMORY_DIR" \
-  --argjson managed_repos "$MANAGED_REPOS_JSON" \
-  --argjson denied_paths "$DENIED_JSON" \
-  --argjson inherited "$POSTURE_JSON" \
-  '{project_dir: $project_dir, memory_dir: $memory_dir, managed_repos: $managed_repos, denied_paths: $denied_paths} + $inherited' \
-  > "$BOUNDARY_FILE.tmp" 2>/dev/null && mv "$BOUNDARY_FILE.tmp" "$BOUNDARY_FILE" 2>/dev/null || true
+# session-start.sh doesn't re-run for worktrees, so we compute it here through
+# the shared computation (bin/boundary-guard.cjs write-cache). It recognizes a
+# linked worktree: the main checkout it physically shares a git dir with is the
+# caller-proven same instance (excluded from denied paths even on legacy
+# registries without org_id) and a managed repo, and posture, lock and read
+# roots come from the main checkout's config — a worktree that dropped them
+# fell back to `standard` and stopped honoring `locked: true` (6b.3 audit).
+bash "$REPO_ROOT/bin/node-run.sh" "$REPO_ROOT/bin/boundary-guard.cjs" write-cache "$WT_PATH" >/dev/null 2>&1 || true
 
 # --- Session topic on the graph (fire-and-forget, detached) ---
 # CLAUDE.md used to ask the model to run this after EnterWorktree with a

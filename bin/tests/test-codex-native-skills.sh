@@ -3,11 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# This suite executes bin/codex-session-start.sh against the live repo. A
-# real session start parks the checkout on the base branch (autosave + push
-# + checkout in git-sync); from a test that rewrites the developer's working
-# tree mid-run and poisons every later assertion. Render-only, mutate nothing.
-export EGREGORE_GIT_SYNC_READONLY=1
+# Source inventory checks are read-only. Actual startup runs only in the
+# disposable fixture below: Git's read-only flag does not suppress startup's
+# scratch sweep, identity updates, shared-state links, or background workers.
 CODEX_DIR="$ROOT/.codex/skills"
 RENDER="$ROOT/bin/codex-skill-render.mjs"
 
@@ -233,38 +231,9 @@ if [ "${1:-}" = "--skills-only" ]; then
   exit 0
 fi
 
-card="$(bash "$ROOT/bin/codex-session-start.sh" --card)"
-! grep -q 'egregore-site:' <<< "$card"
-! grep -q 'egregore-videos:' <<< "$card"
-! grep -q 'codex harness active' <<< "$card"
-! grep -q 'Codex skills:' <<< "$card"
-! grep -q 'More skills:' <<< "$card"
-! grep -q 'Trusted Codex:' <<< "$card"
-! grep -q 'Adapter skills:' <<< "$card"
-if jq -e '(.mode // "") != "local" and ((.api_url // "") | length > 0)' "$ROOT/egregore.json" >/dev/null 2>&1; then
-  grep -q '◆ CONNECTED' <<< "$card"
-else
-  grep -q '◇ LOCAL' <<< "$card"
-fi
-
-prompt="$(bash "$ROOT/bin/codex-session-start.sh" --prompt)"
-# grep -q can close its input as soon as it finds a match. Here-strings avoid
-# treating a large prompt producer's SIGPIPE as a failed assertion under pipefail.
-grep -q 'Trusted Codex: full shell/network access is enabled' <<< "$prompt"
-grep -q 'Codex reserves leading slash commands for built-ins' <<< "$prompt"
-grep -Fq 'Every Egregore workflow is a $name skill whose adapter names the canonical workflow it runs.' <<< "$prompt"
-if [ "$native_inventory_count" -eq 0 ]; then
-  ! grep -Fq 'Maintained native Codex skills:' <<< "$prompt"
-else
-  grep -Fq 'Maintained native Codex skills:' <<< "$prompt"
-fi
-! grep -Eq '\$([^[:alnum:]_]|$)' <<< "$prompt"
-for skill in ${NATIVE_SKILLS[@]+"${NATIVE_SKILLS[@]}"}; do
-  grep -Fq "\$$skill" <<< "$prompt" || {
-    echo "startup prompt omitted installed native skill: $skill" >&2
-    exit 1
-  }
-done
+printf '%s\n' "$native_listing" > "$prompt_fixture/source-native-skills"
+python3 "$ROOT/bin/tests/test-codex-startup-isolation.py" \
+  --root "$ROOT" --native-file "$prompt_fixture/source-native-skills"
 
 # UserPromptSubmit hooks create visible hook-completed transcript noise
 # (removed 2026-06-01, 74ea0ced). observe-context.sh is the one sanctioned

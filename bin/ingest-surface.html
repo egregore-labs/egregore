@@ -151,9 +151,15 @@ __EGREGORE_DESIGN_CSS__
     .connector:hover { border-color: var(--terracotta); }
     .connector span { color: var(--muted); font-size: 12px; }
     .connector-note { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-    .status { border-left: 2px solid var(--terracotta); padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-    .status.error { border-color: var(--danger); color: var(--danger); }
-    .status.done { border-color: var(--success); color: var(--success); }
+    /* Status: a quiet panel from the highlight recipe (tint, hairline all round).
+       Error and done add a status word whose shape carries the state too. */
+    .status { --tone: var(--neutral); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 14px; border-radius: 12px; background: color-mix(in oklab, var(--tone) 6%, var(--card)); border: 1px solid color-mix(in oklab, var(--tone) 30%, transparent); color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .status.error { --tone: var(--critical); color: var(--black); }
+    .status.done { --tone: var(--ok); color: var(--black); }
+    .status-word { display: inline-flex; align-items: center; gap: 8px; color: var(--tone); font: 500 11px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+    .status-word::before { content: ""; width: 8px; height: 8px; background: currentColor; flex: none; }
+    .status.error .status-word::before { border-radius: 1px; }
+    .status.done .status-word::before { border-radius: 50%; }
     .completion { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; overflow: hidden; background: var(--paper); color: var(--ink); }
     .completion::before, .completion::after { content: ""; position: absolute; border: 1px solid var(--line); border-radius: 50%; pointer-events: none; }
     .completion::before { width: min(74vw, 920px); aspect-ratio: 1; left: -18vw; top: -42vw; }
@@ -275,8 +281,20 @@ __EGREGORE_DESIGN_CSS__
       if (ext === 'pdf') return ['agent/PDF reader needed', 'attention'];
       return ['unsupported until an adapter is available', 'attention'];
     }
+    // Error and done lead with a status word, so the state never rests on
+    // colour alone (a raw error message does not always say it failed).
+    var STATUS_WORDS = { error: 'Failed', done: 'Done' };
     function setStatus(message, kind) {
-      statusBox.textContent = message;
+      statusBox.replaceChildren();
+      if (STATUS_WORDS[kind]) {
+        var word = document.createElement('span');
+        word.className = 'status-word';
+        word.textContent = STATUS_WORDS[kind];
+        statusBox.appendChild(word);
+      }
+      var text = document.createElement('span');
+      text.textContent = message;
+      statusBox.appendChild(text);
       statusBox.className = 'status' + (kind ? ' ' + kind : '');
     }
     function showCompletion(result) {

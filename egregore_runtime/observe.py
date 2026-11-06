@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import uuid4
+from pathlib import Path
 
 from .contracts import (
     ActionAuthorizer,
@@ -14,6 +16,7 @@ from .contracts import (
     OrgContext,
     OrgContextCompiler,
     Permission,
+    PolicyDecision,
     RetrievalHit,
     RetrievalRequest,
     Retriever,
@@ -21,10 +24,10 @@ from .contracts import (
     TelemetrySink,
     TemporalScope,
 )
-from .admin_gate import AdminGate
 from .errors import AuthorizationDenied, ContextBudgetError
+from .held import RedactionError, identity, redact
 from .lifecycle import AuthorityState, CanonicalLifecycleService, LifecycleRecord
-from .policy import scope_allows_path
+from .policy import allows, check, narrow, strips
 
 
 def _token_count(content: str) -> int:
@@ -37,13 +40,28 @@ def _truncate_to_budget(content: str, budget: int) -> str:
     return content[: max(0, budget * 4)]
 
 
+def _packaged(decision: PolicyDecision, content: str, root: Path) -> str:
+    """``held.redact`` for one passage; a JSON object (discovery's metadata) field by field, keys too, so a
+    title that runs into the next field name never breaks it."""
+    if not strips(decision):
+        return content
+    try:
+        fields = json.loads(content) if content.startswith("{") else None
+    except (ValueError, RecursionError):
+        fields = None
+    if not isinstance(fields, dict):
+        return redact(decision, content, root=root)
+    kept = redact(decision, fields, root=root, keys=True)
+    return content if kept == fields else json.dumps(kept, ensure_ascii=False)
+
+
 @dataclass(slots=True)
 class DefaultOrgContextCompiler(OrgContextCompiler):
     authorizer: ActionAuthorizer
     retriever: Retriever
     telemetry: TelemetrySink
+    memory_root: Path
     lifecycle: CanonicalLifecycleService | None = None
-    admin_gate: AdminGate | None = None
 
     def observe(
         self,
@@ -68,12 +86,13 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
 
         scopes = tuple(
             scope
-            for scope in (request.authorized_scopes or decision.scopes)
-            if not decision.scopes or scope_allows_path(scope, decision.scopes)
+            for scope in (request.authorized_scopes or decision.read_prefixes)
+            if allows(decision, scope, "read", root=self.memory_root)
         )
         if not scopes:
             raise AuthorizationDenied("policy produced no authorized retrieval scope")
 
+        narrowed = narrow(decision, "read", scopes)
         allowed_ids = request.allowed_artifact_ids
         if decision.resource_ids:
             allowed_ids = tuple(
@@ -92,33 +111,28 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
         scoped_retrieve = getattr(self.retriever, "retrieve_authorized", None)
         result = (
             scoped_retrieve(authorized_request, actor=actor,
-                            admin_gate=self.admin_gate, lifecycle=self.lifecycle)
+                            decision=narrowed, lifecycle=self.lifecycle)
             if callable(scoped_retrieve)
             else self.retriever.retrieve(authorized_request)
         )
 
         # Defense in depth: an adapter returning an out-of-scope candidate
         # cannot place it in model context.
-        authorized_hits = tuple(
-            hit
-            for hit in result.hits
-            if scope_allows_path(hit.canonical_path, scopes)
-            and (not allowed_ids or hit.artifact_id in allowed_ids)
-        )
-
         # Egregore-surface admin protection: QMD may match an admin-marked
         # document internally, but for a non-admin actor it must contribute
         # nothing to evidence — no title, path, snippet, count detail, or
         # model context. Only an opaque withheld tally survives.
+        visible_hits = []
         withheld_admin = 0
-        if self.admin_gate is not None and not self.admin_gate.actor_is_admin(actor):
-            visible_hits = []
-            for hit in authorized_hits:
-                if self.admin_gate.path_is_admin(hit.canonical_path):
-                    withheld_admin += 1
-                else:
-                    visible_hits.append(hit)
-            authorized_hits = tuple(visible_hits)
+        for hit in result.hits:
+            verdict = check(narrowed, hit.canonical_path, "read", root=self.memory_root)
+            if allowed_ids and hit.artifact_id not in allowed_ids:
+                continue
+            if verdict.reason.startswith("held:"):
+                withheld_admin += 1
+            if verdict.allowed:
+                visible_hits.append(hit)
+        authorized_hits = tuple(visible_hits)
 
         lifecycle_by_path: dict[str, LifecycleRecord] = {}
         lifecycle_revision = "unavailable"
@@ -128,7 +142,7 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
                 resolved, lifecycle_revision = self.lifecycle.resolve_paths(
                     tuple(hit.canonical_path for hit in authorized_hits),
                     source_revision=result.source_revision,
-                    authorized_scopes=scopes,
+                    decision=narrowed,
                     allowed_artifact_ids=allowed_ids,
                 )
                 lifecycle_by_path = dict(resolved)
@@ -189,6 +203,7 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
             request,
             token_budget,
             lifecycle_by_path,
+            decision=decision,  # names are shared or not against all the reader may see
         )
         # A rolling-window receipt is reusable only until its oldest delivered
         # source expires. Omitted/withheld hits must not affect this boundary.
@@ -209,6 +224,20 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
             for permission in Permission
             if self.authorizer.authorize_action(actor, permission).allowed
         )
+        # Retrieval and source packaging may outlive the authority that admitted
+        # them. Do not deliver a prepared context after revocation or a changed
+        # policy: even its omissions may name sources the reader can no longer
+        # see. The caller can retry with the current effective decision.
+        current_decision = self.authorizer.authorize_observe(actor, request)
+        if not current_decision.allowed or current_decision != decision:
+            raise AuthorizationDenied("retrieval authority changed; retry the request")
+        # Holds can change in canonical files without changing a policy receipt.
+        # Recheck every selected path, including sources named only by omissions.
+        if any(
+            not allows(current_decision, hit.canonical_path, "read", root=self.memory_root)
+            for hit in selected_hits
+        ):
+            raise AuthorizationDenied("retrieval source access changed; retry the request")
         context = OrgContext(
             schema_version="egregore-context/v1",
             context_id=f"ctx_{uuid4().hex}",
@@ -275,6 +304,8 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
         request: RetrievalRequest,
         token_budget: int,
         lifecycle_by_path: dict[str, LifecycleRecord] | None = None,
+        *,
+        decision: PolicyDecision,
     ) -> tuple[tuple[EvidenceItem, ...], tuple[str, ...], tuple[str, ...], int]:
         evidence: list[EvidenceItem] = []
         opened_ids: list[str] = []
@@ -298,8 +329,16 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
                     omissions.append(f"stale-passage:{hit.canonical_path}")
             else:
                 content = hit.passage or ""
+            # The one packaging, before the budget cuts: names of documents held from this reader leave
+            # every excerpt, title, source, revision and id; a text that cannot be redacted is not handed over.
+            try:
+                content = _packaged(decision, content, self.memory_root)
+                revision = redact(decision, hit.revision or "unknown", root=self.memory_root)
+                artifact_id = identity(decision, hit.artifact_id, hit.canonical_path, root=self.memory_root)
+            except RedactionError:
+                continue
             if not content:
-                omissions.append(f"empty:{hit.artifact_id}")
+                omissions.append(f"empty:{artifact_id}")
                 continue
 
             count = _token_count(content)
@@ -310,9 +349,9 @@ class DefaultOrgContextCompiler(OrgContextCompiler):
                 omissions.append(f"truncated:{hit.canonical_path}")
             evidence.append(
                 EvidenceItem(
-                    artifact_id=hit.artifact_id,
+                    artifact_id=artifact_id,
                     canonical_path=hit.canonical_path,
-                    revision=hit.revision or "unknown",
+                    revision=revision,
                     reason=self._evidence_reason(
                         hit,
                         (lifecycle_by_path or {}).get(hit.canonical_path),

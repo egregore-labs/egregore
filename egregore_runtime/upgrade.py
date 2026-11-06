@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -25,8 +26,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .adapters.qmd import QMD_VERSION, RERANKING_ENABLED, QmdLocalRetriever
+from .installation import InstallationIdentityError, installation_key, installation_root  # noqa: F401  (shared with the notice writer; importable here)
 
 SCHEMA_VERSION = "egregore-runtime-upgrade/v1"
+_RENDERER_INSTALL_TIMEOUT_SECONDS = 180
+_RENDERER_TERMINATE_GRACE_SECONDS = 5
 
 # Stage keys in preparation order. Labels are the user-facing truth shown by
 # Settings; keep them in plain team language.
@@ -64,6 +68,14 @@ NATIVE_SETTINGS_ADAPTERS = (".pi/settings.json", ".prime/agent/settings.json")
 CODEX_HOOKS_ADAPTER = ".codex/hooks.json"
 CODEX_PROMPT_BRIDGE = ".codex/hooks/search-hint.js"
 CLAUDE_PROMPT_BRIDGE = ".claude/hooks/search-hint.sh"
+# The instance wall's Codex PreToolUse entry and the module it runs. A
+# rollback that keeps the merged Codex hook manifest keeps these with it, so a
+# kept registration never names a script the rollback removed (the entry
+# blocks every tool when its script is missing).
+_CODEX_GUARD_DEPENDENCIES = {"bin/boundary-hook.sh": ("bin/boundary-guard.cjs",)}
+_CODEX_GUARD_FILES = frozenset(
+    (*_CODEX_GUARD_DEPENDENCIES, *(name for names in _CODEX_GUARD_DEPENDENCIES.values() for name in names))
+)
 _CLAUDE_LEGACY_PROMPT_COMMAND = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/search-hint.sh'
 _CLAUDE_HINT_SHA256 = "2d5cd92097040aadabeeeda21cf1ab3e107938e9fbf0f1520edfd367e76ce7a8"
 _CLAUDE_BRIDGE_SHA256 = "80da9077e898022e50a1045d407e0bf9e65db17aee866d17c1b4c50bd0bfae1d"
@@ -77,6 +89,9 @@ _OBSERVE_ADAPTER_SHA256 = "812ffe0707e2c63af6a05f78a170b4b09ecb84920d851ae4279bc
 # The .28 installer core at 6df97b58 has the native prompt binding API.
 _NATIVE_BINDING_CLI_SHA256 = "0d4f5b1fd66f63bacee0f8724be4a717607a4bbb34af0cda26d3f8fb88866157"
 _NATIVE_BINDING_MODULE_SHA256 = "e3d1a387d6d26f0181c25b051dcff17f9eb929e6ad6b04b44119120a5058904d"
+# The same API with one binding store per installation (#1957). Reviewed bytes
+# only: a module edited in place must not vouch for itself.
+_NATIVE_BINDING_SHARED_STORE_SHA256 = "edbb7d6bb03e04ae3bd6d81ae3dc1b5a06366908329357dd8159c76957759ef1"
 ROLLBACK_OWNERSHIP_SCHEMA = "egregore-rollback-ownership/v1"
 LEGACY_BASELINE_SCHEMA = "egregore-legacy-baseline/v1"
 _LEGACY_TEMPLATE_FILES = ("egregore.json", "CLAUDE.md", "bin/session-start.sh")
@@ -351,65 +366,16 @@ class UpgradeStore:
         self.cancel_path.unlink(missing_ok=True)
 
 
-def installation_root(repository_root: Path) -> Path:
-    """The main installation directory a checkout belongs to.
-
-    A linked git worktree (``.git`` is a file) belongs to its main checkout;
-    upgrade state is per installation, so every worktree of one install
-    shares it. A standalone clone is its own installation.
-    """
-    root = repository_root.resolve()
-    git_marker = root / ".git"
-    if git_marker.is_file():
-        try:
-            content = git_marker.read_text(encoding="utf-8")
-            for line in content.splitlines():
-                if line.startswith("gitdir:"):
-                    git_dir = Path(line.split(":", 1)[1].strip())
-                    if not git_dir.is_absolute():
-                        git_dir = (root / git_dir).resolve()
-                    # <main>/.git/worktrees/<name> → <main>
-                    if git_dir.parent.name == "worktrees" and git_dir.parent.parent.name == ".git":
-                        return git_dir.parent.parent.parent.resolve()
-        except OSError:
-            pass
-    return root
-
-
-def instance_key(repository_root: Path) -> str:
-    """Durable upgrade-state key: stable org identity × installation identity.
-
-    Identity is never inferred from a path alone: the stable organization ID
-    from egregore.json is required and leads the key, so two organizations
-    that share, symlink, or otherwise resolve to the same memory repository
-    can never share activation, worker, lock, or rollback state. The
-    installation path is composed in explicitly so two installs of the same
-    organization stay independent, while worktrees of one install share it.
-    A checkout without a stable org_id fails closed.
-    """
-    root = repository_root.resolve()
-    try:
-        config = json.loads((root / "egregore.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise UpgradeError(f"cannot read egregore.json for instance identity: {exc}") from exc
-    org_id = str(config.get("org_id") or "").strip()
-    if not org_id:
-        raise UpgradeError(
-            "this instance has no stable org_id; upgrade state fails closed "
-            "without a stable organization identity"
-        )
-    install = installation_root(root)
-    import hashlib
-
-    return hashlib.sha256(f"{org_id}|{install}".encode("utf-8")).hexdigest()[:16]
-
-
 def upgrade_root(repository_root: Path) -> Path:
     """Instance-scoped upgrade state dir, keyed by composed stable identity."""
+    try:
+        key = installation_key(repository_root)
+    except InstallationIdentityError as exc:
+        raise UpgradeError(str(exc)) from exc
     override = os.environ.get("EGREGORE_UPGRADE_ROOT")
     if override:
-        return Path(override).expanduser() / instance_key(repository_root)
-    return Path.home() / ".egregore" / "runtime" / "upgrade" / instance_key(repository_root)
+        return Path(override).expanduser() / key
+    return Path.home() / ".egregore" / "runtime" / "upgrade" / key
 
 
 def build_cli_context(repository_root: Path):
@@ -628,6 +594,54 @@ class UpgradeEngine:
         if probe.returncode != 0:
             self._fail(state, "node", "the selected Node runtime failed its version probe")
             return False
+        # Explicit Runtime preparation owns package provisioning. Preview and
+        # session startup only resolve installed renderers. Older candidates
+        # predate this helper and retain their original upgrade contract.
+        renderer_installer = (
+            Path(state.get("installed_path") or "")
+            / "runtime" / APPLY_TREE / "bin" / "artifact-renderer-install.sh"
+        )
+        if renderer_installer.is_file():
+            environment = {**os.environ, **self.retriever.environment}
+            environment["PATH"] = str(Path(node).parent) + os.pathsep + environment.get("PATH", "")
+            try:
+                with subprocess.Popen(
+                    ("bash", str(renderer_installer), "--root", str(self.repository_root)),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    cwd=self.repository_root, env=environment, start_new_session=True,
+                ) as renderer:
+                    try:
+                        stdout, stderr = renderer.communicate(timeout=_RENDERER_INSTALL_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        # npm is a child of the installer shell. Stop the entire
+                        # group so its EXIT cleanup can run without an orphaned
+                        # package manager still writing into the staging tree.
+                        try:
+                            os.killpg(renderer.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            renderer.communicate(timeout=_RENDERER_TERMINATE_GRACE_SECONDS)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        finally:
+                            # A child may ignore TERM even after Bash exits.
+                            try:
+                                os.killpg(renderer.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            renderer.communicate()
+                        raise
+            except subprocess.TimeoutExpired:
+                self._fail(state, "node", f"artifact renderer provisioning timed out after {_RENDERER_INSTALL_TIMEOUT_SECONDS} seconds; retry preparation")
+                return False
+            except OSError as exc:
+                self._fail(state, "node", f"artifact renderer provisioning failed: {exc}")
+                return False
+            if renderer.returncode != 0:
+                detail = (stderr or stdout).strip()
+                self._fail(state, "node", f"artifact renderer provisioning failed: {detail}")
+                return False
         self._mark(state, "node", "done", f"{probe.stdout.strip()} at instance-selected path")
         return True
 
@@ -1022,6 +1036,54 @@ class UpgradeEngine:
         else:
             raise UpgradeError("interrupted activation has invalid prior ownership metadata")
 
+    @staticmethod
+    def _merge_framework_hooks(hooks: dict, candidate: Mapping[str, Any]) -> None:
+        """Bring the candidate's framework hook registrations into kept hooks.
+
+        A framework hook is known by the repository script its command runs.
+        For every event other than the prompt (migrated above), an existing
+        hook that runs one of the candidate's scripts is replaced by the
+        candidate's registration, so a changed matcher or command arrives too;
+        user hooks keep their place after the framework ones.
+        """
+        import copy
+
+        script = re.compile(r'\$\(git rev-parse --show-toplevel\)/([^"\s]+)')
+        events = hooks.setdefault("hooks", {})
+        for name, groups in candidate.get("hooks", {}).items():
+            if name == "UserPromptSubmit" or not isinstance(groups, list):
+                continue
+            owned = {match for group in groups for hook in group.get("hooks", [])
+                     for match in script.findall(str(hook.get("command", "")))}
+            if not owned:
+                continue
+            kept = []
+            for group in events.get(name, []):
+                users = [hook for hook in group.get("hooks", [])
+                         if not owned & set(script.findall(str(hook.get("command", ""))))]
+                if users:
+                    kept.append({**group, "hooks": users})
+            events[name] = copy.deepcopy(groups) + kept
+
+    @staticmethod
+    def _kept_guard_files(hooks: Mapping[str, Any], selected: Mapping[str, Path], instance: Path) -> list[str]:
+        """Guard files the kept manifest runs that this candidate adds.
+
+        Rollback removes candidate-added files but keeps the merged manifest,
+        so the guard scripts its PreToolUse registrations run, and the files
+        they load, stay with it.
+        """
+        script = re.compile(r'\$\(git rev-parse --show-toplevel\)/([^"\s]+)')
+        kept: list[str] = []
+        for group in hooks.get("hooks", {}).get("PreToolUse", []) or []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                for relative in script.findall(str(hook.get("command", ""))):
+                    for name in (relative, *_CODEX_GUARD_DEPENDENCIES.get(relative, ())):
+                        if (name in _CODEX_GUARD_FILES and name in selected and name not in kept
+                                and not ((instance / name).exists() or (instance / name).is_symlink())):
+                            kept.append(name)
+        return kept
+
     def _codex_rollback_compatibility(
         self, instance: Path, selected: dict[str, Path], ownership: Mapping[str, Any],
         *, legacy_prompt: dict | None = None,
@@ -1071,7 +1133,9 @@ class UpgradeEngine:
                 # package version or execute code from the installation being read.
                 supports = {
                     "bin/observe-context.sh": {_OBSERVE_ADAPTER_SHA256},
-                    "egregore_runtime/episode_binding.py": {_NATIVE_BINDING_MODULE_SHA256},
+                    "egregore_runtime/episode_binding.py": {
+                        _NATIVE_BINDING_MODULE_SHA256, _NATIVE_BINDING_SHARED_STORE_SHA256,
+                    },
                     "egregore_runtime/harness_cli.py": {
                         _NATIVE_BINDING_CLI_SHA256,
                         self._sha256(Path(__file__).with_name("harness_cli.py")),
@@ -1104,7 +1168,13 @@ class UpgradeEngine:
             # Already-native hooks need no historical API migration. Keep the
             # existing adapter and user siblings across subsequent upgrades;
             # never gate normal future releases on the legacy CLI hash pins.
+            # The kept manifest still receives every framework guard the
+            # candidate registers (the instance wall, the branch policy).
+            candidate_hooks = json.loads(selected[CODEX_HOOKS_ADAPTER].read_text(encoding="utf-8"))
+            self._merge_framework_hooks(hooks, candidate_hooks)
             contents[CODEX_HOOKS_ADAPTER] = json.dumps(hooks, indent=2) + "\n"
+            guards = {name: selected[name].read_text(encoding="utf-8")
+                      for name in self._kept_guard_files(hooks, selected, instance)}
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise UpgradeError(
                 "Codex prompt hooks need compatibility repair before upgrading; "
@@ -1117,6 +1187,12 @@ class UpgradeEngine:
             staged.parent.mkdir(parents=True, exist_ok=True)
             staged.write_text(content, encoding="utf-8")
             selected[relative] = staged
+            compatibility[relative] = {
+                "content": content, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+        # Guard files activate from the candidate itself (its file mode kept);
+        # recording them here only keeps them through rollback.
+        for relative, content in guards.items():
             compatibility[relative] = {
                 "content": content, "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             }
@@ -1170,7 +1246,9 @@ class UpgradeEngine:
             if script_hash == _CLAUDE_HINT_SHA256:
                 supports = {
                     "bin/observe-context.sh": {_OBSERVE_ADAPTER_SHA256},
-                    "egregore_runtime/episode_binding.py": {_NATIVE_BINDING_MODULE_SHA256},
+                    "egregore_runtime/episode_binding.py": {
+                        _NATIVE_BINDING_MODULE_SHA256, _NATIVE_BINDING_SHARED_STORE_SHA256,
+                    },
                     "egregore_runtime/harness_cli.py": {
                         _NATIVE_BINDING_CLI_SHA256, self._sha256(Path(__file__).with_name("harness_cli.py")),
                     },
@@ -1232,7 +1310,7 @@ class UpgradeEngine:
         if value == {}:
             return value
         if (not isinstance(value, dict)
-                or set(value) - {CODEX_HOOKS_ADAPTER, CODEX_PROMPT_BRIDGE, CLAUDE_PROMPT_BRIDGE}
+                or set(value) - {CODEX_HOOKS_ADAPTER, CODEX_PROMPT_BRIDGE, CLAUDE_PROMPT_BRIDGE, *_CODEX_GUARD_FILES}
                 or (CODEX_PROMPT_BRIDGE in value and CODEX_HOOKS_ADAPTER not in value)):
             raise UpgradeError("rollback prompt compatibility metadata is invalid; no files were restored")
         for entry in value.values():

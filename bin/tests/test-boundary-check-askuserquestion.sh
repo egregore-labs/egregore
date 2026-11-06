@@ -108,11 +108,42 @@ OUT=$(run_hook '{"tool_name":"Read","tool_input":{"file_path":"/tmp/scratch.txt"
 RC="${OUT%%|*}"
 [ "$RC" = "0" ] && pass "Read /tmp system path exits 0" || fail "Read /tmp exit code" "expected 0, got $RC"
 
-# --- 6. No-boundary-file fallback still permits (soft-fail) ---
+# --- 6. Missing boundary file: recomputed, never fail-open ---
+# The hook computes the boundary itself from a sandboxed registry instead of
+# allowing everything.
 rm -f "$BOUNDARY_FILE"
-OUT=$(run_hook '{"tool_name":"Read","tool_input":{"file_path":"/Users/someone/Downloads/x.txt"}}')
-RC="${OUT%%|*}"
-[ "$RC" = "0" ] && pass "Missing boundary file falls through to allow" || fail "Missing boundary exit code" "expected 0 (soft-fail), got $RC"
+SANDBOX_HOME="$(mktemp -d)"
+mkdir -p "$SANDBOX_HOME/.egregore"
+printf '[{"slug":"rival","name":"Rival","path":"/Users/someone-else/rival","org_id":"org-rival"}]\n' > "$SANDBOX_HOME/.egregore/instances.json"
+run_sandboxed() {
+  local err rc
+  err=$(echo "$1" | HOME="$SANDBOX_HOME" "$HOOK" 2>&1 >/dev/null)
+  rc=$?
+  printf '%s|%s' "$rc" "$err"
+}
+OUT=$(run_sandboxed '{"tool_name":"Read","tool_input":{"file_path":"/Users/someone-else/rival/secret.txt"}}')
+RC="${OUT%%|*}"; ERR="${OUT#*|}"
+[ "$RC" = "2" ] && grep -q "another Egregore instance" <<< "$ERR" \
+  && pass "Missing boundary file: registered instance still denied" \
+  || fail "Missing boundary file let an instance through" "$OUT"
+OUT=$(run_sandboxed '{"tool_name":"Read","tool_input":{"file_path":"/Users/someone/Documents/x.txt"}}')
+RC="${OUT%%|*}"; ERR="${OUT#*|}"
+[ "$RC" = "2" ] && grep -q "Boundary consent needed" <<< "$ERR" \
+  && pass "Missing boundary file: outside read still asks for consent" \
+  || fail "Missing boundary file skipped the consent gate" "$OUT"
+OUT=$(run_sandboxed "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$FIXTURE_PROJECT/README.md\"}}")
+[ "${OUT%%|*}" = "0" ] && pass "Missing boundary file: project read allowed" || fail "Missing boundary file blocked project read" "$OUT"
+rm -rf "$SANDBOX_HOME"
+
+# --- 7. A blocked write offers only options that grant writes ---
+# read[] grants reads only, so "Always allow on this instance" cannot unblock a write.
+cat > "$BOUNDARY_FILE" <<EOF
+{"project_dir": "$FIXTURE_PROJECT", "memory_dir": "$FIXTURE_MEMORY", "managed_repos": [], "denied_paths": []}
+EOF
+OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/Users/someone/Documents/out.txt"}}')
+ERR="${OUT#*|}"
+grep -q "for this session" <<< "$ERR" && pass "Write block offers the session grant" || fail "Write block missing session grant" "$ERR"
+grep -q "Always allow on this instance" <<< "$ERR" && fail "Write block offers a read-only grant" "$ERR" || pass "Write block omits the read-only grant"
 
 # --- Summary ---
 echo ""

@@ -85,9 +85,15 @@ scope checkpoint. Otherwise continue without ritual confirmation.
   drafts by default; passing `--draft` also converts an existing ready PR
   before pushing, avoiding paid checks on unfinished iterations.
 - When the requested work is complete and local QA/review has passed, use
-  `--ready`. For an existing draft, the bridge pushes the final head before
-  marking it ready, so CI checks the saved version. If checks fail or another
-  edit is needed, use `--draft` for the next in-progress save.
+  `--ready`. In the Egregore source repository (not an installed instance)
+  the bridge first runs the checks CI would select for the branch on this
+  machine, which can take as long as a CI run; run the save in the
+  background where the harness allows. If a check fails, the work is still
+  pushed, the PR stays a draft, and the bridge exits non-zero naming the
+  check and its log: fix it, then save with `--ready` again. For an existing
+  draft, the bridge pushes the final head before marking it ready, so CI
+  checks the saved version. If CI fails or another edit is needed, use
+  `--draft` for the next in-progress save.
 - Non-coding saves keep their existing ready/auto-merge behavior. Omit the
   readiness flag unless the work should deliberately remain a draft.
 - Without a flag, existing PRs retain their current readiness. `--draft` and

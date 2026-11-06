@@ -33,6 +33,8 @@
       "patterns": [
         "docs/plans/**/*.md",
         "docs/research/**/*.md",
+        "docs/specs/linked-v1.md",
+        "docs/goals/genui-modernization-roadmap.md",
         "docs/ci-cost-controls.md"
       ],
       "groups": [],
@@ -85,6 +87,43 @@
       "python_suites": [],
       "rationale": "Runtime owns ranking, GitHub lookup, readiness, advisory triage and the CLI paths calling these leaf modules, plus all generated bundles. Shared issue CLI, reporting, marker and GitHub adapter sources remain unmapped because they have broader consumers."
     },
+    "taste-capture": {
+      "patterns": [
+        "egregore_runtime/taste.py",
+        "egregore_runtime/taste_cli.py",
+        "egregore_runtime/taste_rules.py",
+        "bin/genui.sh",
+        "bin/lib/genui-entry.py",
+        "tests/test_runtime_taste.py"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Reaction capture is a Runtime leaf: its CLI entry, reader and writer run through Runtime contracts · python, selected together with Runtime contracts, which rebuilds the generated bundles. The shared writeback module it creates files through stays unmapped because it has broader consumers."
+    },
+    "document-runtime": {
+      "patterns": [
+        "egregore_runtime/documents.py",
+        "egregore_runtime/documents_cli.py",
+        "egregore_runtime/document_lines.py",
+        "egregore_runtime/document_modes.py",
+        "bin/document.sh",
+        "tests/test_runtime_documents.py",
+        "tests/test_document_lines.py",
+        "tests/test_document_modes.py",
+        "tests/test_document_parity.py",
+        "experiments/egregore-mind/js/doc.js",
+        "experiments/egregore-mind/js/tests/blocks.json"
+      ],
+      "groups": [
+        "runtime"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "The document verbs are a Runtime leaf: their CLI, the shell wrapper every harness calls, both suites, and the Mind page's block cut (js/doc.js and its shared cases, which documents.blocks ports) run through Runtime contracts · python, selected together with Runtime contracts, which rebuilds the generated bundles. The shared artifact store and writeback modules they write through stay unmapped because they have broader consumers."
+    },
     "runtime-contract-tests": {
       "patterns": [
         "tests/test_runtime_source_open.py",
@@ -108,7 +147,7 @@
       ],
       "shell_suites": [],
       "python_suites": [],
-      "rationale": "These former satellite tests and their cross-test fixture consumers execute together in Runtime contracts. This maps test inputs only. Runtime-observe and QMD test fixtures also have consumers outside this owner and remain unmapped, as do shared sources and fixtures."
+      "rationale": "These former satellite tests and their cross-test fixture consumers execute together in Runtime contracts · python, selected together with Runtime contracts. This maps test inputs only. Runtime-observe and QMD test fixtures also have consumers outside this owner and remain unmapped, as do shared sources and fixtures."
     },
     "runtime-bundles": {
       "patterns": [
@@ -165,9 +204,38 @@
       ],
       "python_suites": [],
       "rationale": "The existing deterministic shell suite owns the evaluation rig and fixture isolation; it skips its real-startup integration unless explicitly enabled. Historical outputs are conservatively included because the fixture copies the directory except runs and __pycache__."
+    },
+    "mind": {
+      "patterns": [
+        "experiments/egregore-mind/**"
+      ],
+      "groups": [
+        "mind"
+      ],
+      "shell_suites": [],
+      "python_suites": [],
+      "rationale": "Mind fast contracts executes the maintained synthetic Python/pure-JS/worker manifest and validates fresh result receipts. Browser integration has a separate explicit manual gate, not implied by CI. Shared Runtime and framework sources remain unmapped and retain full coverage."
     }
   },
   "historical_replays": [
+    {
+      "pr": 1771,
+      "paths": [
+        "docs/specs/linked-v1.md"
+      ],
+      "domains": [
+        "planning-prose"
+      ]
+    },
+    {
+      "pr": 1774,
+      "paths": [
+        "docs/goals/genui-modernization-roadmap.md"
+      ],
+      "domains": [
+        "planning-prose"
+      ]
+    },
     {
       "pr": 1799,
       "paths": [

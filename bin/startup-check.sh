@@ -13,7 +13,6 @@ STATE_FILE="$SCRIPT_DIR/.egregore-state.json"
 [ -f "$ENV_FILE" ] || exit 0
 
 # --- Read config ---
-API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
 MODE=$(jq -r '.mode // "local"' "$CONFIG" 2>/dev/null)
 CONFIG_SLUG=$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)
 ORG_NAME=$(jq -r '.org_name // empty' "$CONFIG" 2>/dev/null)
@@ -21,6 +20,7 @@ GITHUB_ORG=$(jq -r '.github_org // empty' "$CONFIG" 2>/dev/null)
 
 # shellcheck source=bin/lib/config.sh
 source "$SCRIPT_DIR/bin/lib/config.sh"
+API_URL=$(_config_api_url)
 
 # Runtime telemetry and diagnostics remain on-device by default. Historical
 # Connected health reporting is retained only as an explicit operator action;

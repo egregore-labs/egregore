@@ -72,8 +72,11 @@ fixture '{"mode":"connected"}'
 check "connected mode without API URL → local" $'local\n' mode
 
 for key in api_url github_org org_name slug memory_repo upstream_url; do
-  fixture "{\"$key\":\"value for $key\"}"
-  check "$key prints its top-level string" "value for $key"$'\n' "$key"
+  # api_url is used only as a plain web address (bin/lib/config.sh).
+  value="value for $key"
+  [ "$key" = api_url ] && value="https://value-for-api-url.example/v1"
+  fixture "{\"$key\":\"$value\"}"
+  check "$key prints its top-level string" "$value"$'\n' "$key"
   fixture '{}'
   check "$key absent prints no bytes" '' "$key"
   fixture "{\"$key\":null}"
@@ -85,6 +88,10 @@ for key in api_url github_org org_name slug memory_repo upstream_url; do
     check "$key non-string ($nonstring) is unset and prints no bytes" '' "$key"
   done
 done
+
+fixture '{"api_url":"value for api_url"}'
+reject "an api_url that is not a plain web address prints nothing and says why" 1 \
+  "The hosted services address isn't a plain web address, so nothing was sent. Correct api_url in egregore.json; the hosted address is https://api.egregore.xyz." api_url
 
 fixture '{"org_name":"-n"}'
 check "org_name -n is printed literally" $'-n\n' org_name

@@ -60,7 +60,7 @@ Usage:
   capture-run.sh --mode personal|baseline --author HANDLE --topic TOPIC
     --summary SUMMARY [--session-id ID] [--branch BRANCH] [--date ISO]
     [--duration TEXT] [--open-threads-json JSON] [--no-push]
-    [--async-push] [--no-reconcile] < details.md
+    [--async-push] [--no-reconcile] [--replace-session] < details.md
 EOF
 }
 
@@ -139,6 +139,11 @@ OPEN_THREADS_JSON="[]"
 NO_PUSH=0
 ASYNC_PUSH=0
 NO_RECONCILE=0
+REPLACE_SESSION=0
+RECORD_METADATA=""
+RECORD_ROOT="$SCRIPT_DIR"
+RECORD_FOLDER=""
+RECORD_STAGING=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -154,10 +159,31 @@ while [ $# -gt 0 ]; do
     --no-push) NO_PUSH=1; shift ;;
     --async-push) ASYNC_PUSH=1; shift ;;
     --no-reconcile) NO_RECONCILE=1; shift ;;
+    --replace-session) REPLACE_SESSION=1; shift ;;
+    --record-metadata) RECORD_METADATA="${2:-}"; shift 2 ;;
+    --project-root) RECORD_ROOT="${2:-}"; shift 2 ;;
+    --record-folder) RECORD_FOLDER="${2:-}"; shift 2 ;;
+    --staging) RECORD_STAGING="${2:-}"; shift 2 ;;
     --no-index|--no-publish|--no-notify) shift ;; # addressed-only compatibility flags
     *) echo "Unknown capture option: $1" >&2; exit 1 ;;
   esac
 done
+
+# Session records use the same capture entry point with an isolated writer.
+# Replacement, revision guards, staging, and the canonical memory lock apply
+# only to this path; checkpoint records write files without committing.
+if [ "$REPLACE_SESSION" = "1" ] && [ "$CAPTURE_MODE" = "baseline" ]; then
+  RECORD_ARGS=(capture --root "$RECORD_ROOT")
+  if [ -n "$RECORD_METADATA" ]; then
+    RECORD_ARGS+=(--data "$RECORD_METADATA")
+  else
+    RECORD_ARGS+=(--author "$AUTHOR" --topic "$TOPIC" --summary "$SUMMARY"
+      --session-id "$SESSION_ID" --branch "$BRANCH" --date "$CAPTURE_DATE" --duration "$DURATION")
+  fi
+  [ -z "$RECORD_FOLDER" ] || RECORD_ARGS+=("--folder=$RECORD_FOLDER")
+  [ -z "$RECORD_STAGING" ] || RECORD_ARGS+=(--staging "$RECORD_STAGING")
+  exec python3 "$SCRIPT_DIR/bin/lib/session_record.py" "${RECORD_ARGS[@]}"
+fi
 
 AUTHOR="$(printf '%s' "$AUTHOR" | tr -cd 'a-zA-Z0-9_-')"
 [ -n "$AUTHOR" ] || { echo "Missing --author" >&2; exit 1; }
@@ -253,7 +279,11 @@ memory_save() {
       local _
       for _ in 1 2 3; do
         git pull --rebase origin main --quiet >/dev/null 2>&1 || true
-        git push origin main --quiet >/dev/null 2>&1 && exit 0
+        if bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$SCRIPT_DIR/memory" --branch main >/dev/null 2>&1; then
+          exit 0
+        else
+          case "$?" in 75) ;; *) exit 1 ;; esac
+        fi
         sleep 1
       done
       exit 1

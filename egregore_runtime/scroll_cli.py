@@ -7,6 +7,7 @@ import json
 import os
 from uuid import uuid4
 
+from . import held
 from .runtime import local_runtime, runtime_root
 from .scratch import read_and_consume
 from .scrolls import CanonicalScrollService, EXACT_SHARE_CONFIRMATION, ScrollError
@@ -45,8 +46,8 @@ def _receipts(rows):
 
 def _show(args):
     actor, service = _context()
-    print(json.dumps({"scroll": _row(service.read(actor, args.slug))}, ensure_ascii=False))
-    return 0
+    row = _row(service.read(actor, args.slug))
+    return held.emit_for(service.runtime, actor, {"scroll": row}, paths=(row["canonical_path"],))
 
 
 def _create(args):
@@ -65,8 +66,9 @@ def _create(args):
         attention_ttl_days=args.ttl_days,
         supersedes=args.supersedes,
     )
-    print(json.dumps({"scroll": _row(snapshot), "writeback": _receipts(receipts)}, ensure_ascii=False))
-    return 0 if all(row.status.value in {"accepted", "partial"} for row in receipts) else 1
+    ok = all(row.status.value in {"accepted", "partial"} for row in receipts)
+    return held.emit_for(service.runtime, actor, {"scroll": _row(snapshot), "writeback": _receipts(receipts)}) or (
+        0 if ok else 1)
 
 
 def _event(args):
@@ -79,24 +81,18 @@ def _event(args):
         face_markdown=read_and_consume(args.face, runtime_root()).decode("utf-8") if args.face else None,
         source_html=args.html,
     )
-    print(
-        json.dumps(
-            {
-                "scroll": _row(receipt.scroll),
-                "event_id": receipt.event_id,
-                "disposition": receipt.disposition,
-                "writeback": _receipts(receipt.receipts),
-            },
-            ensure_ascii=False,
-        )
-    )
-    return 0 if all(row.status.value in {"accepted", "partial"} for row in receipt.receipts) else 1
+    ok = all(row.status.value in {"accepted", "partial"} for row in receipt.receipts)
+    return held.emit_for(service.runtime, actor, {
+        "scroll": _row(receipt.scroll),
+        "event_id": receipt.event_id,
+        "disposition": receipt.disposition,
+        "writeback": _receipts(receipt.receipts),
+    }) or (0 if ok else 1)
 
 
 def _ledger(args):
     actor, service = _context()
-    print(json.dumps(service.project_ledger(actor, args.slug), ensure_ascii=False))
-    return 0
+    return held.emit_for(service.runtime, actor, service.project_ledger(actor, args.slug))
 
 
 def _plan_share(args):
@@ -104,8 +100,7 @@ def _plan_share(args):
     plan = service.plan_share(
         actor, slug=args.slug, html_path=args.html, description=args.description
     )
-    print(json.dumps(plan.to_dict(), ensure_ascii=False))
-    return 0
+    return held.emit_for(service.runtime, actor, plan.to_dict())
 
 
 def _share(args):
@@ -116,18 +111,13 @@ def _share(args):
         digest=args.digest,
         confirmation=args.confirm,
     )
-    print(
-        json.dumps(
-            {
-                "plan_id": receipt.plan_id,
-                "slug": receipt.slug,
-                "url": receipt.url,
-                "writeback": _receipts(receipt.writeback),
-            },
-            ensure_ascii=False,
-        )
-    )
-    return 0 if all(row.status.value in {"accepted", "partial"} for row in receipt.writeback) else 1
+    ok = all(row.status.value in {"accepted", "partial"} for row in receipt.writeback)
+    return held.emit_for(service.runtime, actor, {
+        "plan_id": receipt.plan_id,
+        "slug": receipt.slug,
+        "url": receipt.url,
+        "writeback": _receipts(receipt.writeback),
+    }) or (0 if ok else 1)
 
 
 def _parser():

@@ -151,6 +151,19 @@ else
   fail "native session guard leaked across sessions"
 fi
 
+# --- A session launched in a linked worktree: bindings live in the main checkout's store ---
+MAIN="$WORK/main"
+TASK="$MAIN/.claude/worktrees/topic"
+mkdir -p "$MAIN/.git/worktrees/topic" "$MAIN/.egregore/runtime/bindings" "$TASK/.egregore/runtime/investigations"
+ln -s "$MEMREAL" "$TASK/memory"
+printf 'gitdir: %s\n' "$MAIN/.git/worktrees/topic" > "$TASK/.git"
+jq -cn --arg ep "$EPISODE" '{episode_id:$ep}' > "$MAIN/.egregore/runtime/bindings/$BINDING_KEY.current"
+printf '{}' > "$TASK/.egregore/runtime/investigations/$STATE_KEY.json"
+REASON=$(jq -cn --arg session "$NATIVE_SESSION" '{session_id:$session,tool_name:"Bash",tool_input:{command:"cat memory/quests/acme.md"}}' \
+  | CLAUDE_PROJECT_DIR="$TASK" bash "$HOOK" 2>&1 >/dev/null)
+grep -q -- "--episode $EPISODE" <<< "$REASON" && pass "a linked worktree reads its main checkout's binding store" \
+  || fail "worktree session missed the installation's binding"
+
 echo ""
 echo "memory-read-guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

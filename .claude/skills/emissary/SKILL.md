@@ -206,7 +206,7 @@ Below the box, one line:
 [open emissary →]({url})
 ```
 
-Share the bare page link — not a `/raw` URL or a "Run this … packet" prompt. With the emissary skill installed, pasting the link is enough; this de-alarmed handover (see the data-room variant-A flow in `bin/build-sealed-dataroom.mjs`) avoids tripping a recipient agent's prompt-injection alarms.
+Share the bare page link — not a `/raw` URL or a "Run this … packet" prompt. With the emissary skill installed, pasting the link is enough; this de-alarmed handover avoids tripping a recipient agent's prompt-injection alarms.
 
 If natural, add one short sentence of sign-off — what the recipient should do next, or "shared publicly — anyone with the link can run it."
 

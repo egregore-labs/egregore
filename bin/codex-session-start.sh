@@ -26,6 +26,16 @@ rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch
 rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
 # Prune abandoned scratch without blocking startup or fresh sibling work.
 ( bash "$SCRIPT_DIR/bin/scratch-sweep.sh" --older-than 60 >/dev/null 2>&1 & ) 2>/dev/null
+# Compute the session boundary the pre-action checks read (Codex hook, Pi and
+# Prime tool_call gate) — the same shared computation Claude's SessionStart
+# runs. If it fails, the checks recompute it themselves instead of failing open.
+bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/bin/boundary-guard.cjs" write-cache "$SCRIPT_DIR" >/dev/null 2>&1 || true
+# Registry maintenance shared with Claude's SessionStart: drop entries that are
+# another instance's runtime state (bin/lib/instance-registry.sh).
+if command -v jq >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/bin/lib/instance-registry.sh" ]; then
+  ( ( source "$SCRIPT_DIR/bin/lib/instance-registry.sh" \
+      && egregore_registry_prune "$HOME/.egregore/instances.json" ) >/dev/null 2>&1 & ) 2>/dev/null || true
+fi
 
 if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
   source "$SCRIPT_DIR/bin/lib/worktree-links.sh" >/dev/null 2>/dev/null || true
@@ -77,7 +87,12 @@ if [ "$LOCAL_MODE" != "true" ]; then
   fi
 fi
 
+source "$SCRIPT_DIR/bin/lib/startup-restart.sh"
+_STARTUP_HEAD=$(egregore_startup_head)
 source "$SCRIPT_DIR/bin/lib/git-sync.sh" >/dev/null 2>/dev/null
+# A sync that pulled a newer startup finishes on it (bin/lib/startup-restart.sh).
+egregore_startup_restart "$_STARTUP_HEAD" "$SCRIPT_DIR/bin/codex-session-start.sh" "$@"
+unset _STARTUP_HEAD
 source "$SCRIPT_DIR/bin/lib/health-footer.sh"
 source "$SCRIPT_DIR/bin/lib/notices.sh"
 _notice_init
@@ -237,6 +252,10 @@ render_card() {
 case "${1:---card}" in
   --card|card)
     render_card
+    EGREGORE_GREETING_RECORDS_ONLY=1 source "$SCRIPT_DIR/bin/lib/greeting.sh"
+    _print_session_records
+    EGREGORE_HARNESS="${EGREGORE_HARNESS:-codex}" _print_reflexes
+    ( bash "$SCRIPT_DIR/bin/session-record.sh" --mode sweep >/dev/null 2>&1 & ) 2>/dev/null
     ;;
   --prompt|prompt)
     native_tokens="$(bash "$SCRIPT_DIR/bin/codex-sync-skills.sh" --list-native | awk 'BEGIN { sep="" } NF { printf "%s$%s", sep, $0; sep=", " }')"

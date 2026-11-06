@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 from uuid import uuid4
 
+from . import held
 from .contracts import Permission
-from .policy import scope_allows_path
+from .policy import action_for, check
 from .quests import CanonicalQuestService
 from .runtime import local_runtime
 
@@ -42,9 +42,12 @@ def _require(
     decision = runtime.authorize(actor, permission, (resource,))
     if not decision.allowed:
         raise PermissionError("; ".join(decision.reasons) or f"quest {permission.value} denied")
-    if canonical_path and not scope_allows_path(canonical_path, decision.scopes):
+    if not canonical_path:
+        return decision, None
+    verdict = check(decision, canonical_path, action_for(decision.permission), root=runtime.canonical_root)
+    if not verdict.allowed:
         raise PermissionError("quest path is outside the actor's authorized scope")
-    return decision
+    return decision, verdict.resolved  # readers open the path the predicate resolved
 
 
 def _row(snapshot, *, detail: bool = False):
@@ -67,40 +70,34 @@ def _row(snapshot, *, detail: bool = False):
 
 def _list(args):
     runtime, actor, service = _context()
-    decision = _require(runtime, actor, Permission.READ, "quests")
+    decision, _ = _require(runtime, actor, Permission.READ, "quests")
     rows = [
         _row(snapshot)
         for snapshot in service.list(
             actor,
             include_completed=args.all,
-            authorized_scopes=decision.scopes,
+            decision=decision,
         )
     ]
-    print(json.dumps({"quests": rows}, ensure_ascii=False))
-    return 0
+    return held.emit(decision, {"quests": rows}, root=runtime.canonical_root, each=("quests", "canonical_path"))
 
 
 def _show(args):
     runtime, actor, service = _context()
-    _require(
+    decision, source = _require(
         runtime,
         actor,
         Permission.READ,
         f"quest:{args.slug}",
         canonical_path=service.canonical_path(args.slug),
     )
-    print(json.dumps({"quest": _row(service.read(actor, args.slug), detail=True)}, ensure_ascii=False))
-    return 0
+    row = _row(service.read(actor, args.slug, source=source), detail=True)
+    return held.emit(decision, {"quest": row}, root=runtime.canonical_root, paths=(row["canonical_path"],))
 
 
-def _write_result(snapshot, receipt):
-    print(
-        json.dumps(
-            {"quest": _row(snapshot), "writeback": receipt.to_dict()},
-            ensure_ascii=False,
-        )
-    )
-    return 0 if receipt.status.value in {"accepted", "partial"} else 1
+def _write_result(runtime, actor, snapshot, receipt):
+    return held.emit_for(runtime, actor, {"quest": _row(snapshot), "writeback": receipt.to_dict()}) or (
+        0 if receipt.status.value in {"accepted", "partial"} else 1)
 
 
 def _create(args):
@@ -121,7 +118,7 @@ def _create(args):
         projects=args.project,
         threads=args.thread,
     )
-    return _write_result(snapshot, receipt)
+    return _write_result(runtime, actor, snapshot, receipt)
 
 
 def _prioritize(args):
@@ -135,7 +132,7 @@ def _prioritize(args):
     )
     value = PRIORITIES.get(args.priority, int(args.priority) if args.priority.isdigit() else -1)
     snapshot, receipt = service.prioritize(actor, slug=args.slug, priority=value)
-    return _write_result(snapshot, receipt)
+    return _write_result(runtime, actor, snapshot, receipt)
 
 
 def _transition(args):
@@ -153,7 +150,7 @@ def _transition(args):
         status=args.command,
         outcome=getattr(args, "outcome", None),
     )
-    return _write_result(snapshot, receipt)
+    return _write_result(runtime, actor, snapshot, receipt)
 
 
 def _contribute(args):
@@ -166,7 +163,7 @@ def _contribute(args):
         canonical_path=service.canonical_path(args.slug),
     )
     snapshot, receipt = service.contribute(actor, slug=args.slug, text=args.text)
-    return _write_result(snapshot, receipt)
+    return _write_result(runtime, actor, snapshot, receipt)
 
 
 def _parser():

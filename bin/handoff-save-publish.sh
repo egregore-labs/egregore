@@ -19,7 +19,8 @@
 # Notifications are intentionally absent. A detached process cannot obtain
 # separate human consent for an exact external delivery.
 #
-# Exit code 0 on foreground success. Prints ARTIFACT_URL to stdout on success.
+# Exit code 0 only when both foreground operations succeed. A successfully
+# published artifact URL is retained on stdout even if memory save is pending.
 
 set -uo pipefail
 
@@ -51,14 +52,22 @@ trap 'rm -f "$SAVE_OUT" "$PUB_OUT"' EXIT
 # --- Foreground, parallel: memory push + artifact publish ---
 
 (
-  cd memory 2>/dev/null || exit 0
-  git add -A
-  git commit -m "chore(handoff): record $TOPIC" >/dev/null 2>&1 || true
+  cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 1
+  git add -A || exit 1
+  if ! git diff --cached --quiet; then
+    git commit -m "chore(handoff): record $TOPIC" >/dev/null 2>&1 || exit 1
+  fi
   for _ in 1 2 3; do
-    git pull --rebase origin main --quiet 2>/dev/null \
-      && git push origin main --quiet 2>/dev/null && break
+    if git pull --rebase origin main --quiet 2>/dev/null; then
+      if bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$SCRIPT_DIR/memory" --branch main >/dev/null 2>&1; then
+        exit 0
+      else
+        case "$?" in 75) ;; *) exit 1 ;; esac
+      fi
+    fi
     sleep 1
   done
+  exit 1
 ) > "$SAVE_OUT" 2>&1 &
 SAVE_PID=$!
 
@@ -70,10 +79,28 @@ SAVE_PID=$!
 ) > "$PUB_OUT" 2>&1 &
 PUB_PID=$!
 
-wait "$SAVE_PID" "$PUB_PID"
+SAVE_STATUS=0
+PUB_STATUS=0
+wait "$SAVE_PID" || SAVE_STATUS=$?
+wait "$PUB_PID" || PUB_STATUS=$?
 
-ARTIFACT_URL=$(tail -1 "$PUB_OUT" 2>/dev/null | tr -d '[:space:]')
-echo "$ARTIFACT_URL"
+if [ "$PUB_STATUS" -eq 0 ]; then
+  ARTIFACT_URL=$(tail -1 "$PUB_OUT" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$ARTIFACT_URL" ]; then
+    echo "$ARTIFACT_URL"
+  else
+    PUB_STATUS=1
+  fi
+fi
+if [ "$SAVE_STATUS" -ne 0 ]; then
+  echo "Memory save did not complete; local files are retained. Check memory sync before retrying the save." >&2
+fi
+if [ "$PUB_STATUS" -ne 0 ]; then
+  echo "The handoff page could not be published. Retry page publication after checking the publishing service." >&2
+fi
+if [ "$SAVE_STATUS" -ne 0 ] || [ "$PUB_STATUS" -ne 0 ]; then
+  exit 1
+fi
 
 # --- Background, detached: PR backfill only ---
 # `( cmd & ) >/dev/null 2>&1` reparents to init so these survive session exit.
@@ -101,11 +128,11 @@ if [ -n "$REPO_STATE" ] && command -v gh >/dev/null 2>&1; then
     done
     # Re-commit + push the updated handoff file (memory repo).
     (
-      cd memory 2>/dev/null || exit 0
+      cd "$SCRIPT_DIR/memory" 2>/dev/null || exit 1
       git add -A
       git commit -m "chore(handoff): backfill PR numbers for $TOPIC" >/dev/null 2>&1 || true
       git pull --rebase origin main --quiet 2>/dev/null
-      git push origin main --quiet 2>/dev/null
+      bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$SCRIPT_DIR/memory" --branch main >/dev/null 2>&1
     )
   ) >/dev/null 2>&1 &
   disown 2>/dev/null || true

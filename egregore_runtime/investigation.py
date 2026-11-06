@@ -21,9 +21,10 @@ from .contracts import RetrievalHit, RetrievalMode, RetrievalRequest, RetrievalR
 from .errors import AuthorizationDenied, EgregoreRuntimeError
 from .eligibility import is_internal_event
 from .excerpts import select_excerpt
+from .held import identity, package, redact
 from .identity import actor_lexical_formulations, resolve_actor_query
 from .investigation_contracts import InvestigationRequest
-from .policy import scope_allows_path
+from .policy import allows, check, within
 
 KINDS = {'hybrid':RetrievalMode.HYBRID, 'semantic':RetrievalMode.VEC, 'keyword':RetrievalMode.LEX}
 STATE_VERSION = 'egregore-investigation/v1'
@@ -32,6 +33,17 @@ MAX_STATE_BYTES = 16_000_000
 # per-prompt evidence budget. Count encoded bytes, including JSON escaping, so
 # non-ASCII sources and code do not multiply the payload unnoticed.
 MAX_OPEN_BATCH_BYTES = 16_000
+
+
+def new_cursor():
+    """Mint a continuation cursor an agent can pass back as `--cursor TOKEN`.
+
+    Lowercase hex never starts with '-', so argparse cannot mistake the token
+    for an option. The length matches the 24-character size estimate used
+    when fitting a page into the output budget. Cursors minted earlier as
+    URL-safe base64 stay valid: lookup is by exact key.
+    """
+    return secrets.token_hex(12)
 
 
 def state_path(root, episode_id):
@@ -108,9 +120,9 @@ def _save_state(path, value):
 
 class LookupAdapter:
     """Deterministic canonical lookup and filters, behind Runtime authorization."""
-    def __init__(self, original, kind, params, actor, admin_gate, *, question=''):
+    def __init__(self, original, kind, params, actor, *, question=''):
         self.original, self.kind, self.params = original, kind, params
-        self.actor, self.admin_gate = actor, admin_gate
+        self.actor = actor
         self.question = question or params.get('query', '')
         self.last_result = None
         self.scanned = 0
@@ -151,7 +163,7 @@ class LookupAdapter:
         if p.get('before') and (day is None or day > date.fromisoformat(p['before'])):
             return False
         prefix = p.get('prefix')
-        if prefix and not scope_allows_path(path, (prefix,)):
+        if prefix and not within(path, (prefix,)):
             return False
         if p.get('artifact_type') and metadata.artifact_type != p['artifact_type']:
             return False
@@ -160,12 +172,12 @@ class LookupAdapter:
         return True
 
     def retrieve(self, request):
-        return self._retrieve(request)
+        raise AuthorizationDenied("lookup requires an authorized decision")
 
-    def retrieve_authorized(self, request, *, actor, admin_gate=None, lifecycle=None):
-        return self._retrieve(request, lifecycle=lifecycle)
+    def retrieve_authorized(self, request, *, actor, decision, lifecycle=None):
+        return self._retrieve(request, decision=decision, lifecycle=lifecycle)
 
-    def _retrieve(self, request, *, lifecycle=None):
+    def _retrieve(self, request, *, decision, lifecycle=None):
         started = time.monotonic()
         if self.kind in KINDS:
             lexical = actor_lexical_formulations(self.actor, request.task, request.lex)
@@ -174,8 +186,8 @@ class LookupAdapter:
                 vec=tuple(resolve_actor_query(self.actor, value) for value in request.vec),
                 artifact_types=(self.params['artifact_type'],) if self.params.get('artifact_type') else request.artifact_types)
             scoped = getattr(self.original, 'retrieve_authorized', None)
-            raw = (scoped(ranked_request, actor=self.actor, admin_gate=self.admin_gate, lifecycle=lifecycle,
-                path_filter=lambda path: not self.params.get('prefix') or scope_allows_path(path, (self.params['prefix'],)),
+            raw = (scoped(ranked_request, actor=self.actor, decision=decision, lifecycle=lifecycle,
+                path_filter=lambda path: not self.params.get('prefix') or within(path, (self.params['prefix'],)),
                 metadata_filter=self._matches) if callable(scoped) else self.original.retrieve(ranked_request))
             candidates = raw.hits
             self.last_result = raw
@@ -185,15 +197,12 @@ class LookupAdapter:
             for path in sorted(root.rglob('*.md')):
                 canonical = 'memory/' + path.relative_to(root).as_posix()
                 # No metadata/content read outside the authorized canonical scope.
-                if not scope_allows_path(canonical, request.authorized_scopes):
+                verdict = check(decision, canonical, "read", root=root)
+                if not verdict.allowed:
                     continue
-                resolved = path.resolve()
-                if not resolved.is_relative_to(root.resolve()):
-                    continue
-                if not scope_allows_path('memory/' + resolved.relative_to(root.resolve()).as_posix(), request.authorized_scopes):
-                    continue
+                resolved = verdict.resolved
                 # Path lookup and explicit scope do not need to inspect every document.
-                if self.params.get('prefix') and not scope_allows_path(canonical, (self.params['prefix'],)):
+                if self.params.get('prefix') and not within(canonical, (self.params['prefix'],)):
                     continue
                 if self.kind == 'filename' and self.params['query'].casefold() not in canonical.casefold():
                     continue
@@ -203,8 +212,6 @@ class LookupAdapter:
                 if is_internal_event(canonical, metadata.artifact_type) and not self.params.get('artifact_type'):
                     continue
                 if request.allowed_artifact_ids and metadata.artifact_id not in request.allowed_artifact_ids:
-                    continue
-                if self.admin_gate and not self.admin_gate.actor_is_admin(self.actor) and self.admin_gate.path_is_admin(canonical):
                     continue
                 self.scanned += 1
                 if not self._matches(canonical, metadata):
@@ -227,14 +234,14 @@ class LookupAdapter:
             candidates.sort(key=lambda hit: (-(hit.observed_at.timestamp() if hit.observed_at else 0), hit.canonical_path))
         filtered = []
         for hit in candidates:
-            if not scope_allows_path(hit.canonical_path, request.authorized_scopes):
+            if not allows(decision, hit.canonical_path, "read", root=self.original.memory_root):
                 continue
             metadata = self.original.describe_source(hit.canonical_path)
             if metadata.observed_at is None and hit.observed_at is not None:
                 metadata = replace(metadata, observed_at=hit.observed_at, date_provenance='lifecycle.created_at')
             if not self._matches(hit.canonical_path, metadata):
                 continue
-            # Stable, compact metadata plus a passage; no full-source dump.
+            # Stable, compact metadata plus a passage; no full-source dump. Observe redacts it field by field.
             passage = hit.passage if self.params.get('_context_projection') else json.dumps({
                 'title':metadata.title, 'document_date':str(self._day(metadata.observed_at)) if metadata.observed_at else None,
                 'date_provenance':getattr(metadata, 'date_provenance', None),
@@ -309,13 +316,34 @@ class Investigation:
                 if path and identifier and self._can_deliver(path,identifier):
                     self.ledger[path] = evidence.get('revision','unknown')
 
+    def _package(self, row):
+        """A cached row as it may be handed over now: its path and id decided again, every text redacted under
+        the held set in effect, not the one it was cached under. None when it is refused."""
+        from .contracts import Permission
+        decision = self.runtime.authorize(self.actor, Permission.READ, (row['artifact_id'],))
+        text = {key: value for key, value in row.items() if key not in ('path', 'artifact_id')}
+        kept = package(decision, text, root=self.runtime.canonical_root, paths=(row['path'],))
+        if kept is None:
+            return None
+        return {**row, **kept, 'artifact_id': identity(decision, row['artifact_id'], row['path'],
+                                                       root=self.runtime.canonical_root)}
+
+    def _redacted(self, value):
+        """A delivery kept from an earlier call (a replayed response, a reused context), redacted again."""
+        from .contracts import Permission
+        return redact(self.runtime.authorize(self.actor, Permission.READ), value, root=self.runtime.canonical_root)
+
     def _can_deliver(self, path, artifact_id):
         from .contracts import Permission
         decision = self.runtime.authorize(self.actor, Permission.READ, (artifact_id,))
-        if not decision.allowed or not scope_allows_path(path,decision.scopes):
+        return allows(decision, path, "read", root=self.runtime.canonical_root)
+
+    def _deliverable(self, path):
+        """Decide the path before reading it for its id, then decide the id."""
+        from .contracts import Permission
+        if not allows(self.runtime.authorize(self.actor, Permission.READ), path, "read", root=self.runtime.canonical_root):
             return False
-        gate = self.runtime.admin_gate
-        return not gate or gate.actor_is_admin(self.actor) or not gate.path_is_admin(path)
+        return self._can_deliver(path, self.runtime.retriever.describe_source(path).artifact_id)
 
     def _authorize(self):
         started=time.monotonic()
@@ -331,7 +359,6 @@ class Investigation:
             raise AuthorizationDenied('investigation requires current discover/read permission')
         signature = decision.to_dict()
         signature['profile_revision'] = self.actor.profile.revision
-        signature['admin'] = self.runtime.admin_gate.actor_is_admin(self.actor) if self.runtime.admin_gate else False
         digest = hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
         if self.episode_signature is not None and self.episode_signature != digest:
             raise AuthorizationDenied('authorization changed; start a new investigation')
@@ -385,7 +412,7 @@ class Investigation:
         key = key_for(self._revision(), self._index_revision())
         cached = self.context_cache.get(key)
         if cached and (not request.open_sources or cached['open_sources']):
-            context = cached['context']
+            context = self._redacted(cached['context'])
             self._check_context(context)
             return {'projection':'context', 'context':context, 'source_revision':context['source_revision'],
                     'reused':True, 'searches_remaining':self.search_budget-self.searches}
@@ -403,7 +430,7 @@ class Investigation:
             adapter = LookupAdapter(self.runtime.retriever,
                 {RetrievalMode.LEX:'keyword',RetrievalMode.VEC:'semantic',RetrievalMode.HYBRID:'hybrid'}[request.mode],
                 {**self.bounds, '_context_projection':True, '_candidate_limit':request.top_k},
-                self.actor,self.runtime.admin_gate)
+                self.actor)
             target = replace(self.runtime,retriever=adapter)
         try:
             context = target.observe(self.actor,request,token_budget=options.token_budget).to_dict()
@@ -446,20 +473,17 @@ class Investigation:
             if result['context'].get('freshness',{}).get('index_revision') != self._index_revision():
                 raise ValueError('index changed before delivery; retry with a new request_id')
         elif result.get('path'):
-            metadata=self.runtime.retriever.describe_source(result['path'])
-            if not self._can_deliver(result['path'],metadata.artifact_id):
+            if not self._deliverable(result['path']):
                 raise AuthorizationDenied('evidence authorization changed')
         elif result.get('sources'):
             for source in result['sources']:
-                metadata = self.runtime.retriever.describe_source(source['path'])
-                if not self._can_deliver(source['path'], metadata.artifact_id):
+                if not self._deliverable(source['path']):
                     raise AuthorizationDenied('evidence authorization changed')
         elif any(not self._can_deliver(row['path'],row['artifact_id']) for row in result.get('results',[])):
             raise AuthorizationDenied('evidence authorization changed')
         for key in ['seen_sources','opened_sources']:
             for path in result.get(key,{}):
-                metadata=self.runtime.retriever.describe_source(path)
-                if not self._can_deliver(path,metadata.artifact_id):
+                if not self._deliverable(path):
                     raise AuthorizationDenied('retained evidence authorization changed')
 
     def _request(self, text, mode, limit):
@@ -494,7 +518,7 @@ class Investigation:
             if params.get(key): date.fromisoformat(params[key])
         if params.get('after') and params.get('before') and params['after']>params['before']:
             raise ValueError('after must not exceed before')
-        if params.get('prefix') and (not params['prefix'].startswith('memory') or '\\' in params['prefix'] or not scope_allows_path(params['prefix'],('memory',))):
+        if params.get('prefix') and (not params['prefix'].startswith('memory') or '\\' in params['prefix'] or not within(params['prefix'],('memory',))):
             raise ValueError('prefix must be a canonical memory path')
         return kind,limit
 
@@ -542,7 +566,7 @@ class Investigation:
                     raise ValueError('investigation search budget exhausted; report remaining gaps')
                 self.searches+=1
                 self._checkpoint()
-                adapter=LookupAdapter(self.runtime.retriever,kind,params,self.actor,self.runtime.admin_gate,
+                adapter=LookupAdapter(self.runtime.retriever,kind,params,self.actor,
                                       question=self.question)
                 facade=replace(self.runtime,retriever=adapter)
                 request=self._request(str(params.get('query') or 'Documents within the requested date interval'),KINDS.get(kind,RetrievalMode.LEX).value,10000)
@@ -568,8 +592,8 @@ class Investigation:
                     'degraded':adapter.last_result.degraded,'warnings':list(adapter.last_result.warnings),'source_revision':context.source_revision,
                     'retrieval_seconds':adapter.last_result.latency_ms/1000,'scanned_authorized':adapter.scanned}
         cached=self.cache[fingerprint]
-        rows=cached['rows'][offset:offset+limit]
-        if any(not self._can_deliver(row['path'],row['artifact_id']) for row in rows):
+        rows=[self._package(row) for row in cached['rows'][offset:offset+limit]]
+        if any(row is None for row in rows):
             raise AuthorizationDenied('evidence authorization changed; start a new investigation')
         next_cursor=None
         def result_for(selected):
@@ -583,7 +607,7 @@ class Investigation:
         if not rows and offset<len(cached['rows']):
             raise ValueError('evidence output budget exhausted; report the remaining gap')
         if offset+len(rows)<len(cached['rows']):
-            next_cursor=secrets.token_urlsafe(18)
+            next_cursor=new_cursor()
             self.cursors[next_cursor]=(fingerprint,offset+len(rows),limit,signature,revision)
         for row in rows:self.ledger[row['path']]=row['revision']
         result=result_for(rows);result['next_cursor']=next_cursor;result['previous_evidence_retained']=len(self.ledger)
@@ -675,8 +699,7 @@ class Investigation:
         visible = {}
         for path, revision in sources.items():
             try:
-                metadata = self.runtime.retriever.describe_source(path)
-                if self._can_deliver(path, metadata.artifact_id):
+                if self._deliverable(path):
                     visible[path] = revision
             except FileNotFoundError:
                 continue
@@ -723,7 +746,7 @@ class Investigation:
                 self._authorize()
                 if cached.get('source_revision') and cached['source_revision'] != self._revision():
                     raise ValueError('sources changed since this response; retry with a new request_id')
-                response=copy.deepcopy(cached['response'])
+                response=self._redacted(copy.deepcopy(cached['response']))
                 if not response['ok']:
                     result=None
                 else:

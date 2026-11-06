@@ -1,6 +1,6 @@
 ---
 name: summon
-description: 'Design and launch a persistent agent (a spirit) that runs on a schedule or watches for conditions, via adaptive questioning that produces a reviewable spec before launch.'
+description: 'Reuse, design, and launch Egregore spirits. Review available recipes and current host permissions, then start authorized on-demand work or design a scheduled process for an available scheduler.'
 ---
 
 <!-- generated-by: bin/codex-sync-skills.sh -->

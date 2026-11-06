@@ -36,6 +36,8 @@ if [ -f "$SCRIPT_DIR/.git" ]; then
 fi
 
 CONFIG="$MAIN_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$MAIN_DIR/bin/lib/config.sh"
 MEMORY_DIR="${EGREGORE_MEMORY_DIR:-$MAIN_DIR/memory}"
 STALE_MIN="${ATTENDANT_STALE_MIN:-12}"
 DRY_RUN="${ATTENDANT_DRY_RUN:-0}"
@@ -126,7 +128,8 @@ _effective_scope() {
   local url key
   url="${EGREGORE_API_URL:-$(grep '^EGREGORE_API_URL=' "$MAIN_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
   key="${EGREGORE_API_KEY:-$(grep '^EGREGORE_API_KEY=' "$MAIN_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
-  [ -n "$url" ] || url=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+  # A fingerprint only: a refused address counts as none, quietly.
+  url="$(_hosted_api_url "${url:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}" 2>/dev/null)" || url=""
   echo -n "${url}|${key}" | cksum | cut -d' ' -f1
 }
 

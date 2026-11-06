@@ -13,6 +13,7 @@ fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; }
 SB="$TMPD/instance"
 mkdir -p "$SB/bin" "$SB/memory/handoffs" "$TMPD/results"
 cp "$ROOT/bin/handoff-run.sh" "$SB/bin/handoff-run.sh"
+mkdir -p "$SB/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$SB/bin/lib/config.sh"
 printf '# Handoffs\n\n' > "$SB/memory/handoffs/index.md"
 printf '%s\n' '{"mode":"local"}' > "$SB/egregore.json"
 

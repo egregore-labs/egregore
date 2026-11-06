@@ -34,6 +34,9 @@ fi
 type egregore_commit >/dev/null 2>&1 || egregore_commit() {
   local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
 }
+type egregore_session_id >/dev/null 2>&1 || egregore_session_id() {
+  head -n 1 "$1/.egregore-session-id" 2>/dev/null; return 0
+}
 type egregore_pr_skeleton >/dev/null 2>&1 || egregore_pr_skeleton() {
   printf '## What\n%s\n\n## Why\n%s\n\n## Verification\n%s\n\n%s\n' "$1" "$2" "$3" "$4"
 }
@@ -54,7 +57,12 @@ Runtime-neutral commands:
                                    Commit and push current repo + memory changes;
                                    PR body follows .claude/context/pr-format.md
                                    (auto-generated skeleton if not provided);
-                                   new code PRs stay draft until --ready
+                                   new code PRs stay draft until --ready, which
+                                   first runs the checks CI would select here
+  merge <pr> [--receipt FILE] [--dry-run] [--local-receipt FILE]
+                                   Merge a PR into the integration branch through
+                                   the gate: green merges; a red check needs a
+                                   receipt naming it and why (bin/merge-gate.sh)
   autosave [status|on|off|scope|publish|merge]  Personal ambient-save settings + consent
   wrap --topic T --summary TEXT    Write a session wrap to memory/wraps
   handoff --from A --to B --topic T [--intent action|feedback|fyi]
@@ -148,9 +156,13 @@ save_memory() {
   branch="$(memory_branch)"
   [ -z "$branch" ] && branch="main"
   for _try in 1 2 3; do
-    if git -C "$MEMORY_DIR" pull --rebase origin "$branch" --quiet 2>/dev/null \
-       && git -C "$MEMORY_DIR" push origin "$branch" --quiet 2>/dev/null; then
-      return 0
+    if git -C "$MEMORY_DIR" pull --rebase origin "$branch" --quiet 2>/dev/null; then
+      if bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch "$branch" >/dev/null 2>&1; then
+        return 0
+      else
+        local push_status=$?
+        case "$push_status" in 75) ;; *) die "memory saved locally; guarded publication is pending review or reconciliation" ;; esac
+      fi
     fi
     sleep 1
   done
@@ -229,6 +241,7 @@ Egregore portable agent protocol
 7. Run `bin/agent.sh search "<query>"` to recall shared memory (decisions, handoffs, knowledge) before answering questions about past work.
 8. Run `bin/agent.sh branch --topic "<what you are working on>"` before code changes when you need a task branch/worktree.
 9. Run `bin/agent.sh save` and `bin/agent.sh wrap` for portable save/wrap flows.
+10. Run `bin/agent.sh merge <pr>` to merge a PR into its integration branch, never `gh pr merge`; a red check needs `--receipt <file>` naming each failing job and why.
 
 This protocol is runtime-neutral. Claude Code may still use .claude hooks and
 skills, while Codex or another agent can call this script directly.
@@ -403,9 +416,188 @@ build_pr_body() {
     "🤖 Saved via bin/agent.sh"
 }
 
+# Inputs of each step the save regenerates, as Git pathspecs. The generators
+# are the authority; re-derive a list when its generator changes. A step's
+# own outputs count as inputs, so a hand edit is regenerated, not committed.
+#   codex-skills  bin/codex-sync-skills.sh: the .codex/skills adapters, from
+#                 .claude/skills frontmatter classified by the skill inventory
+#                 (capability-distribution.json, egregore.json owned_skills)
+#   codex-spec    bin/codex-render-spec.mjs: AGENTS.md and
+#                 .codex/spec-manifest.json, from CLAUDE.md alone
+#   pi-spec       bin/pi-render-spec.mjs: .pi/APPEND_SYSTEM.md, from AGENTS.md
+#   prime-spec    bin/prime-render-spec.mjs: .prime/agent/APPEND_SYSTEM.md,
+#                 from AGENTS.md
+#   bundles       `npm run build:runtime` in packages/create-egregore, chaining
+#     bin/capability-distribution.mjs generate-skill-view and
+#     packages/create-egregore/scripts/build-runtime-bundle.mjs (Codex):
+#       AGENTS.md, .claude/context, .codex, .agents, docs/{credential-entry,spirit-discovery}.md,
+#       egregore_runtime and the bin allowlist; Pi and Prime copy this tree
+#     packages/create-egregore/scripts/build-claude-runtime-bundle.mjs:
+#       CLAUDE.md, .claude/{context,hooks,rules,skills}, the same docs, bin
+#     packages/create-egregore/scripts/build-pi-runtime-bundle.mjs: .pi, bin
+#     packages/create-egregore/scripts/build-prime-runtime-bundle.mjs: .prime, bin
+#     api/scripts/build-connect-runtime-pack.mjs: .claude/skills, .codex/skills
+#     Each reads capability-distribution.json, which selects what ships; the
+#     builders and the package.json script that chains them are inputs too.
+#     A directory stands in for the curated list inside it (bin for the
+#     allowlist): an unrelated change there costs a no-op build of about a
+#     second, while a missing input ships a stale bundle.
+derivation_inputs() {
+  case "$1" in
+    codex-skills) printf '%s\n' .claude/skills .codex/skills capability-distribution.json \
+      egregore.json bin/codex-sync-skills.sh bin/capability-distribution.mjs ;;
+    codex-spec) printf '%s\n' CLAUDE.md AGENTS.md .codex/spec-manifest.json bin/codex-render-spec.mjs ;;
+    pi-spec) printf '%s\n' AGENTS.md .pi/APPEND_SYSTEM.md .pi/spec-manifest.json bin/pi-render-spec.mjs ;;
+    prime-spec) printf '%s\n' AGENTS.md .prime/agent/APPEND_SYSTEM.md \
+      .prime/agent/spec-manifest.json bin/prime-render-spec.mjs ;;
+    bundles) printf '%s\n' \
+      AGENTS.md CLAUDE.md capability-distribution.json docs/credential-entry.md docs/spirit-discovery.md \
+      bin egregore_runtime .agents .codex .pi .prime \
+      .claude/context .claude/hooks .claude/rules .claude/skills \
+      packages/create-egregore/package.json packages/create-egregore/scripts \
+      api/scripts/build-connect-runtime-pack.mjs ;;
+  esac
+}
+
+# What the counted steps write.
+derivation_outputs() {
+  case "$1" in
+    codex-spec) printf '%s\n' AGENTS.md .codex/spec-manifest.json ;;
+    pi-spec) printf '%s\n' .pi/APPEND_SYSTEM.md .pi/spec-manifest.json ;;
+    prime-spec) printf '%s\n' .prime/agent/APPEND_SYSTEM.md .prime/agent/spec-manifest.json ;;
+    bundles) printf '%s\n' packages/create-egregore/runtime api/assets/connect-runtime-pack.json \
+      skill-distribution.json ;;
+  esac
+}
+
+# derivation_due BASE STEP: whether an input of STEP differs in the working
+# tree or, on a task branch, since origin/BASE. Only a task branch's own
+# commits reach its PR: a save from a protected branch starts a new one from
+# origin/BASE. An unavailable comparison counts as a change: regenerating is
+# idempotent, while skipping can commit a stale view.
+derivation_due() {
+  local base="$1" path="" diff=""
+  local -a inputs=()
+  while IFS= read -r path; do inputs+=("$path"); done < <(derivation_inputs "$2")
+  [ -z "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=normal -- "${inputs[@]}" 2>/dev/null | head -1)" ] \
+    || return 0
+  case "$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || true)" in
+    dev/*|feature/*|bugfix/*) ;;
+    *) return 1 ;;
+  esac
+  diff="$(git -C "$SCRIPT_DIR" diff --name-only "origin/$base...HEAD" -- "${inputs[@]}" 2>/dev/null)" || return 0
+  [ -n "$diff" ]
+}
+
+# derivation_changes STEP: how many of STEP's outputs differ from HEAD.
+derivation_changes() {
+  local path=""
+  local -a outputs=()
+  while IFS= read -r path; do outputs+=("$path"); done < <(derivation_outputs "$1")
+  git -C "$SCRIPT_DIR" status --porcelain --untracked-files=all -- "${outputs[@]}" | wc -l | tr -d ' '
+}
+
+# run_derivation LABEL COMMAND...: run one step, keeping its output in
+# DERIVED_OUTPUT; a failure shows the last lines and stops the save.
+run_derivation() {
+  local label="$1"
+  shift
+  if ! DERIVED_OUTPUT="$("$@" 2>&1)"; then
+    printf '%s\n' "$DERIVED_OUTPUT" | tail -n 20 >&2
+    die "$label failed (output above); the save stopped before the project commit"
+  fi
+}
+
+# npm_build_runtime NPM NODE_DIR: the build's script chain calls bare node, so
+# the node bin/node-run.sh resolved goes first on PATH, as in
+# bin/artifact-renderer-install.sh.
+npm_build_runtime() {
+  cd "$SCRIPT_DIR/packages/create-egregore" && PATH="$2:$PATH" "$1" run build:runtime
+}
+
+# Regenerate the derived views and runtime bundles before the save commits, so
+# the commit carries them and CI's checks stay a backstop. Steps run in the
+# order their inputs require: the Codex adapters and the three specs feed the
+# bundles, and the Codex render's AGENTS.md feeds the Pi and Prime specs. Each
+# runs only when derivation_due says so and prints one receipt line; a failure
+# stops the save. Sets DERIVED_SUBJECT for a commit of regeneration alone.
+regenerate_derived() {
+  local base="$1" spec="" specs="" rendered="" made="" count="" review="" path="" node_bin="" npm_bin=""
+  local -a inputs=() fresh=()
+
+  if [ ! -f "$SCRIPT_DIR/bin/codex-sync-skills.sh" ]; then
+    echo "codex skills: not applicable"
+  elif ! derivation_due "$base" codex-skills; then
+    echo "codex skills: current"
+  else
+    run_derivation "codex skill sync" bash "$SCRIPT_DIR/bin/codex-sync-skills.sh"
+    count="$(printf '%s\n' "$DERIVED_OUTPUT" | grep -c '^generated adapter: ' || true)"
+    case "$count" in
+      0) echo "codex skills: current" ;;
+      1) echo "codex skills: synced (1 file)"; made="codex adapters" ;;
+      *) echo "codex skills: synced ($count files)"; made="codex adapters" ;;
+    esac
+  fi
+
+  for spec in codex pi prime; do
+    [ -f "$SCRIPT_DIR/bin/$spec-render-spec.mjs" ] || continue
+    specs="$specs $spec"
+    derivation_due "$base" "$spec-spec" || continue
+    run_derivation "$spec spec render" bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/bin/$spec-render-spec.mjs"
+    [ "$(derivation_changes "$spec-spec")" = 0 ] || rendered="${rendered:+$rendered, }$spec"
+  done
+  if [ -z "$specs" ]; then
+    echo "specs: not applicable"
+  elif [ -z "$rendered" ]; then
+    echo "specs: current"
+  else
+    echo "specs: rendered ($rendered)"
+    made="${made:+$made, }specs"
+  fi
+  # A hand-written Codex section keeps its text when CLAUDE.md changes under
+  # it; the render refreshes only the source hash that --check used to flag.
+  case "$rendered" in
+    codex*)
+      review="$(git -C "$SCRIPT_DIR" show HEAD:.codex/spec-manifest.json 2>/dev/null \
+        | jq -r --slurpfile now "$SCRIPT_DIR/.codex/spec-manifest.json" '
+            (reduce (.sections // [])[] as $s ({}; .[$s.section] = $s.sourceHash)) as $was
+            | [$now[0].sections[] | select(.action == "replace" and $was[.section] != .sourceHash) | .section]
+            | join(", ")' 2>/dev/null)" || review=""
+      [ -z "$review" ] || echo "specs: review the hand-written Codex sections in bin/codex-render-spec.mjs: $review"
+      ;;
+  esac
+
+  DERIVED_SUBJECT="chore(bundles): regenerate ${made:+$made and }runtime bundles"
+  if ! derivation_due "$base" bundles; then
+    echo "bundles: current"
+    return 0
+  fi
+  # The builders copy only files Git tracks, so new and deleted inputs enter
+  # the index first: a new module ships beside its callers, and a deleted one
+  # leaves the bundle instead of failing the copy.
+  while IFS= read -r path; do inputs+=("$path"); done < <(derivation_inputs bundles)
+  while IFS= read -r -d '' path; do fresh+=("$path"); done \
+    < <(git -C "$SCRIPT_DIR" ls-files -z --others --deleted --exclude-standard -- "${inputs[@]}")
+  if [ "${#fresh[@]}" -gt 0 ]; then
+    git -C "$SCRIPT_DIR" add -A -- "${fresh[@]}" >/dev/null 2>&1 || die "could not stage new bundle inputs"
+  fi
+  node_bin="$(bash "$SCRIPT_DIR/bin/node-run.sh" -p 'process.execPath')" \
+    || die "the bundle rebuild needs Node; install Node 22, then save again"
+  npm_bin="$(command -v npm 2>/dev/null || true)"
+  [ -n "$npm_bin" ] || npm_bin="${node_bin%/*}/npm"
+  [ -x "$npm_bin" ] || die "the bundle rebuild needs npm; install Node with npm, then save again"
+  run_derivation "bundle rebuild" npm_build_runtime "$npm_bin" "${node_bin%/*}"
+  count="$(derivation_changes bundles)" || die "could not read the bundles after the rebuild"
+  case "$count" in
+    0) echo "bundles: current" ;;
+    1) echo "bundles: rebuilt (1 file changed)" ;;
+    *) echo "bundles: rebuilt ($count files changed)" ;;
+  esac
+}
+
 cmd_save() {
   local message="" topic="" no_pr=0 branch base pushed="false" committed="false" pr_url="" existing_pr="" pr_number="" merged="false" pr_body="" pr_body_file=""
-  local readiness="" pr_draft="" changed_paths="" non_code="" use_pr=0
+  local readiness="" pr_draft="" changed_paths="" non_code="" use_pr=0 commit_message="" tree_was_clean=0 checks_failed=0
   local -a create_args
 
   while [ $# -gt 0 ]; do
@@ -450,12 +642,26 @@ cmd_save() {
     echo "memory: synced"
   fi
 
+  commit_message="$message"
+  # Installed instances carry the derived views and bundles but not the
+  # builders; /update regenerates their views.
+  if [ -f "$SCRIPT_DIR/packages/create-egregore/package.json" ]; then
+    [ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=normal 2>/dev/null | head -1)" ] \
+      || tree_was_clean=1
+    regenerate_derived "$base"
+    # On a clean tree the regeneration makes the only changes, so they commit
+    # under their own subject; the caller's message describes committed work.
+    [ "$tree_was_clean" = "0" ] || commit_message="$DERIVED_SUBJECT"
+  else
+    printf '%s\n' "codex skills: not applicable" "specs: not applicable" "bundles: not applicable"
+  fi
+
   branch="$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || echo "")"
   if [ -n "$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null | head -1)" ]; then
     branch="$(ensure_working_branch "$topic")"
     git -C "$SCRIPT_DIR" add -A >/dev/null 2>&1 || die "git add failed"
     if ! git -C "$SCRIPT_DIR" diff --cached --quiet 2>/dev/null; then
-      egregore_commit "$SCRIPT_DIR" "$SCRIPT_DIR" "$message" --quiet || die "git commit failed"
+      egregore_commit "$SCRIPT_DIR" "$SCRIPT_DIR" "$commit_message" --quiet || die "git commit failed"
       committed="true"
     fi
   fi
@@ -486,6 +692,18 @@ cmd_save() {
       if [ -n "$pr_url" ]; then
         pr_number="$(printf '%s' "$existing_pr" | jq -r '.[0].number')"
         pr_draft="$(printf '%s' "$existing_pr" | jq -r '.[0].isDraft')"
+      fi
+      # A PR goes ready only after the checks CI would select pass here. On a
+      # failure the work is still pushed, as a draft, so GitHub never spends
+      # a run on what this machine already saw fail. Installed instances do
+      # not ship the runner.
+      if [ "$readiness" = "--ready" ] && [ -f "$SCRIPT_DIR/bin/ci-local.py" ]; then
+        if ! python3 "$SCRIPT_DIR/bin/ci-local.py" --base "$base"; then
+          checks_failed=1
+          readiness="--draft"
+        fi
+      fi
+      if [ -n "$pr_url" ]; then
         # Convert before push: a synchronize event must already see the draft.
         if [ "$readiness" = "--draft" ] && [ "$pr_draft" = "false" ]; then
           (cd "$SCRIPT_DIR" && gh pr ready "$pr_number" --undo) \
@@ -545,6 +763,10 @@ cmd_save() {
   [ -n "$pr_url" ] && echo "pr: $pr_url"
   [ -n "$pr_draft" ] && echo "pr-draft: $pr_draft"
   [ "$merged" = "true" ] && echo "merge: non-coding, merged to $base"
+  if [ "$checks_failed" = "1" ]; then
+    echo "local checks failed: the work is pushed and the PR stays a draft; fix the checks above, then save again with --ready" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -608,7 +830,7 @@ cmd_wrap() {
   local capture_args=(--mode personal)
   tmpd="$(mktemp -d -t egregore-agent-wrap-XXXXXX)"
   trap 'rm -rf "$tmpd"' RETURN
-  session_id="$(cat "$SCRIPT_DIR/.egregore-session-id" 2>/dev/null || true)"
+  session_id="$(egregore_session_id "$SCRIPT_DIR")"
   branch="$(git -C "$SCRIPT_DIR" branch --show-current 2>/dev/null || true)"
   [ "$no_push" = "1" ] && capture_args+=(--no-push)
 
@@ -884,7 +1106,9 @@ case "${1:-}" in
   people) shift; cmd_people "$@" ;;
   branch) shift; cmd_branch "$@" ;;
   save) shift; cmd_save "$@" ;;
+  merge) shift; exec bash "$SCRIPT_DIR/bin/merge-gate.sh" "$@" ;;
   autosave) shift; bash "$SCRIPT_DIR/bin/autosave.sh" "$@" ;;
+  records) shift; bash "$SCRIPT_DIR/bin/records.sh" "$@" ;;
   wrap) shift; cmd_wrap "$@" ;;
   wrap-card) shift; render_wrap_card "$@" ;;
   handoff) shift; cmd_handoff "$@" ;;

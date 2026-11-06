@@ -7,6 +7,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TOOL_ROOT="$ROOT"
 # Explicit fixture root lets regression tests mutate disposable trees only.
 if [ "$#" -gt 0 ]; then
   if [ "$#" -ne 2 ] || [ "$1" != "--root" ] || [ ! -d "$2" ]; then
@@ -98,25 +99,63 @@ else
   fail "bare node invocations shipped" "$(printf '%b' "$bare_node" | head -4)"
 fi
 
-# The shipped Python runtime must mirror the source tree exactly. The
-# builders take git-tracked files only, so a module created and bundled
-# before being staged silently ships callers without their module —
-# happened twice (admin_gate, handoff_lookup): the instance crashed with
-# ModuleNotFoundError at first use.
+# The shipped Python runtime must carry every source module selected for OSS.
+# Use the builders' actual distribution authority, not a second exemption list.
+# The on-disk scan remains intentional: builders take git-tracked files only,
+# so untracked public modules must still fail until they ship with their callers.
+PYTHON_EXCLUSIONS=""
+if ! PYTHON_EXCLUSIONS="$(bash "$TOOL_ROOT/bin/node-run.sh" --input-type=module - "$TOOL_ROOT" "$ROOT" <<'NODE'
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [toolRoot, sourceRoot] = process.argv.slice(2);
+try {
+  const { loadDistribution, validateDistribution, excludedComponentPaths } = await import(
+    pathToFileURL(path.join(toolRoot, 'bin/capability-distribution.mjs')).href);
+  const distribution = loadDistribution(path.join(sourceRoot, 'capability-distribution.json'));
+  const errors = validateDistribution(distribution, sourceRoot);
+  if (errors.length) throw new Error(errors.slice(0, 4).join('; '));
+  for (const location of excludedComponentPaths(distribution, ['oss'], 'available')) {
+    if (location === 'egregore_runtime' || location.startsWith('egregore_runtime/')) console.log(location);
+  }
+} catch (error) {
+  console.error(`runtime distribution authority unavailable: ${error.message}`);
+  process.exit(1);
+}
+NODE
+)"; then
+  fail "runtime distribution authority unavailable; no Python exclusions accepted"
+  PYTHON_EXCLUSIONS=""
+fi
+
+python_excluded() {
+  local relative="$1" excluded
+  while IFS= read -r excluded; do
+    [ -z "$excluded" ] && continue
+    case "$relative" in "$excluded"|"$excluded"/*) return 0 ;; esac
+  done <<< "$PYTHON_EXCLUSIONS"
+  return 1
+}
+
 if [ ! -d "$ROOT/egregore_runtime" ]; then
   fail "source egregore_runtime tree missing at $ROOT/egregore_runtime"
 else
   for bundle in "${BUNDLES[@]}"; do
     tree="$ROOT/packages/create-egregore/runtime/$bundle"
-    missing_py=""
+    missing_py=""; excluded_py=""
     while IFS= read -r module; do
       rel="${module#"$ROOT/"}"
+      if python_excluded "$rel"; then
+        [ ! -e "$tree/$rel" ] && [ ! -L "$tree/$rel" ] || excluded_py="${excluded_py}${rel}\n"
+        continue
+      fi
       [ -f "$tree/$rel" ] || missing_py="${missing_py}${rel}\n"
     done < <(find "$ROOT/egregore_runtime" -type f -name '*.py' ! -path '*/__pycache__/*' | sort)
     if [ ! -d "$tree/egregore_runtime" ]; then
       fail "$bundle bundle is missing egregore_runtime"
+    elif [ -n "$excluded_py" ]; then
+      fail "$bundle bundle carries excluded runtime modules" "$(printf '%b' "$excluded_py" | tr '\n' ' ')"
     elif [ -z "$missing_py" ]; then
-      pass "$bundle: shipped egregore_runtime mirrors source"
+      pass "$bundle: shipped egregore_runtime matches OSS-selected source"
     else
       fail "$bundle bundle is missing runtime modules" "$(printf '%b' "$missing_py" | tr '\n' ' ')"
     fi

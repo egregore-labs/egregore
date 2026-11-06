@@ -16,6 +16,7 @@ mkdir -p "$FIX/memory" "$FIX/bin/lib" "$FOREIGN/inner" "$HOME_FIX/.egregore" "$W
 
 cp "$ROOT/bin/settings.sh" "$FIX/bin/"
 cp "$ROOT/bin/telemetry.sh" "$FIX/bin/"
+cp "$ROOT/bin/lib/config.sh" "$FIX/bin/lib/"
 cp -R "$ROOT/egregore_runtime" "$FIX/egregore_runtime"
 printf '{"slug":"acme","org_name":"Acme","org_id":"org-acme-1","admins":["admin-user"],"boundary":{"posture":"standard","read":["~/OrgDocs"]}}\n' > "$FIX/egregore.json"
 printf '{"onboarding_complete":true,"github_username":"member-user","display_name":"Member","telemetry":true,"telemetry_noticed":true}\n' > "$FIX/.egregore-state.json"

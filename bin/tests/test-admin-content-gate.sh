@@ -17,6 +17,7 @@ mkdir -p "$FIX/memory/fundraise" "$FIX/bin/lib" "$WORK/bin"
 
 # Fixture instance: the gate resolves identity and config from its own root.
 cp "$ROOT/bin/publish-artifact.sh" "$FIX/bin/"
+cp "$ROOT/bin/artifact-renderer.sh" "$FIX/bin/"
 cp "$ROOT/bin/lib/permissions.sh" "$FIX/bin/lib/"
 cp -R "$ROOT/egregore_runtime" "$FIX/egregore_runtime"
 for helper in artifact-register.sh publish-references.sh telemetry.sh; do

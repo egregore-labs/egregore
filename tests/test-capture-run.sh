@@ -17,6 +17,7 @@ setup_fixture() {
   cp "$ROOT/bin/capture-run.sh" "$dir/bin/capture-run.sh"
   cp "$ROOT/bin/capture-reconcile.sh" "$dir/bin/capture-reconcile.sh"
   cp "$ROOT/bin/handoff-run.sh" "$dir/bin/handoff-run.sh"
+  mkdir -p "$dir/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$dir/bin/lib/config.sh"
   printf '{"mode":"%s"}\n' "$mode" > "$dir/egregore.json"
   git -C "$dir" init --quiet
   git -C "$dir" config user.name tester

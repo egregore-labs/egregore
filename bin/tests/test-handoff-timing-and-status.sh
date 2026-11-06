@@ -49,10 +49,12 @@ t2=$(millis)
 elapsed=$((t2 - t1))
 # Threshold is 1000ms to account for bash startup + 3 git invocations on macOS.
 # The early-exit path does only local git ops (status/branch/rev-list) — no network.
-if [ "$elapsed" -lt 1000 ]; then
-  pass "early-exit < 1000ms (actual: ${elapsed}ms)"
+# A contract on a developer machine, a reading with a ceiling on a shared runner (bin/lib/budget.py).
+exit_limit=$(python3 "$SCRIPT_DIR/bin/lib/budget.py" 1000)
+if [ "$elapsed" -lt "$exit_limit" ]; then
+  pass "early-exit < ${exit_limit}ms (actual: ${elapsed}ms, budget 1000ms)"
 else
-  fail "early-exit took ${elapsed}ms, expected < 1000ms"
+  fail "early-exit took ${elapsed}ms, expected < ${exit_limit}ms"
 fi
 
 # Verify the sandbox didn't accidentally commit anything (early-exit should be a no-op)
@@ -116,34 +118,49 @@ echo ""
 # --- 4. repo-state.sh latency budget (runs sequentially inside handoff-run.sh) ---
 echo "# repo-state.sh — sequential cost inside handoff-run.sh"
 
-# Baseline: WITH gh pr lookup (used by manual /handoff outside the hot path)
-t1=$(millis)
-bash "$SCRIPT_DIR/bin/repo-state.sh" >/dev/null 2>&1 || true
-t2=$(millis)
-with_pr=$((t2 - t1))
-printf "    repo-state.sh (with gh pr lookup): %dms\n" "$with_pr"
+# Five interleaved runs of each variant, judged by their medians: one run on
+# a shared runner can stall for reasons outside the script (284ms versus
+# 396ms on CI), and interleaving gives both variants the same runner load.
+# WITH gh pr lookup is manual /handoff outside the hot path; WITHOUT is
+# handoff-run.sh via --no-pr, whose PR numbers the detached
+# handoff-pr-backfill.sh fills in after.
+with_runs=()
+no_runs=()
+for _ in 1 2 3 4 5; do
+  t1=$(millis)
+  bash "$SCRIPT_DIR/bin/repo-state.sh" >/dev/null 2>&1 || true
+  t2=$(millis)
+  with_runs+=($((t2 - t1)))
+  t1=$(millis)
+  bash "$SCRIPT_DIR/bin/repo-state.sh" --no-pr >/dev/null 2>&1 || true
+  t2=$(millis)
+  no_runs+=($((t2 - t1)))
+done
+median() { printf '%s\n' "$@" | sort -n | sed -n "$((($# + 1) / 2))p"; }
+with_pr=$(median "${with_runs[@]}")
+no_pr=$(median "${no_runs[@]}")
+printf "    repo-state.sh (with gh pr lookup): median %dms of %s\n" "$with_pr" "${with_runs[*]}"
+printf "    repo-state.sh --no-pr (hot path):  median %dms of %s\n" "$no_pr" "${no_runs[*]}"
 
-# Hot path: WITHOUT gh pr lookup (used by handoff-run.sh via --no-pr).
-# PR numbers get filled in by the detached handoff-pr-backfill.sh after.
-t1=$(millis)
-bash "$SCRIPT_DIR/bin/repo-state.sh" --no-pr >/dev/null 2>&1 || true
-t2=$(millis)
-no_pr=$((t2 - t1))
-printf "    repo-state.sh --no-pr (hot path):  %dms\n" "$no_pr"
-
-if [ "$no_pr" -lt 800 ]; then
-  pass "repo-state.sh --no-pr < 800ms on hot path (actual: ${no_pr}ms)"
+# Budgets are contracts on a developer machine and readings with a ceiling on
+# a shared runner; bin/lib/budget.py holds the one rule.
+hot_limit=$(python3 "$SCRIPT_DIR/bin/lib/budget.py" 800)
+if [ "$no_pr" -lt "$hot_limit" ]; then
+  pass "repo-state.sh --no-pr < ${hot_limit}ms on hot path (median: ${no_pr}ms, budget 800ms)"
 else
-  fail "repo-state.sh --no-pr took ${no_pr}ms > 800ms — still too slow on hot path"
+  fail "repo-state.sh --no-pr took ${no_pr}ms > ${hot_limit}ms — still too slow on hot path"
 fi
 
-# The --no-pr variant must not cost more than the full lookup. At this
-# resolution the two runs are often within timer noise (70ms versus 71ms on a
-# CI runner), so a strict "faster" comparison flakes; allow a 50ms margin.
-if [ "$no_pr" -le $((with_pr + 50)) ]; then
-  pass "--no-pr costs no more than the full lookup (with-pr: ${with_pr}ms, no-pr: ${no_pr}ms)"
+# The --no-pr variant must not cost more than the full lookup. This compares
+# two variants under the same load, so the runner's speed cancels out and the
+# check is not widened on CI; the 50ms margin absorbs timer noise between
+# medians that are often equal (70ms versus 71ms on a CI runner, where no PR
+# lookup runs).
+allowed=$((with_pr + 50))
+if [ "$no_pr" -le "$allowed" ]; then
+  pass "--no-pr costs no more than the full lookup (median with-pr: ${with_pr}ms, no-pr: ${no_pr}ms, allowed ${allowed}ms)"
 else
-  fail "--no-pr is slower than the full lookup (with-pr: ${with_pr}ms, no-pr: ${no_pr}ms)"
+  fail "--no-pr is slower than the full lookup (median with-pr: ${with_pr}ms, no-pr: ${no_pr}ms, allowed ${allowed}ms)"
 fi
 
 # --- 4b. Branch D: today's artifacts query wired correctly ---
@@ -198,10 +215,11 @@ t1=$(millis)
 bash "$SCRIPT_DIR/bin/handoff-run.sh" --help >/dev/null 2>&1 || true
 t2=$(millis)
 elapsed=$((t2 - t1))
-if [ "$elapsed" -lt 500 ]; then
-  pass "handoff-run.sh --help < 500ms (actual: ${elapsed}ms)"
+help_limit=$(python3 "$SCRIPT_DIR/bin/lib/budget.py" 500)
+if [ "$elapsed" -lt "$help_limit" ]; then
+  pass "handoff-run.sh --help < ${help_limit}ms (actual: ${elapsed}ms, budget 500ms)"
 else
-  fail "handoff-run.sh --help took ${elapsed}ms"
+  fail "handoff-run.sh --help took ${elapsed}ms > ${help_limit}ms"
 fi
 
 echo ""

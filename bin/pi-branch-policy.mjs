@@ -30,6 +30,41 @@ function stripQuotedSegments(command) {
   return out;
 }
 
+// Heredoc bodies are stdin, not shell commands: a Markdown body's blockquote
+// (`> quote`), arrow (`A -> B`) or tag (`<br>`) is no redirect. Each opener
+// line stays, so its real output redirects are still checked. Same rule as
+// bin/branch-guard.cjs withoutHeredocBodies (Codex), so the runtimes agree.
+function withoutHeredocBodies(command) {
+  const pending = [];
+  const visible = [];
+  let quote = null;
+  for (const line of String(command).split("\n")) {
+    if (pending.length) {
+      const { delimiter, tabs } = pending[0];
+      if ((tabs ? line.replace(/^\t+/, "") : line) === delimiter) pending.shift();
+      continue;
+    }
+    visible.push(line);
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === "\\" && quote !== "'") { i++; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (line.slice(i, i + 3) === "<<<") { i += 2; continue; }
+      if (line.slice(i, i + 2) !== "<<") continue;
+      const match = line.slice(i).match(/^<<(-)?[ \t]*(?:'([^']+)'|"([^"]+)"|([^\s;&|<>]+))/);
+      if (match) {
+        pending.push({ delimiter: match[2] || match[3] || match[4], tabs: Boolean(match[1]) });
+        i += match[0].length - 1;
+      }
+    }
+  }
+  return visible.join("\n");
+}
+
 function maskQuotedOperators(command) {
   let out = "";
   let quote = null;
@@ -124,6 +159,7 @@ export function isRuntimeStatePath(target, projectDir) {
 
 export function mutatesOnlyRuntimeState(command, projectDir) {
   if (!isMutatingBash(command)) return false;
+  command = withoutHeredocBodies(command);
   const visible = stripQuotedSegments(String(command));
   if (MUTATING_GIT.test(visible) || MUTATING_PACKAGES.test(visible) ||
       /\bsed\s+[^\n]*\s-i(?:\s|$)/.test(visible)) return false;
@@ -183,6 +219,7 @@ export function isConsentCommand(command, branch) {
 
 export function isMutatingBash(command) {
   if (!command) return false;
+  command = withoutHeredocBodies(command);
   const meaningfulRedirects = stripQuotedSegments(String(command))
     .replace(/(?:^|\s)\d*>>?\s*\/dev\/null\b/g, " ")
     .replace(/(?:^|\s)\d*>\s*&\d+\b/g, " ");

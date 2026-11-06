@@ -19,6 +19,7 @@ GET_RESPONSE="$WORK/get-response.json"
 
 mkdir -p "$FIX/bin/lib" "$WORK/shim"
 cp "$ROOT/bin/settings.sh" "$FIX/bin/"
+mkdir -p "$FIX/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$FIX/bin/lib/config.sh"
 cp "$ROOT/bin/lib/settings-drift.sh" "$FIX/bin/lib/"
 cp -R "$ROOT/egregore_runtime" "$FIX/egregore_runtime"
 
@@ -71,6 +72,7 @@ seed '{"slug":"acme","org_name":"Acme","mode":"local","boundary":{"posture":"sta
 
 drive_pull() {
   (cd "$FIX" && BASE_BRANCH=develop bash -c '
+    source bin/lib/config.sh
     source bin/lib/settings-drift.sh
     settings_drift_pull
     printf "%s\n%s\n%s\n" "$SETTINGS_CP_SYNCED" "$SETTINGS_POSTURE_HELD" "$SETTINGS_SYNCED_FROM_ORG"
@@ -107,6 +109,26 @@ printf '{"settings":{"boundary":{"posture":"standard"}},"settings_revision":"rev
 OUT=$(drive_pull)
 grep -q " -X PUT https://cp.test/api/org/settings" "$CALLS" \
   && pass "failed push re-delivered at session start" || fail "no retry PUT" "$(cat "$CALLS" 2>/dev/null)"
+
+# ── 6. a worktree's linked state file is written through, never replaced ──
+# bin/worktree-create.sh links a worktree's .egregore-state.json to the
+# checkout's: a push and a pull both record the revision in the file the
+# link points to, the link stays a link, and no temp file is left behind.
+seed "$CONNECTED" "rev-old"
+mkdir -p "$WORK/checkout"
+mv "$FIX/.egregore-state.json" "$WORK/checkout/.egregore-state.json"
+ln -s "$WORK/checkout/.egregore-state.json" "$FIX/.egregore-state.json"
+(cd "$FIX" && bash bin/settings.sh posture strict >/dev/null 2>&1)
+[ -L "$FIX/.egregore-state.json" ] && [ "$(jq -r '.org_settings_revision' "$WORK/checkout/.egregore-state.json")" = "rev-put-1" ] \
+  && pass "a push records the revision through the link and keeps the link" \
+  || fail "the push replaced or missed the linked state" "$(ls -la "$FIX/.egregore-state.json"; cat "$WORK/checkout/.egregore-state.json")"
+printf '{"settings":{"boundary":{"posture":"strict"},"base_branch":"main"},"settings_revision":"rev-6"}\n' > "$GET_RESPONSE"
+OUT=$(drive_pull)
+[ -L "$FIX/.egregore-state.json" ] && [ "$(jq -r '.org_settings_revision' "$WORK/checkout/.egregore-state.json")" = "rev-6" ] \
+  && pass "a pull records the revision through the link and keeps the link" \
+  || fail "the pull replaced or missed the linked state" "$(ls -la "$FIX/.egregore-state.json"; cat "$WORK/checkout/.egregore-state.json")"
+[ -z "$(ls "$FIX"/.egregore-state.json.* "$WORK/checkout"/.egregore-state.json.* 2>/dev/null)" ] \
+  && pass "no temp file is left beside the link or its target" || fail "a temp file was left behind" "$(ls -a "$FIX" "$WORK/checkout")"
 
 echo ""
 echo "$PASS passed, $FAIL failed"

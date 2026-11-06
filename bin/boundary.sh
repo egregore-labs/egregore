@@ -23,41 +23,17 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# The isolation policy (boundary cache, instance identity, core boundary, hard
+# tier) has one implementation, shared by every runtime's pre-action check:
+# bin/boundary-guard.cjs. `check` and `compute-denied` delegate to it.
+GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/boundary-guard.cjs"
 
-# --- Load boundary file ---
-# Boundary file is written by session-start.sh at /tmp/egregore-boundary-{hash}.json
-# Hash is md5 of the project directory path for uniqueness
-load_boundary() {
-  local hash
-  hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
-  BOUNDARY_FILE="/tmp/egregore-boundary-${hash}.json"
-
-  if [ ! -f "$BOUNDARY_FILE" ]; then
-    # No boundary file — fall back to project dir only
-    PROJECT_DIR="$SCRIPT_DIR"
-    MEMORY_DIR=""
-    MANAGED_REPOS=""
-    DENIED_PATHS=""
-    return
+guard() {
+  if [ ! -f "$GUARD" ]; then
+    echo "boundary.sh: $GUARD is missing" >&2
+    return 1
   fi
-
-  PROJECT_DIR=$(jq -r '.project_dir // empty' "$BOUNDARY_FILE" 2>/dev/null)
-  MEMORY_DIR=$(jq -r '.memory_dir // empty' "$BOUNDARY_FILE" 2>/dev/null)
-  MANAGED_REPOS=$(jq -r '.managed_repos[]? // empty' "$BOUNDARY_FILE" 2>/dev/null)
-  DENIED_PATHS=$(jq -r '.denied_paths[]? // empty' "$BOUNDARY_FILE" 2>/dev/null)
-}
-
-# --- Resolve path to absolute ---
-resolve_path() {
-  local path="$1"
-  # Expand ~ to $HOME
-  path="${path/#\~/$HOME}"
-  # Resolve to absolute
-  if [[ "$path" != /* ]]; then
-    path="$SCRIPT_DIR/$path"
-  fi
-  # Resolve symlinks and ../ components
-  realpath "$path" 2>/dev/null || echo "$path"
+  bash "$(dirname "$GUARD")/node-run.sh" "$GUARD" "$@"
 }
 
 # --- Check if path is within an allowed directory ---
@@ -65,91 +41,6 @@ path_starts_with() {
   local path="$1"
   local prefix="$2"
   [[ "$path" == "$prefix" || "$path" == "$prefix/"* ]]
-}
-
-# --- Is a resolved path covered by a denied entry? ---
-# Self-scope carve-out, per entry: an ENCLOSING denied checkout (different or
-# unproven organization identity) never covers the project's own files — the
-# enclosing tree stays denied while the project stays usable. A denied entry
-# nested INSIDE the project is still enforced: residence under the project
-# proves nothing about identity.
-denied_covers() {
-  local resolved="$1" denied
-  local in_project=1
-  if [ -n "${PROJECT_DIR:-}" ] && path_starts_with "$resolved" "$PROJECT_DIR"; then
-    in_project=0
-  fi
-  for denied in $DENIED_PATHS; do
-    if path_starts_with "$resolved" "$denied"; then
-      if [ "$in_project" = "0" ] && path_starts_with "$PROJECT_DIR" "$denied"; then
-        continue
-      fi
-      echo "$denied"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# --- MODE: check <path> ---
-check_path() {
-  local target="$1"
-  local resolved
-  resolved=$(resolve_path "$target")
-
-  load_boundary
-
-  # Always-allowed system paths
-  if path_starts_with "$resolved" "/tmp"; then return 0; fi
-  if path_starts_with "$resolved" "$HOME/.claude"; then return 0; fi
-  if path_starts_with "$resolved" "/usr"; then return 0; fi
-  if path_starts_with "$resolved" "/etc"; then return 0; fi
-  if path_starts_with "$resolved" "/var"; then return 0; fi
-  if path_starts_with "$resolved" "/bin"; then return 0; fi
-  if path_starts_with "$resolved" "/sbin"; then return 0; fi
-  if path_starts_with "$resolved" "/opt"; then return 0; fi
-
-  # Explicitly denied paths (other instances) — per-entry self-scope carve-out
-  local covering
-  if covering=$(denied_covers "$resolved"); then
-    echo "BLOCKED: $resolved is inside another Egregore instance ($covering)"
-    return 1
-  fi
-
-  # Allow instance registry (read-only, needed for multi-instance features)
-  if path_starts_with "$resolved" "$HOME/.egregore"; then
-    return 0
-  fi
-
-  # Allowed: project directory
-  if [ -n "$PROJECT_DIR" ] && path_starts_with "$resolved" "$PROJECT_DIR"; then
-    return 0
-  fi
-
-  # Allowed: memory directory (resolved symlink target)
-  if [ -n "$MEMORY_DIR" ] && path_starts_with "$resolved" "$MEMORY_DIR"; then
-    return 0
-  fi
-
-  # Allowed: managed repos
-  for repo_path in $MANAGED_REPOS; do
-    if path_starts_with "$resolved" "$repo_path"; then
-      return 0
-    fi
-  done
-
-  # Allowed: parent directory (for sibling repo operations like git clone)
-  local parent_dir
-  parent_dir="$(dirname "$PROJECT_DIR")"
-  if path_starts_with "$resolved" "$parent_dir"; then
-    # But NOT if it resolves into a denied path (denied_covers already ran
-    # above and returns first, so reaching here means no covering entry)
-    return 0
-  fi
-
-  # Default: block
-  echo "BLOCKED: $resolved is outside the session boundary"
-  return 1
 }
 
 # --- MODE: validate-repos ---
@@ -193,40 +84,6 @@ validate_repos() {
   return $exit_code
 }
 
-# --- MODE: compute-denied <registry> <project_dir> [org_id] [allow_path] ---
-# Emits the denied_paths JSON array for a session boundary: every registered
-# instance not proven to share this project's identity. An entry is excluded
-# only when one of these proofs holds:
-#   - it IS the project (.path == project_dir)
-#   - caller-proven same instance: .path == allow_path, passed only when the
-#     caller holds a stronger proof (worktree-create passes the enclosing repo
-#     whose git dir this worktree physically shares)
-#   - registry-proven same organization: both the project's org_id and the
-#     entry's org_id are present and equal
-# No path relationship proves identity: not ancestry, not residence under the
-# project's own .claude/worktrees (legitimate task worktrees are covered by
-# matching org_id or the caller-proven allowance), and a slug is presentation,
-# not identity. Entries with a different or missing org_id stay denied (fail
-# closed) — the enforcement layers' self-scope carve-out keeps a nested
-# project usable while its unproven enclosing tree stays denied, and a denied
-# entry nested inside the project is still enforced.
-compute_denied() {
-  local registry="$1" project_dir="$2" org_id="${3:-}" allow_path="${4:-}"
-  if [ ! -f "$registry" ]; then
-    echo "[]"
-    return 0
-  fi
-  jq --arg self "$project_dir" \
-     --arg org "$org_id" \
-     --arg allow "$allow_path" \
-    '[.[]
-      | select(.path != $self)
-      | select(if $allow == "" then true else (.path != $allow) end)
-      | select(if $org == "" then true else ((.org_id // "") != $org) end)
-      | .path]' \
-    "$registry" 2>/dev/null || echo "[]"
-}
-
 # --- Main ---
 case "${1:-}" in
   check)
@@ -234,17 +91,20 @@ case "${1:-}" in
       echo "Usage: boundary.sh check <path>"
       exit 1
     fi
-    check_path "$2"
+    guard check "$2" --project-dir "$SCRIPT_DIR"
     ;;
   validate-repos)
     validate_repos
     ;;
   compute-denied)
+    # Every registered instance not proven to share <project_dir>'s identity
+    # (computeDenied in bin/boundary-guard.cjs). Exits 1 when the registry
+    # exists but cannot be read: callers fail closed, never read it as [].
     if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
       echo "Usage: boundary.sh compute-denied <registry> <project_dir> [org_id] [allow_path]"
       exit 1
     fi
-    compute_denied "$2" "$3" "${4:-}" "${5:-}"
+    guard compute-denied "$2" "$3" "${4:-}" "${5:-}"
     ;;
   *)
     echo "Usage: boundary.sh {check <path>|validate-repos|compute-denied <registry> <project_dir> [org_id] [allow_path]}"

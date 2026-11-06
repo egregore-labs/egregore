@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export EGREGORE_ROOT="$ROOT"
 export PYTHONSAFEPATH=1 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export EGREGORE_SESSION_ID="${EGREGORE_SESSION_ID:-$(cat "$ROOT/.egregore-session-id" 2>/dev/null || true)}"
+export EGREGORE_SESSION_ID="${EGREGORE_SESSION_ID:-$(bash "$ROOT/bin/session-id.sh" --root "$ROOT" 2>/dev/null || cat "$ROOT/.egregore-session-id" 2>/dev/null || true)}"
 
 case "${1:-}" in
   capture)

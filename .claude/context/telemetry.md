@@ -153,51 +153,20 @@ On the first session where telemetry events are emitted, if `telemetry_noticed` 
 
 Then set `telemetry_noticed: true` in the state file. Never repeat this notice.
 
-## Session Reports
+## Framework support and legacy session feedback
 
-Separate from telemetry. Users can optionally share session reports during `/wrap` or via `/issue egregore:`. Reports are **opt-in per session** — the user is asked each time and must explicitly agree.
+For an Egregore bug, including the historical `/issue egregore:` wording, use
+the [issue workflow](../skills/issue/SKILL.md). Connected instances prepare an
+exact private support preview and submit only after confirmation. Local users
+can explicitly choose a public upstream report. An internal issue stays within
+its organization's memory or configured tracker; it does not automatically
+reach Egregore support. `/wrap` does not collect or submit session feedback.
 
-### How it works
+Anonymous session feedback is retired. `bin/session-report.sh` remains only as
+a compatibility notice: it never reads the submitted content, sends a request,
+or saves a report. Old `report_url` and `report_key` configuration fields are
+ignored. Existing local feedback files are left untouched.
 
-`bin/session-report.sh` handles report submission. It POSTs directly to Supabase via the anon key (no API server needed). The agent generates a structured report from the session context inline — no separate LLM call.
-
-```bash
-# Submit a report (reads JSON from stdin)
-echo '{"topic":"...","summary":"..."}' | bash bin/session-report.sh submit
-
-# Check reporting status
-bash bin/session-report.sh status
-```
-
-### What is sent
-
-- AI-analyzed topic + summary (same as what's written to memory)
-- Gap analysis: `{type, detail}` where type is `missing_skill`, `missing_tool`, `repeated_failure`, `wrong_info`, or `confusing_ux`
-- User's own description (if provided)
-- System info: mode, platform, shell, framework version
-- Session duration and message count
-
-### What is NEVER sent
-
-- Code, file contents, or file paths
-- Conversation transcript or user prompts
-- Environment variables or secrets
-- Org-specific data (sanitized before sending — org names, person names, tokens replaced)
-
-### Opt-out
-
-- `EGREGORE_NO_REPORTS=1` in `.env`
-- `.egregore-state.json` → `"session_reports": false`
-- Simply answer "No thanks" when prompted during `/wrap`
-- `DO_NOT_TRACK=1` also disables reports
-
-### Transport
-
-- Direct to Supabase via anon key (INSERT-only RLS policy)
-- If network fails: saved locally to `~/.egregore/reports/` as fallback
-- Telegram notification to maintainers fires server-side via Supabase DB webhook
-- Optional: GitHub issue creation on `egregore-labs/egregore` (user chooses each time)
-
-### Configuration
-
-Reports require `report_url` and `report_key` in `egregore.json`. New OSS installations get these automatically via `create-egregore`. If missing, the report prompt is skipped entirely.
+Never invoke legacy feedback automatically or use it as a fallback when private
+support fails. Use the reviewed issue workflow above; private support retains
+its authenticated organization identity and exact preview/confirmation boundary.

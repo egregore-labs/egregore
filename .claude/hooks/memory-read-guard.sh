@@ -28,9 +28,17 @@ WINDOW_MIN="${EGREGORE_RETRIEVAL_WINDOW_MIN:-15}"
 _fresh() { [ -f "$1" ] && [ -n "$(find "$1" -mmin "-$WINDOW_MIN" 2>/dev/null)" ]; }
 NATIVE_SESSION=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 EPISODE=""
+# Prompt bindings are kept once per installation: a linked worktree reads its
+# main checkout's store (the same climb as bin/search.sh).
+STORE_ROOT="$PROJECT_DIR"
+if [ -f "$PROJECT_DIR/.git" ]; then
+  GITDIR=$(sed -n 's/^gitdir: //p' "$PROJECT_DIR/.git" 2>/dev/null)
+  case "$GITDIR" in /*|'') ;; *) GITDIR="$PROJECT_DIR/$GITDIR" ;; esac
+  case "$GITDIR" in */.git/worktrees/*) STORE_ROOT="${GITDIR%/.git/worktrees/*}" ;; esac
+fi
 if [ -n "$NATIVE_SESSION" ]; then
   BINDING_KEY=$(printf 'claude:%s' "$NATIVE_SESSION" | shasum -a 256 | cut -d' ' -f1)
-  EPISODE=$(jq -r '.episode_id // empty' "$PROJECT_DIR/.egregore/runtime/bindings/$BINDING_KEY.current" 2>/dev/null)
+  EPISODE=$(jq -r '.episode_id // empty' "$STORE_ROOT/.egregore/runtime/bindings/$BINDING_KEY.current" 2>/dev/null)
 fi
 if [ -n "$EPISODE" ]; then
   STATE_KEY=$(printf '%s' "$EPISODE" | shasum -a 256 | cut -d' ' -f1)

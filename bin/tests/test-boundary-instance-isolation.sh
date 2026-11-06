@@ -35,12 +35,13 @@ echo ""
 # CLONE/.claude/worktrees/task1      child entry under the project, org ORG_B
 # CLONE/.claude/worktrees/task2      child entry under the project, org ORG_A
 #
-# Fixture root lives under $HOME, not mktemp's default: /tmp (Linux) and
-# /private/var (macOS) are system-allowed by the checkers before denied rules
-# apply, which would mask the very blocks under test. Physical path — registry
-# entries are physical, and realpath-resolved targets must prefix-match them.
-T="$(mktemp -d "${HOME}/egregore-boundary-isolation-test.XXXXXX")"
+# Keep fixtures in the writable workspace, outside system-allowed /tmp, and
+# replace HOME before invoking the guard: never read the user's real registry.
+mkdir -p "$SCRIPT_DIR/tmp"
+T="$(mktemp -d "$SCRIPT_DIR/tmp/egregore-boundary-isolation-test.XXXXXX")"
 T="$(cd "$T" && pwd -P)"
+export HOME="$T/home"
+mkdir -p "$HOME"
 ORG_A="org-aaaa-1111-2222-3333"
 ORG_B="org-bbbb-4444-5555-6666"
 PARENT="$T/acme-hq"
@@ -346,6 +347,7 @@ echo ""
 echo "— bin/boundary.sh check parity —"
 mkdir -p "$CLONE/bin"
 cp "$BOUNDARY_SH" "$CLONE/bin/boundary.sh"
+cp "$SCRIPT_DIR/bin/boundary-guard.cjs" "$SCRIPT_DIR/bin/node-run.sh" "$CLONE/bin/"
 
 write_boundary "[\"$FOREIGN\"]"
 bash "$CLONE/bin/boundary.sh" check "$CLONE/README.md" >/dev/null 2>&1 \
@@ -377,12 +379,14 @@ bash "$CLONE/bin/boundary.sh" check "$CLONE/README.md" >/dev/null 2>&1 \
 # ============================================================
 echo ""
 echo "— worktree/session-start parity —"
-grep -q 'compute-denied' "$SCRIPT_DIR/bin/worktree-create.sh" \
-  && pass "worktree-create routes through compute-denied" \
-  || fail "worktree-create has its own denied-path logic"
-grep -q 'compute-denied' "$SCRIPT_DIR/bin/session-start.sh" \
-  && pass "session-start routes through compute-denied" \
-  || fail "session-start has its own denied-path logic"
+for f in bin/worktree-create.sh bin/session-start.sh bin/codex-session-start.sh; do
+  grep -q 'boundary-guard.cjs" write-cache' "$SCRIPT_DIR/$f" && ! grep -q 'compute-denied' "$SCRIPT_DIR/$f" \
+    && pass "$f writes the boundary through the shared computation" \
+    || fail "$f has its own boundary or denied-path logic"
+done
+grep -q 'boundary-guard.cjs' "$BOUNDARY_SH" \
+  && pass "boundary.sh compute-denied delegates to the shared computation" \
+  || fail "boundary.sh keeps its own denied-path logic"
 
 # The worktree call passes its enclosing repo as the caller-proven allowance:
 # on a legacy registry (no org_id anywhere) the enclosing repo must still be
@@ -397,6 +401,24 @@ denied_has "$DENIED_WT" "$FOREIGN" \
   || fail "worktree: foreign excluded" "$DENIED_WT"
 
 # --- Summary ---
+echo ""
+echo "— shared per-user state, check CLI —"
+mkdir -p "$HOME/.egregore/exports" "$HOME/.egregore/runtime" "$HOME/.egregore/mind"
+printf '[]\n' > "$HOME/.egregore/instances.json"
+ln -s "$HOME/.egregore/exports" "$HOME/.egregore/unknown-link"
+ln -s "$HOME/.egregore/mind" "$HOME/.egregore/exports/mind-link"
+for target in "$HOME/.egregore/runtime/new" "$HOME/.egregore/mind/new" \
+  "$HOME/.egregore/unknown-link/new" "$HOME/.egregore/exports/mind-link/new"; do
+  bash "$CLONE/bin/boundary.sh" check "$target" >/dev/null 2>&1 \
+    && fail "check: protected shared state allowed: ${target#"$HOME/"}" \
+    || pass "check: protected shared state blocked: ${target#"$HOME/"}"
+done
+for target in "$HOME/.egregore/exports/new" "$HOME/.egregore/instances.json"; do
+  bash "$CLONE/bin/boundary.sh" check "$target" >/dev/null 2>&1 \
+    && pass "check: documented shared path allowed: ${target#"$HOME/"}" \
+    || fail "check: documented shared path blocked: ${target#"$HOME/"}"
+done
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1 || exit 0

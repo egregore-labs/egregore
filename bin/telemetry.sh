@@ -7,6 +7,8 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 if [ -n "${EGREGORE_TELEMETRY_DIR:-}" ]; then
   BUFFER_DIR="$EGREGORE_TELEMETRY_DIR"
 else
@@ -38,7 +40,6 @@ MAX_BUFFER_BYTES=1048576
 MAX_EVENTS_AFTER_TRUNCATE=500
 SHARE_CONSENT_SECONDS=600
 SCHEMA_VERSION="egregore.telemetry/v1"
-LEGACY_RELAY_URL="https://egregore-production-55f2.up.railway.app/api/telemetry/relay"
 
 ALLOWED_METRICS_JSON='[
   "action","branch","class","command","connector","cost_usd","count",
@@ -516,27 +517,28 @@ cmd_export() {
 
 _resolve_share_target() {
   local requested_endpoint="$1"
-  local allow_legacy_relay="$2"
   if [ -n "$requested_endpoint" ]; then
-    printf '%s\n' "$requested_endpoint"
-    return
+    # An explicit endpoint never gets the org key (cmd_share adds it only for
+    # the configured sink), so it needs the retired host mapped and nothing
+    # more; any other address goes to cmd_share's scheme check as typed.
+    _hosted_api_target "$requested_endpoint" 2>/dev/null || printf '%s\n' "$requested_endpoint"
+    return 0
   fi
   local api_url="" api_key=""
   if [ -f "$CONFIG" ]; then
-    api_url=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)
+    # A refused saved address names no sink: never fall through to the relay.
+    api_url=$(_hosted_api_url "$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null || true)") || return 0
   fi
   if [ -f "$ENV_FILE" ]; then
     api_key=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
   fi
   if [ -n "$api_url" ] && [ -n "$api_key" ]; then
     printf '%s/api/telemetry/ingest\n' "${api_url%/}"
-  elif [ "$allow_legacy_relay" = "true" ]; then
-    printf '%s\n' "$LEGACY_RELAY_URL"
   fi
 }
 
 cmd_share() {
-  local confirmation="" requested_endpoint="" allow_legacy_relay="false" json_output="false"
+  local confirmation="" requested_endpoint="" json_output="false"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --confirm)
@@ -548,8 +550,10 @@ cmd_share() {
         shift 2
         ;;
       --legacy-public-relay)
-        allow_legacy_relay="true"
-        shift
+        # The former public relay ran on a retired host; nothing is sent there.
+        echo "The former public relay is retired; nothing was sent." >&2
+        echo "Export locally, or name an explicit --endpoint." >&2
+        return 2
         ;;
       --json)
         json_output="true"
@@ -567,10 +571,9 @@ cmd_share() {
   fi
 
   local endpoint=""
-  endpoint=$(_resolve_share_target "$requested_endpoint" "$allow_legacy_relay")
+  endpoint=$(_resolve_share_target "$requested_endpoint")
   if [ -z "$endpoint" ]; then
     echo "No shared telemetry sink is configured. Export locally, or name an explicit --endpoint." >&2
-    echo "The former public relay remains available only with --legacy-public-relay." >&2
     return 2
   fi
   case "$endpoint" in
@@ -694,10 +697,11 @@ cmd_share() {
     : > "$share_file"
   fi
 
-  local curl_args=(-s -o /dev/null -w '%{http_code}' -X POST "$endpoint"
+  # -q first (no ~/.curlrc), --globoff: the endpoint reaches the one host it names.
+  local curl_args=(-q --globoff -s -o /dev/null -w '%{http_code}' -X POST "$endpoint"
     -H "Content-Type: application/x-ndjson" --data-binary "@$share_file" --max-time 15)
   local api_key="" configured_endpoint=""
-  configured_endpoint=$(_resolve_share_target "" "false")
+  configured_endpoint=$(_resolve_share_target "")
   if [ -n "$configured_endpoint" ] && [ "$endpoint" = "$configured_endpoint" ] && [ -f "$ENV_FILE" ]; then
     api_key=$(grep '^EGREGORE_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
   fi

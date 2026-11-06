@@ -10,7 +10,7 @@ description: "TUI Design System for Egregore slash commands. Use when designing 
 This skill governs TERMINAL RENDERING — structural, not tonal.
 Shared aesthetic: voice-bedrock (`.claude/rules/voice-bedrock.md`).
 For product voice in command output prose: `product-voice` skill.
-For browser visual output: `dark-mode` skill.
+For browser visual output: `dark-mode` skill, which takes every color from the design system registry (`packages/design-system/themes/registry.json`).
 For ASCII diagrams in explanations: `visual-explain` skill.
 
 ## When to invoke

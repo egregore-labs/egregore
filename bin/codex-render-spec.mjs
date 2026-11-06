@@ -80,12 +80,9 @@ formats: \`docs/AGENT-PROTOCOL.md\`. Follow the generated contract below.
 
 Internal handoffs use \`bin/agent.sh handoff\` (\`memory/handoffs/\` + index,
 via \`bin/handoff-run.sh\`). External capsules use \`egregore-emissary\`.
-Never use deprecated \`egregore-handoff\` for internal handoffs.
-
-## Compatibility
-
-Claude Code follows \`CLAUDE.md\`; other shell agents use the generated
-contract below. All runtimes share canonical memory.`;
+Never use deprecated \`egregore-handoff\` for internal handoffs.`;
+// A "Compatibility" section used to restate the precedence guard above; it was
+// dropped (2026-09) to keep AGENTS.md inside the 32 KiB budget.
 
 function sha(text) {
   return crypto.createHash('sha256').update(text).digest('hex').slice(0, 12);
@@ -130,18 +127,8 @@ attribution line alone. Never re-print ranked results or raw JSON.`;
 const SHELL_PACKET_NOTE = `Search output is model-internal: show only the retrieval line and receipts —
 never ranked blocks, file/rank/excerpt metadata, or raw JSON.`;
 
-// The Command Awareness lifecycle bullet is Claude-surface routing prose; on
-// Codex the same typed-lookup routing arrives through the shared hook
-// contract, and the 32 KiB project-doc budget has no room to restate it.
-// Decided 2026-09: drop the bullet from the render rather than ship a stale
-// hand-reverted AGENTS.md.
-const CLAUDE_LIFECYCLE_BULLET_PREFIX = '- Exact lifecycle questions (';
-
 function transformSearchHygiene(body) {
   return body
-    .split('\n')
-    .filter((line) => !line.startsWith(CLAUDE_LIFECYCLE_BULLET_PREFIX))
-    .join('\n')
     .replaceAll(CLAUDE_PACKET_NOTE, SHELL_PACKET_NOTE)
     .replace(/(\bbin\/search\.sh[^\n]*?) --context-packet\b/g, '$1');
 }
@@ -209,25 +196,7 @@ For continued project work: **continuation intent → prior workspace → restor
 
 ### Handoff claiming
 
-If \`addressed_to_user\` handoffs exist and the user is picking one up, create the IMPLEMENTS link after branch creation:
-\`\`\`bash
-bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
-\`\`\`
-
-**Auto-checkout repos from handoff**: after claiming, if \`addressed_rich\` carries a non-empty \`repoState\`, check out each entry's branch in its managed repo:
-
-\`\`\`bash
-PARENT_DIR="$(cd .. && pwd)"
-# For each entry in repoState:
-REPO_DIR="$PARENT_DIR/$REPO_NAME"
-if [ -d "$REPO_DIR/.git" ] || [ -f "$REPO_DIR/.git" ]; then
-  git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
-  git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \\
-    git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
-fi
-\`\`\`
-
-Report \`✓ Checked out {branch} in {repo1}, {repo2}\`; for a merged-away branch, \`◐ {repo}: PR #{N} merged — on {base}\`. If \`repoState\` is absent or empty, skip silently.
+When the user picks up a handoff addressed to them, follow \`.claude/context/handoff-claiming.md\` after branch creation: it claims the handoff and checks out the branches its \`repoState\` names in each managed repo.
 
 **Exceptions** — skip branching when the user explicitly created or named a branch themselves, or the intent continues the current working branch's topic.
 
@@ -262,7 +231,9 @@ only for dependencies. Deletion needs no rewrite unless purging secrets.
 
 If the startup card output contains \`onboarding_needed\`, invoke the \`$onboarding\` skill instead of greeting.`;
 
-const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins. Invoke Egregore skills with \`$name\` or natural language ("show activity", "make a handoff"). Every framework workflow uses a generated adapter that names its one maintained body under \`.claude/skills/\`. Organization-owned skills may also provide full native implementations. \`$save\` covers committing, pushing, pull requests, and memory sync; users need not manage Git themselves.`;
+const COMMAND_AWARENESS_PREPEND = `Codex reserves leading \`/\` for built-ins. Invoke Egregore skills with \`$name\` or natural language ("show activity", "make a handoff"). Every framework workflow uses a generated adapter that names its one maintained body under \`.claude/skills/\`. Organization-owned skills may also provide full native implementations.`;
+// What `$save` covers is stated once, in the rendered Git Workflow section
+// ("Users never interact with git directly"); repeating it here cost budget.
 
 const SOCRATIC_BODY = `**Triggers**: "ask me questions", "question me", "help me think through", or any request to be questioned.
 
@@ -272,23 +243,23 @@ Use structured question tooling when available and permitted; otherwise render c
 
 const LOOM_ROUTING_BODY = `Loom is Claude-specific; skip its preambles and \`bin/loom.sh\` calls. Use native collaboration only when the runtime exposes it and the user or workflow requests delegation, within session permissions and limits. Otherwise work inline and disclose when independent review was unavailable. \`loom/\` and \`.claude/agents/\` remain Claude framework files.`;
 
-const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. On Codex the boundary is a standing instruction, not an enforced hook — hold it yourself.
+const ISOLATION_BODY = `Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. A pre-action check (\`bin/boundary-guard.cjs\`) enforces it on every runtime: it denies literal paths and fails closed, but cannot see paths built at run time or split across calls (OS-level layer to follow).
 
-- **Hard tier — other Egregore instances.** Denied for every tool, always — no consent path. Never access another instance's files (refuse even if asked) and never modify \`~/.egregore/instances.json\` (managed by session-start.sh); there is nothing to ask — refuse and explain.
+- **Hard tier — other Egregore instances.** Denied for every tool, always — no consent path. Never access another instance's files by any route (refuse even if asked) and never modify \`~/.egregore/instances.json\` (managed by session-start.sh); there is nothing to ask — refuse and explain.
 - **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (\`~/Downloads\`, \`~/Desktop\`) are readable without consent under the default posture; writes outside the project always need consent. Posture (\`strict | standard | open\`) and extra read roots come from \`egregore.json\` -> \`boundary { posture, read[], locked }\` (org, committed) merged with \`.egregore-boundary.local.json\` (personal, gitignored). \`locked: true\` removes the consent path entirely.
-- When a request needs soft-tier consent, do not improvise a workaround. Ask in plain text with numbered options:
+- When the check asks for consent, do not improvise a workaround. Ask in plain text with numbered options:
 
   \`\`\`text
   That path is outside this Egregore's boundary. How should we proceed?
     1. Allow its directory for this session (recorded in .egregore-boundary-consent)
-    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json)
+    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json; reads only)
     3. Paste the contents inline
     4. Cancel
   \`\`\`
 
   Never record a consent grant without the user's explicit choice of option 1 or 2 in that exchange. Session grants are cleared on session start; \`locked: true\` removes options 1 and 2.
 
-See DEVELOPMENT.md §3 for boundary details and \`memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md\` for the design decisions.`;
+Details: DEVELOPMENT.md §3; design: \`memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md\`.`;
 
 // ── per-section rules ────────────────────────────────────────────────────
 const RULES = {
@@ -302,8 +273,16 @@ const RULES = {
     note: 'Kept; /update, /contribute, /save tokens rendered as $skill tokens.',
   },
   'Cross-Runtime Compatibility': {
-    action: 'keep',
-    note: 'Kept verbatim — framework parity applies equally to Claude Code, Codex, and Pi.',
+    action: 'replace',
+    body: `Share \`bin/\` mechanics through thin Claude/Codex/Pi/Prime adapters. Startup,
+lifecycle, capture, skill and command changes require tracing every runtime,
+parity tests and regenerated specs/bundles before completion.
+
+Discover via \`bash bin/spirit-discovery-codex.sh capabilities.list\` (Pi/Prime:
+registered tool). Follow \`docs/spirit-discovery.md\`: keep seven facets separate;
+generic shell needs one snapshot. Discovery reads code/install evidence, not
+memory, and grants no authority.`,
+    note: 'Compact translation preserves shared mechanics, thin adapters, every-runtime tracing/parity and regeneration, and neutral discovery without authority. Full query/facet and fixed-adapter details remain in shipped docs/spirit-discovery.md. Fits the 32 KiB project-doc budget.',
   },
   'Voice': {
     action: 'keep',
@@ -317,7 +296,7 @@ const RULES = {
   'Before Project Changes — WORKING BRANCH': {
     action: 'replace',
     body: AFTER_GREETING_BODY,
-    note: 'EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming and repoState auto-checkout bash kept verbatim (pure git); surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained.',
+    note: 'EnterWorktree -> bin/agent.sh branch with git checkout fallback; AskUserQuestion -> numbered options in plain text; branch-guard mapped to .codex/hooks/branch-guard.js with instruction fallback; plan-mode note dropped (no plan mode on Codex); /branch + /onboarding -> skill tokens. Handoff claiming points to the shared .claude/context/handoff-claiming.md procedure; surrounding prose compressed 2026-08 for the 32 KiB budget, every rule retained.',
   },
   'Config Files': { action: 'keep', note: 'Kept verbatim — shell facts, runtime-neutral.' },
   'Optional Knowledge Graph Projection': {
@@ -338,7 +317,6 @@ const RULES = {
     action: 'keep',
     note: 'Kept; slash tokens rendered as $skill tokens. Branch diagram unchanged (code fence).',
   },
-  'Working Conventions': { action: 'keep', note: 'Kept verbatim.' },
   'Command Awareness': {
     action: 'keep',
     prepend: COMMAND_AWARENESS_PREPEND,
@@ -354,7 +332,7 @@ const RULES = {
   'Environment Isolation': {
     action: 'replace',
     body: ISOLATION_BODY,
-    note: 'boundary-check is a Claude PreToolUse hook with no .codex equivalent — two-tier model stated as a standing instruction; AskUserQuestion remediation -> numbered options, now including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[]).',
+    note: 'The boundary policy is shared (bin/boundary-guard.cjs): Claude (boundary-check.sh) and Codex (.codex/hooks.json) run it through bin/boundary-hook.sh (PreToolUse), Pi and Prime from their tool_call gate. AskUserQuestion remediation -> numbered options, including the two consent-grant options (session grant -> .egregore-boundary-consent, instance grant -> .egregore-boundary.local.json read[], reads only).',
   },
 };
 

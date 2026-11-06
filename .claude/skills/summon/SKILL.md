@@ -1,240 +1,171 @@
 ---
 name: summon
-description: "Design and launch a persistent agent (a spirit) that runs on a schedule or watches for conditions, via adaptive questioning that produces a reviewable spec before launch."
+description: "Reuse, design, and launch Egregore spirits. Review available recipes and current host permissions, then start authorized on-demand work or design a scheduled process for an available scheduler."
 ---
 
-# /summon — Design and Launch a Persistent Agent Process
+# Summon an Egregore spirit
 
-Summon a spirit — a persistent agent that runs on a schedule or watches for conditions. Unlike `/loop` (dumb scheduler), `/summon` designs the process through adaptive questioning, produces a reviewable spec, then launches it.
+A spirit is an Egregore agent with a durable purpose and execution history.
+Begin with what the user wants done and reuse an available recipe when it fits.
+A recipe is a portable design; an admitted run and a running schedule each need
+their own host receipt. Saving a design does not launch a spirit.
 
 ## When to invoke
 
-**Trigger phrases**: "summon", "create a loop", "set up a recurring", "watch for", "monitor", "keep an eye on", "babysit", "run something every", "I want an agent that"
+Use for “summon,” “I want a spirit that,” reusing a spirit recipe, or designing
+recurring work, monitoring, and condition-triggered work. Ordinary one-off work
+needs no new recipe unless the user wants a reusable spirit. A fully specified
+schedule can go straight to an available scheduler.
 
-**Not this command**:
-- Quick one-shot schedule → `/loop` directly (user already knows what they want)
-- One-time task → just do it, no spirit needed
+## 1. Restore intent and discover what exists
 
-## Mode detection
+Use the conversation first. Do not ask again for purpose, constraints, or
+authorization already supplied. Ask only for missing information that affects
+the next action; use structured questions when available.
 
-```bash
-bash bin/config-get.sh mode
+For organizational context, follow the Runtime retrieval contract: reuse
+supplied evidence, otherwise use `bash bin/search.sh find` and `open`. Show the
+required retrieval beat. Do not scan raw memory or query relationships merely
+because the request concerns a spirit. Existing `.spirits/` designs are project
+files and can be inspected normally.
+
+Check the tools actually exposed by the current host:
+
+- If `discover_capabilities` is available, use it to find visible recipes and
+  their limitations. A catalog entry alone does not establish readiness.
+- If `review_spirit_recipe` is available, review the selected recipe. Show its
+  purpose, profile, **effective tools**, on-demand trigger, and admission result.
+  Required capability IDs describe workflow features; they do not limit the
+  profile to only those tools. A review digest grants no permissions.
+- If these tools are absent, continue with design using available evidence.
+  Do not invent a recipe review, host binding, installed capability, or launch.
+
+Never infer availability from this skill's examples. Source recipes such as
+`egregore/researcher` and `egregore/pm` must still pass the current host review.
+Local candidates are not reviewed releases or evidence of deployment adoption.
+
+## 2. Reuse a recipe for authorized work
+
+With the host tools available, the sequence is:
+
+1. `review_spirit_recipe({"recipe_id":"<selected ID>"})`.
+2. Present the current scope and effective permissions. Proceed if the user's
+   existing request authorizes the concrete task and admission is allowed.
+3. Call `delegate_work` with `recipe_id`, the returned
+   `expected_binding_digest`, and the user's `task`. Include
+   `source_message_ids` only for selected messages in the authorized direct
+   conversation. Do not also supply `profile` or construct a binding yourself.
+4. Report the returned job or clarification and how to inspect or cancel it.
+
+Recipe discussion or a deferred source link is not a request to start work.
+Preserve the user's original constraints, source selection, and “do not
+implement” limits. On a stale review, re-review; changed permissions or scope
+need to be made visible before continuing. A denied admission is not a reason
+to bypass the recipe through a broader profile.
+
+The Telegram host also supports direct commands in an authorized DM:
+
+```text
+/summon <recipe ID>                 Review only
+/summon <recipe ID> <task>          Request one run
 ```
 
-Use the printed value as `{mode}`; quote it in single quotes when you use it in a command, and write any single quote inside the value as `'\''`.
+The task form obtains a fresh host review and admits against that binding. It
+uses the same queue, current actor grants, source clarification, and result
+delivery as other spirit work. It creates no schedule. Group commands do not
+expose recipe details or start recipe work.
+This is an explicit command form: every trailing task is submitted as work.
+Use the review-only form to inspect a recipe; use ordinary conversation to
+discuss a future task or retain a link without starting a run.
 
-**Local mode** (`{mode}` is `local`): Skip ALL `bin/graph-op.sh` and `bin/notify.sh` calls — do NOT run them. Do NOT show any graph-related messaging.
+If launch tools are unavailable, report that no work was started. Say a design
+was saved only after actually writing it. Do not present a source file or a
+model promise as an active spirit.
 
-Local-mode adjustments:
-- **Phase 1**: Skip the graph scan. Generate options from conversation context, `memory/quests/` files, and `.spirits/` directory instead of the graph.
-- **Phase 5**: Skip Spirit node creation in Neo4j. Write the spec file to `.spirits/{name}.json`. **Claude Code:** create the scheduled job — this works without the graph.
-- **Phase 6**: Skip LoopReport creation in Neo4j. The TUI report still renders, but the graph artifact is not created.
-- **Managing Spirits**: Read from `.spirits/` directory instead of querying the graph. **Claude Code:** suspend/resume only deletes or creates the scheduled job, without graph updates.
+## 3. Design a new reusable spirit when needed
 
-## Instructions
+Resolve the consequential unknowns: purpose and source scope; actions and
+boundaries; outcome evidence; budget and stop conditions; delivery; and whether
+the trigger is on-demand, scheduled, or event-based. Stop questioning when
+these are concrete. Reuse known capabilities instead of creating a parallel
+implementation because a spirit has a new name.
 
-### Phase 1: Intent Discovery
-
-Start with one open question: ask with a structured question when available and permitted in this session; otherwise ask in plain text:
-
-```
-What should this spirit do?
-```
-
-**Connected mode:** Options should be derived from current graph context — not hardcoded. Before asking, run a lightweight graph scan to understand what's happening:
-
-```bash
-mkdir -p tmp
-```
-
-```bash
-bash bin/graph-op.sh spirit-context > tmp/summon-context.json
-```
-
-Read the active quests, recent sessions, and spirit health signals:
-
-```bash
-jq '.values[0][0] // {}' tmp/summon-context.json
-```
-
-Use the printed results as `{context}` for the options below.
-
-Use this context to generate options that are relevant — e.g. if there are dormant quests, offer "reconcile dormant work"; if there's a PR-heavy period, offer "watch PRs". Always include a free-text option.
-
-**Local mode:** Skip the graph scan. Instead, derive options from:
-- Active quests in `memory/quests/` (parse frontmatter for status)
-- Recent handoffs in `memory/handoffs/index.md`
-- Existing spirits in `.spirits/` directory
-- Conversation context
-Always include a free-text option.
-
-The agent has full discretion to decide what context is relevant given the user's stated intent.
-
-### Phase 2: Adaptive Convergence
-
-Ask questions iteratively with a structured question when available and permitted in this session; otherwise ask in plain text. Each round is informed by previous answers AND graph context. The questioning is non-linear — the agent decides what to ask based on where the interesting tension is, not a fixed script.
-
-**Dimensions to explore** (not necessarily in order — the agent picks what matters):
-
-- **Scope**: What exactly does the spirit observe? What can it act on? What's off-limits?
-- **Cadence**: How often? Time-driven (cron) or condition-driven (watchdog)? Or both?
-- **Boundaries**: What should it never do? What requires human approval vs auto-action?
-- **Reporting**: What does the user want to see? Metrics? Narrative? Diffs? Alerts only?
-- **Failure modes**: What happens when the spirit finds something it can't handle?
-- **Evolution**: Should the spirit's behavior change as it learns? How?
-
-**Convergence signal**: When the user's answers start narrowing to specifics (concrete conditions, specific quests, named thresholds), propose the spec. Don't ask more than 6 rounds unless the user is actively expanding scope.
-
-**For watchdog spirits** (event-driven):
-- Define the condition to watch for (as a Cypher query or graph pattern)
-- Define the action on trigger (notify, auto-fix, flag, escalate)
-- Cadence is polling interval (cron-based for now, hookable later)
-
-### Phase 3: Spec Generation
-
-Produce a spirit spec as JSON. Write to `.spirits/{name}.json`:
+For a Pi Durable on-demand design, write `.spirits/{name}.json` using the
+portable v2 shape. This example is illustrative, not an installed recipe:
 
 ```json
 {
-  "name": "memory-gardener",
-  "type": "recurring",
-  "purpose": "Maintain the optional relationship index — fix structural issues, infer new relationships, report drift",
-  "cadence": "0 3 * * *",
-  "cadence_human": "Daily at 3:03 AM",
-  "scope": {
-    "reads": ["Quest", "Artifact", "Session", "Person"],
-    "writes": ["Artifact", "Quest"],
-    "relationships": ["PART_OF", "RELATES_TO", "BUILDS_ON"],
-    "off_limits": ["Person deletion", "Quest deletion"]
-  },
-  "actions": {
-    "auto": ["resolve stale handoffs", "migrate date types", "mark dormant quests", "link artifacts by topic"],
-    "suggest": ["merge duplicate persons", "link disconnected artifacts"],
-    "flag": ["ghost artifacts", "orphaned sessions"]
-  },
-  "reporting": {
-    "tui": true,
-    "graph_artifact": true,
-    "notify": false
-  },
-  "watchdog": null,
-  "created_by": "cem",
-  "created_at": "2026-03-09T10:00:00Z",
-  "version": 1
+  "schema": "egregore.spirit-recipe/v2",
+  "id": "example/researcher",
+  "purpose": "Investigate selected sources and retain evidence-backed findings",
+  "runtime": "pi-durable",
+  "capabilities": ["egregore/contextual-delegation", "egregore/task-outcome"],
+  "skills": [],
+  "trigger": {"kind": "on-demand"},
+  "outcome_contract": "egregore.task-outcome/v1",
+  "budget_policy_ref": "local/bounded-work",
+  "binding_ref": "local/researcher",
+  "delivery": {"kind": "request-origin"}
 }
 ```
 
-For watchdog spirits, the `watchdog` field contains:
+Keep this schema exact. No credentials, actor grants, machine paths, current
+status, or ad hoc scheduler fields belong in it. References still need a host
+binding; saving this file does not install it into the host's selected catalog.
+Review the design with the user. Continue authorized preparation without an
+extra permission round; resolve any new consequential choice before acting.
 
-```json
-{
-  "condition": "MATCH (s:Session) WHERE s.date > date() - duration('P1D') AND s.handoffStatus = 'pending' RETURN count(s) > 3",
-  "action": "notify",
-  "message_template": "{{count}} handoffs piling up — someone should triage"
-}
-```
+Existing `version: 1` designs remain readable as **legacy-unknown**. They do not
+prove grants, outcome acceptance, generation binding, or current activity.
+Preserve them and their history; draft a migration separately rather than
+silently converting or starting them.
 
-### Phase 4: Review
+## 4. Scheduled and condition-triggered spirits
 
-Present the spec as a TUI box:
+Pi Durable's current recipe admission supports on-demand work. Scheduling is a
+separate host capability. Use a native scheduler only when it is actually
+available and authorized in the session. Otherwise save a design describing
+the trigger, observed sources, action, budget, stop conditions, and delivery,
+and explicitly report that no schedule was created.
 
-```
-┌ Spirit: memory-gardener ───────────────────────────┐
-│                                                    │
-│  Purpose:  Maintain the relationship index         │
-│  Type:     Recurring                               │
-│  Cadence:  Daily at 3:03 AM                        │
-│                                                    │
-│  Auto-fix: stale handoffs, date types,             │
-│            dormant quests, topic links              │
-│  Suggest:  duplicate persons, disconnected arts     │
-│  Flag:     ghosts, orphans                         │
-│                                                    │
-│  Reporting: TUI + saved report each cycle        │
-│  Boundaries: No person/quest deletion              │
-│                                                    │
-└────────────────────────────────────────────────────┘
-```
+Keep a scheduled design separate from the strict on-demand v2 JSON. For a
+watcher, define an observable condition and its source; do not assume a
+relationship query or introduce polling without explaining the cadence.
 
-Ask: "Launch this spirit?" with options: Launch, Edit (back to questioning), Cancel.
+When creating a schedule, retain the real scheduler ID, scope, trigger,
+expiry/restart behavior, and cancellation instructions returned by that host.
+Verify actual registration before saying it is running. Suspend/resume through
+the scheduler and report its receipt; editing a status field is insufficient.
 
-### Phase 5: Launch
+## 5. Observe outcomes and accumulate improvements
 
-Use scheduling only when available and permitted in this session;
-otherwise write the spec file `.spirits/{name}.json`, report that no job was
-scheduled, and stop before the remaining launch steps.
-**Claude Code:** use the native session scheduler for the scheduling steps
-below.
+Distinguish execution state, the spirit's outcome claim, verified acceptance,
+and delivery. A completed model run is not proof the task was fulfilled.
+Report evidence and unresolved requirements; ask a bounded question when a
+source or decision is missing. Do not require a speculative insight every run.
 
-1. **Write spec file**: `.spirits/{name}.json`
-2. **Create Spirit node in graph** — **CONNECTED MODE ONLY**:
-   **Skip this step in local mode.** Use the spec fields with the named operation:
-   ```bash
-   bash bin/graph-op.sh spirit-create --name '{name}' --type '{type}' --purpose '{purpose}' --cadence '{cadence}' --status 'active' --author '{author}'
-   ```
-3. **Create the scheduled job**:
-   - Prompt is the spirit's execution prompt (constructed from spec)
-   - For recurring: standard cron
-   - For watchdog: polling cron + condition check prefix
-4. **Confirm**: Show job ID and how to cancel. **Claude Code:** include the 3-day auto-expiry note.
+Use owned work history where exposed and Runtime retrieval for canonical
+records. Local history does not require Connected services. Metadata-only
+records are not transcripts or proof of subjective experience. Recording,
+publication, and outgoing notifications each follow their own current policy;
+this workflow does not enable them implicitly. Agent-authored external
+notifications follow `.claude/context/notification-consent.md`.
 
-### Phase 6: Cycle Reporting (attached to each execution)
+When a run reveals a reusable improvement, retain a candidate with source
+evidence, its limitation, and a proposed evaluation. Reuse the existing
+library/contribution tools if available. Keep observation, proposed change,
+tested capability, release, and receiving-host adoption distinct. A success
+claim alone must not update other spirits or grant new permissions.
 
-When a spirit runs (via `/loop` invoking its prompt), each cycle MUST:
+## Managing existing spirits
 
-1. **Run the work** defined in the spec
-2. **Produce TUI report**:
-   ```
-   ┌ memory-gardener · Cycle 4 · 2026-03-09 ─────────┐
-   │                                                   │
-   │  ✦ Fixed: 3 stale handoffs resolved              │
-   │  ✦ Fixed: 12 date types migrated                 │
-   │  ◇ Inferred: 8 new RELATES_TO edges              │
-   │  ⚠ Flagged: 2 ghost artifacts                    │
-   │                                                   │
-   │  Health: 412 nodes · 891 edges · 1.2% orphan     │
-   │  Delta:  +15 edges since last cycle               │
-   │  Drift:  dormant quest count stable (26)          │
-   │                                                   │
-   │  Insight: "3 artifacts about 'governance' appeared│
-   │  this week but aren't linked to any quest —       │
-   │  emerging theme?"                                 │
-   │                                                   │
-   └───────────────────────────────────────────────────┘
-   ```
+Show designs from `.spirits/`, admitted work from the host's owned job surface,
+and active schedules from the scheduler. Label missing or stale evidence.
+Use actual job or scheduler handles for inspect/cancel/resume actions.
+Do not claim a design is active from its file name or a legacy status field.
 
-3. **Write LoopReport to graph** — **CONNECTED MODE ONLY**:
-   **Skip this step in local mode.** The named update records this cycle's report; the TUI report still renders locally.
-   ```bash
-   bash bin/graph-op.sh spirit-update --name '{name}' --id '{id}' --title '{title}' --metrics '{metrics}'
-   ```
-
-4. **Insights**: The report should include one model-generated insight per cycle — a pattern, question, or observation that emerges from the data but wasn't explicitly programmed. This is the inferential layer growing.
-
-### Telemetry
+Emit the standard command telemetry when the project adapter is available:
 
 ```bash
 bash bin/telemetry.sh emit "command" '{"command":"summon"}' 2>/dev/null &
 ```
-
-## Managing Spirits
-
-**Connected mode:**
-- **List active**: `bash bin/graph-op.sh spirit-list`
-- **Suspend**: Set `sp.status = 'suspended'` and delete the scheduled job
-- **Resume**: Set `sp.status = 'active'` and create the scheduled job
-- **View history**: `MATCH (lr:Artifact {origin: 'spirit'})-[:GENERATED_BY]->(sp:Spirit {name: $name}) RETURN lr ORDER BY lr.created DESC`
-
-**Local mode:**
-- **List active**: Read `.spirits/*.json` files, filter by `"status": "active"`. Display name, type, cadence from each spec file.
-- **Suspend**: Update spec file `"status": "suspended"` and delete the scheduled job
-- **Resume**: Update spec file `"status": "active"` and create the scheduled job
-- **View history**: Not available in local mode (no graph artifact storage). Show: `Spirit history requires connected mode.`
-
-## Design Principles
-
-1. **Bitter lesson**: The agent decides what context is relevant, not a fixed query set. More compute, less hand-engineering.
-2. **Adaptive convergence**: Questions stop when the spec is clear, not after N rounds.
-3. **Specs are forkable**: `.spirits/` is git-tracked. Fork the egregore, inherit its spirits.
-4. **Spirits compound**: Each cycle's LoopReport feeds future cycles. The spirit gets smarter about what to surface.
-5. **Watchdogs are deferred hooks**: Poll-on-cron now, proper event-driven hooks when infrastructure exists.

@@ -1,3 +1,4 @@
+import { registerSpiritDiscovery } from "../../../bin/pi-spirit-discovery.mjs";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
@@ -9,7 +10,7 @@ import {
   isRuntimeStatePath,
   mutatesOnlyRuntimeState,
 } from "../../../bin/pi-branch-policy.mjs";
-import { registerObserveHook, registerUserCommand } from "../../../bin/pi-observe-context.mjs";
+import { bindNativeSession, registerObserveHook, registerUserCommand } from "../../../bin/pi-observe-context.mjs";
 import {
   activityDataPath,
   captureSessionEnd,
@@ -22,6 +23,8 @@ import {
   renderView,
   workflowPrompt,
 } from "../../../bin/pi-product-workflows.mjs";
+// The instance wall shared with the Claude Code and Codex pre-action hooks.
+import boundaryGuard from "../../../bin/boundary-guard.cjs";
 
 const PROTECTED_BRANCHES = new Set(["main", "master", "develop"]);
 // Prime Agent built-in slash commands (README Commands table) plus
@@ -96,6 +99,7 @@ async function gitContext(pi, candidate) {
 
 export default function egregore(pi) {
   const root = process.cwd();
+  registerSpiritDiscovery(pi, { root, runtime: "prime", Type });
   const skillsDir = join(root, ".codex", "skills");
   let workflowCount = 0;
   let lastSyncAt = 0;
@@ -353,6 +357,9 @@ export default function egregore(pi) {
 
     setBusy(ctx, "Loading team context");
     try {
+      // Bind Prime's own session id before the card's session start, which
+      // maps it to the Egregore id it mints so this session's commits resolve it.
+      bindNativeSession(ctx, "prime", root);
       const card = await renderGreeting(pi, root, ctx.signal, "prime-session-start.sh");
       lastSyncAt = Date.now();
       appendCard("greeting", card);
@@ -384,6 +391,12 @@ export default function egregore(pi) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    // Environment isolation first: it covers reads too, and another
+    // instance's files are denied before any branch question arises.
+    // IPython code is scanned for paths the same way as a shell command.
+    const wall = boundaryGuard.toolCallBlock(event, ctx, root);
+    if (wall) return wall;
+
     const isFileWrite = event.toolName === "write" || event.toolName === "edit";
     const command = String(event.input?.command || "");
     // Prime Agent's default surface is the persistent IPython kernel: file

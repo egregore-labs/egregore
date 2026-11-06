@@ -75,7 +75,6 @@ function adapt(sourceSpec) {
     ["Egregore on Codex", "Egregore on Pi"],
     ["Codex-native", "Pi-native"],
     ["Codex sessions", "Pi sessions"],
-    ["On Codex", "On Pi"],
     ["bin/codex-session-start.sh", "bin/pi-session-start.sh"],
     [".codex/hooks/branch-guard.js", ".pi/extensions/egregore.ts"],
     ["PreToolUse hook (launcher `--enable hooks`)", "`tool_call` gate (loaded after Pi project trust)"],

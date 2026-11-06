@@ -10,13 +10,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
 import signal
 import secrets
 import socket
+import sqlite3
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -24,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +35,7 @@ from typing import Any, Mapping, Sequence
 
 import fcntl
 
+from egregore_runtime.policy import within
 from egregore_runtime.contracts import (
     RetrievalHit,
     RetrievalMode,
@@ -44,6 +48,7 @@ from egregore_runtime.artifacts import (
     canonical_artifact_id,
     split_frontmatter,
 )
+from egregore_runtime.sandbox import REFUSED, REMEDY, display, sandboxed, state_directory
 
 
 QMD_VERSION = "2.8.3"
@@ -52,6 +57,10 @@ RUNTIME_SCHEMA_VERSION = "egregore-qmd-runtime/v1"
 EMBEDDING_MODEL = "EmbeddingGemma"
 MAX_AUTHORIZED_CANDIDATES = 2_000
 MAX_SDK_PASSAGE_CHARACTERS = 4_000
+# `qmd status` counts are reused only while the files they count are
+# unchanged, and never for longer than this.
+STATUS_COUNTS_SCHEMA = "egregore-qmd-status-counts/v1"
+STATUS_COUNTS_MAX_AGE_SECONDS = 600
 # Every query this adapter issues — daemon and CLI — disables model
 # reranking; results come from typed lex/vec rank fusion only. Readiness
 # surfaces report this posture from here rather than restating it.
@@ -149,6 +158,9 @@ class QmdLocalRetriever:
     used by the pinned CLI fallback.
     """
 
+    # Known without a health check (which runs ``qmd status``): what telemetry names on every source open.
+    index_spec_version = INDEX_SPEC_VERSION
+
     def __init__(
         self,
         *,
@@ -163,6 +175,12 @@ class QmdLocalRetriever:
         configured_memory = memory_root or self.repository_root / "memory"
         self.memory_root = configured_memory.resolve()
         self.environment = dict(os.environ if environment is None else environment)
+        # Resolved once by _runtime_root(). The warning is set when the
+        # per-user state refuses writes: with the workspace copy in use, or
+        # naming why that copy was refused too.
+        self._state_root: Path | None = None
+        self._state_fallback = False
+        self._state_warning: str | None = None
         self.collection_purpose = re.sub(
             r"[^A-Za-z0-9_.-]", "-", collection_purpose.strip()
         ) or "memory"
@@ -180,7 +198,18 @@ class QmdLocalRetriever:
         # retrieval is never silent.
         self._last_query_used_daemon: bool | None = None
         self._source_revision_cache: str | None = None
+        # The memory checkout's Git top level: fixed for the adapter's life.
+        self._git_top_level_cache: Path | None = None
+        # (source revision, Markdown revision): valid for that source revision only.
+        self._markdown_revision_cache: tuple[str, str] | None = None
         self._configure_isolated_environment()
+        if self._state_fallback:
+            # The workspace copy belongs to one checkout: keep it lexical and
+            # cold, with no query worker or background embedding that would
+            # outlive the session or repeat in every worktree. Explicit
+            # settings still win.
+            self.environment.setdefault("EGREGORE_QMD_PERSISTENT", "0")
+            self.environment.setdefault("EGREGORE_SEARCH_NO_WARM", "1")
         self._prefer_usable_node_runtime()
 
     def _configure_isolated_environment(self) -> None:
@@ -327,8 +356,41 @@ class QmdLocalRetriever:
         override = self.environment.get("EGREGORE_QMD_RUNTIME_DIR")
         if override:
             return Path(override).expanduser().resolve()
-        home = Path(self.environment.get("HOME", str(Path.home()))).expanduser()
-        return home / ".egregore" / "runtime" / "qmd" / self._instance_hash()
+        root = getattr(self, "_state_root", None)
+        if root is None:
+            # Resolved on first use, so every construction path works: per-user
+            # state unless it refuses writes (a sandboxed session), then this
+            # checkout's own .egregore/runtime, and a warning. An adapter built
+            # for its path rules alone (vectors_receipt) has no workspace, so it
+            # neither probes nor falls back.
+            preferred = self._user_runtime_root()
+            workspace = getattr(self, "repository_root", None)
+            warning = None
+            if workspace is None:
+                root = preferred
+            else:
+                root, warning = state_directory(
+                    preferred,
+                    workspace / ".egregore" / "runtime" / "qmd" / self._instance_hash(),
+                    workspace=workspace,
+                    environment=self.environment,
+                    home=self._home(),
+                )
+            self._state_root, self._state_warning = root, warning
+            self._state_fallback = root != preferred
+        return root
+
+    def _home(self) -> Path:
+        return Path(self.environment.get("HOME", str(Path.home()))).expanduser()
+
+    def _user_runtime_root(self) -> Path:
+        return self._home() / ".egregore" / "runtime" / "qmd" / self._instance_hash()
+
+    def _first_warnings(self) -> list[str]:
+        """The state warning, which every health and result names first."""
+        self._runtime_root()
+        warning = getattr(self, "_state_warning", None)
+        return [warning] if warning else []
 
     def _runtime_state_path(self) -> Path:
         return self._runtime_root() / "runtime.json"
@@ -364,11 +426,19 @@ class QmdLocalRetriever:
             index_spec_version=INDEX_SPEC_VERSION,
             index_revision="unavailable", source_revision="unavailable",
             embedding_state="unavailable", runtime_state="runtime_unavailable",
-            warnings=(self._filesystem_recovery_message(exc),),
+            warnings=(*self._first_warnings(), self._filesystem_recovery_message(exc)),
         )
 
-    @staticmethod
-    def _filesystem_recovery_message(exc: OSError) -> str:
+    def _filesystem_recovery_message(self, exc: OSError) -> str:
+        if getattr(exc, "errno", None) in REFUSED and sandboxed(self.environment):
+            # The cause and the remedy, instead of a lock path.
+            if exc.filename:
+                return (
+                    f"Local retrieval storage at {display(self._runtime_root(), self._home())} "
+                    f"is not writable (sandbox); {REMEDY}."
+                )
+            return (f"Local retrieval was refused by the sandbox "
+                    f"({exc.strerror or type(exc).__name__}); {REMEDY}.")
         return (
             f"Local retrieval storage is unavailable ({type(exc).__name__}: {exc}). "
             "Provision the instance cache with private permissions and the host's "
@@ -376,7 +446,7 @@ class QmdLocalRetriever:
         )
 
     def _health(self) -> RetrieverHealth:
-        warnings: list[str] = []
+        warnings = self._first_warnings()
         canonical_ready = self.memory_root.is_dir()
         qmd_available = True
         if not canonical_ready:
@@ -389,17 +459,22 @@ class QmdLocalRetriever:
             qmd_available = False
             warnings.append(str(exc))
 
-        status = ""
+        counts = self._status_counts("")
         status_ok = False
         if canonical_ready and qmd_available:
-            completed = self._run(("status",), timeout=20)
-            if completed.returncode == 0:
-                status = completed.stdout
-                status_ok = True
+            remembered = self._remembered_status_counts()
+            if remembered is not None:
+                counts, status_ok = remembered, True
             else:
-                warnings.append(self._failure_message("qmd status", completed))
+                observed = self._status_identity()
+                completed = self._run(("status",), timeout=20)
+                if completed.returncode == 0:
+                    counts = self._status_counts(completed.stdout)
+                    status_ok = True
+                    self._remember_status_counts(observed, counts)
+                else:
+                    warnings.append(self._failure_message("qmd status", completed))
 
-        counts = self._status_counts(status)
         # BM25 readiness is usability, mirroring the semantic split: a
         # canonical write leaves the index trailing, not unusable — queries
         # refresh it inline. Only an identity mismatch makes it stale.
@@ -420,7 +495,7 @@ class QmdLocalRetriever:
             and self._semantic_state_current()
             and not self._live_lock(self._embed_lock_path())
         )
-        embedding_state = self._embedding_state(status, semantic_ready=semantic_ready)
+        embedding_state = self._embedding_state(counts, semantic_ready=semantic_ready)
         if embedding_state == "missing_model":
             if counts["vectors"] > 0:
                 warnings.append(
@@ -533,12 +608,12 @@ class QmdLocalRetriever:
         """Canonical metadata for a path already authorized by Runtime."""
         return self._metadata(canonical_path)
 
-    def retrieve_authorized(self, request, *, actor, admin_gate=None, lifecycle=None,
+    def retrieve_authorized(self, request, *, actor, decision, lifecycle=None,
                             path_filter=None, metadata_filter=None):
         from ..eligibility import build_eligibility
         try:
             return self._retrieve(request, eligibility_builder=lambda: build_eligibility(
-                self, request, actor=actor, admin_gate=admin_gate, lifecycle=lifecycle,
+                self, request, actor=actor, decision=decision, lifecycle=lifecycle,
                 path_filter=path_filter, metadata_filter=metadata_filter))
         except OSError as exc:
             raise QmdAdapterError(self._filesystem_recovery_message(exc)) from exc
@@ -560,7 +635,7 @@ class QmdLocalRetriever:
 
     def _retrieve(self, request: RetrievalRequest, *, eligibility_builder=None) -> RetrievalResult:
         started = time.monotonic()
-        warnings: list[str] = []
+        warnings = self._first_warnings()
         # A long-lived runtime may observe a new canonical Git revision between
         # requests. Cache only within one retrieval operation.
         self._source_revision_cache = None
@@ -689,6 +764,11 @@ class QmdLocalRetriever:
                 # is nothing to scan. Boot-path syncs stop paying QMD subprocess
                 # spawns for an unchanged corpus; any revision change (including
                 # a dirty-tree hash change) still takes the full update path.
+                return self.health()
+            if not force and self._index_markdown_current():
+                # Only files the index never reads changed (a taste event, a
+                # YAML registry): record the new revision without a rescan.
+                self._write_index_state()
                 return self.health()
             # A canonical write makes the semantic build stale, never unusable:
             # staleness is expressed by revision inequality alone, and the last
@@ -941,7 +1021,7 @@ class QmdLocalRetriever:
         accepted: list[tuple[Mapping[str, Any], str, _DocumentMetadata]] = []
         for raw in raw_hits:
             canonical_path = self._canonical_path(str(raw.get("file", "")))
-            if canonical_path is None or not self._scope_allows(canonical_path, request):
+            if canonical_path is None or not within(canonical_path, request.authorized_scopes, root=self.memory_root):
                 continue
             if metadata_by_path is not None and canonical_path not in metadata_by_path:
                 raise QmdAdapterError('scoped QMD returned a document outside its eligible set')
@@ -998,6 +1078,9 @@ class QmdLocalRetriever:
             raise QmdAdapterError(f"canonical memory is unavailable: {self.memory_root}")
         self._ensure_version()
         if self._index_state_current():
+            return
+        if self._index_markdown_current():
+            self._write_index_state()
             return
         self._ensure_collection(force=True)
         completed = self._run(("update",), timeout=300)
@@ -1133,6 +1216,14 @@ class QmdLocalRetriever:
         instance = self._managed_prefix() / "node_modules" / ".bin" / "qmd"
         if instance.is_file():
             return instance
+        if getattr(self, "_state_fallback", False):
+            # The workspace copy runs the per-user install read-only: a
+            # sandbox that refuses writes there also refuses the network an
+            # install needs.
+            provisioned = (self._user_runtime_root() / f"qmd-{QMD_VERSION}"
+                           / "node_modules" / ".bin" / "qmd")
+            if provisioned.is_file():
+                return provisioned
         # Existing installs provisioned the shared, version-addressed prefix;
         # keep resolving it so an upgrade is adoption, never breakage.
         legacy = Path.home() / ".egregore" / "runtime" / f"qmd-{QMD_VERSION}"
@@ -1490,7 +1581,7 @@ class QmdLocalRetriever:
                 relative = str(candidate.relative_to(self.memory_root))
             except ValueError:
                 return None
-        relative = relative.replace("\\", "/").lstrip("/")
+        relative = relative.lstrip("/")
         if not relative or ".." in Path(relative).parts:
             return None
         return f"memory/{relative}"
@@ -1605,23 +1696,17 @@ class QmdLocalRetriever:
         title = normalized(metadata.title)
         return len(title) >= 8 and title in normalized(task)
 
-    def _scope_allows(self, canonical_path: str, request: RetrievalRequest) -> bool:
-        # Fail closed: a request that carries no authorized scope gets no
-        # hits. Observe always sets scopes; a direct caller without them is
-        # unauthorized by construction, not universally entitled.
-        if not request.authorized_scopes:
-            return False
-        for raw_scope in request.authorized_scopes:
-            scope = raw_scope.strip().replace("\\", "/").rstrip("/")
-            if scope == "memory":
-                return True
-            if not scope.startswith("memory/"):
-                scope = f"memory/{scope.lstrip('/')}"
-            if canonical_path == scope or canonical_path.startswith(f"{scope}/"):
-                return True
-        return False
-
     def _source_revision(self) -> str:
+        """The complete canonical revision: every cache and receipt keys on it.
+
+        A clean tree is its commit. A dirty tree is the commit plus a digest
+        of the Markdown paths Git reports modified, deleted, renamed,
+        untracked or ignored, with their current contents: the commit already
+        pins every other file, so the digest need not read the whole corpus.
+        Where Git's report cannot see what the index reads (a symbolic link,
+        a submodule) or Git cannot report at all, every Markdown file is
+        hashed instead.
+        """
         if self._source_revision_cache is not None:
             return self._source_revision_cache
         completed = self._run_raw(
@@ -1629,21 +1714,173 @@ class QmdLocalRetriever:
         )
         if completed.returncode == 0 and completed.stdout.strip():
             head = completed.stdout.strip()
-            changes = self._run_raw(
-                (
-                    "git", "-C", str(self.memory_root), "status", "--porcelain=v1",
-                    "--untracked-files=all", "--ignored=matching", "--", "*.md",
-                ),
-                timeout=30,
-            )
-            if changes.returncode == 0 and not changes.stdout.strip():
+            changes = self._markdown_changes()
+            if changes is not None and not changes:
                 revision = f"git:{head}"
-            else:
+            elif changes is None or not self._git_report_covers_markdown():
                 revision = f"git:{head}+dirty:{self._markdown_manifest_hash()}"
+            else:
+                revision = f"git:{head}+dirty:{self._changed_markdown_hash(changes)}"
         else:
             revision = f"filesystem:{self._markdown_manifest_hash()}"
         self._source_revision_cache = revision
         return revision
+
+    def _markdown_changes(self) -> tuple[str, ...] | None:
+        """The Markdown paths Git reports changed, untracked or ignored.
+
+        Both sides of a rename or copy are named. A directory Git does not
+        descend into (an ignored folder, a nested repository) keeps its
+        trailing slash. Paths are relative to the repository's top level.
+        None when Git cannot report.
+        """
+        command = (
+            "git", "-C", str(self.memory_root), "status", "--porcelain=v1", "-z",
+            "--untracked-files=all", "--ignored=matching", "--", "*.md",
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.repository_root,
+                env=self.environment,
+                capture_output=True,
+                timeout=30,
+                check=False,
+                umask=0o077,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if completed.returncode != 0:
+            return None
+        fields = completed.stdout.split(b"\0")
+        paths: list[str] = []
+        position = 0
+        while position < len(fields):
+            entry = fields[position]
+            position += 1
+            if not entry:
+                continue
+            if len(entry) < 4 or entry[2:3] != b" ":
+                return None
+            paths.append(os.fsdecode(entry[3:]))
+            if b"R" in entry[:2] or b"C" in entry[:2]:
+                if position >= len(fields) or not fields[position]:
+                    return None
+                paths.append(os.fsdecode(fields[position]))
+                position += 1
+        return tuple(paths)
+
+    def _git_report_covers_markdown(self) -> bool:
+        """Git's change report sees every change to what the index reads:
+        no tracked link and no submodule can hide one."""
+        top = self._git_top_level()
+        if top is None or (top / ".gitmodules").exists():
+            return False
+        return not self._markdown_reads_through_a_link()
+
+    def _git_top_level(self) -> Path | None:
+        cached = getattr(self, "_git_top_level_cache", None)
+        if cached is not None:
+            return cached
+        completed = self._run_raw(
+            ("git", "-C", str(self.memory_root), "rev-parse", "--show-toplevel"), timeout=10
+        )
+        if completed.returncode != 0 or not completed.stdout.strip():
+            return None
+        self._git_top_level_cache = Path(completed.stdout.strip()).resolve()
+        return self._git_top_level_cache
+
+    def _changed_markdown_hash(self, changes: Sequence[str]) -> str:
+        top = self._git_top_level()
+        if top is None:
+            return self._markdown_manifest_hash()
+        reported: dict[str, Path | None] = {}
+        for change in changes:
+            path = top / change
+            if not change.endswith("/"):
+                reported[change] = path
+                continue
+            # Git names the directory, not the Markdown inside it.
+            reported[change] = None
+            if self.memory_root.is_relative_to(path):
+                path = self.memory_root
+            elif not path.is_relative_to(self.memory_root):
+                continue
+            for source in path.rglob("*.md"):
+                reported.setdefault(source.relative_to(top).as_posix(), source)
+        digest = hashlib.sha256()
+
+        def framed(kind: bytes, payload: bytes = b"") -> None:
+            # A kind byte and a length frame each field, so no file content
+            # can pass for a marker (a deleted file) or for the next path.
+            digest.update(kind + len(payload).to_bytes(8, "big") + payload)
+
+        for relative in sorted(reported):
+            source = reported[relative]
+            framed(b"P", relative.encode("utf-8", "surrogateescape"))
+            if source is None:
+                framed(b"D")
+            elif not os.path.lexists(source):
+                framed(b"A")
+            elif not source.is_file() or not source.resolve().is_relative_to(self.memory_root):
+                framed(b"N")
+            else:
+                try:
+                    framed(b"F", source.read_bytes())
+                except OSError:
+                    framed(b"U")
+        return digest.hexdigest()[:20]
+
+    def _markdown_revision(self) -> str:
+        """What the index reads, as a revision: used only to decide whether
+        QMD must rescan.
+
+        It names the newest commit that changed a Markdown file, so a commit
+        of other canonical files (a taste event, a YAML registry) does not
+        send QMD over an unchanged corpus. When the index could read through
+        a symbolic link, any commit may change what it reads, so the complete
+        revision decides. Caches and receipts never key on this one.
+        """
+        source = self._source_revision()
+        cached = self._markdown_revision_cache
+        if cached is not None and cached[0] == source:
+            return cached[1]
+        revision = source
+        if source.startswith("git:") and not self._markdown_reads_through_a_link():
+            head, plus, dirty = source[len("git:"):].partition("+")
+            completed = self._run_raw(
+                ("git", "-C", str(self.memory_root), "rev-list", "-1", head, "--", "*.md"),
+                timeout=10,
+            )
+            if completed.returncode == 0 and completed.stdout.strip():
+                revision = f"git:{completed.stdout.strip()}{plus}{dirty}"
+        self._markdown_revision_cache = (source, revision)
+        return revision
+
+    def _markdown_reads_through_a_link(self) -> bool:
+        """The repository tracks a symbolic link, or a tracked Markdown path
+        lies below a directory that is one on disk; unknown counts as yes."""
+        listed = self._run_raw(
+            ("git", "-C", str(self.memory_root), "ls-files", "-s", "-z"), timeout=30,
+        )
+        if listed.returncode != 0:
+            return True
+        # Plain strings, not Path objects: this runs on every dirty revision.
+        root = str(self.memory_root)
+        checked: set[str] = set()
+        for entry in listed.stdout.split("\0"):
+            mode, _, name = entry.partition("\t")
+            if mode.startswith("120000 "):
+                return True
+            if not name.endswith(".md"):
+                continue
+            parent = name.rpartition("/")[0]
+            while parent and parent not in checked:
+                if os.path.islink(os.path.join(root, parent)):
+                    return True
+                checked.add(parent)
+                parent = parent.rpartition("/")[0]
+        return False
 
     def _markdown_manifest_hash(self) -> str:
         digest = hashlib.sha256()
@@ -1694,6 +1931,9 @@ class QmdLocalRetriever:
             state = json.loads(self._index_state_path().read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             return False
+        if not isinstance(state, dict):
+            return False
+        state.pop("markdown_revision", None)
         return state == {
             "adapter_version": QMD_VERSION,
             "collection": self.collection,
@@ -1704,6 +1944,18 @@ class QmdLocalRetriever:
             "memory_root": str(self.memory_root),
             "source_revision": self._source_revision(),
         }
+
+    def _index_markdown_current(self) -> bool:
+        """The index already holds what it reads at the current revision:
+        only files it never reads changed since it was built."""
+        if not self._index_state_usable():
+            return False
+        try:
+            state = json.loads(self._index_state_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return False
+        recorded = state.get("markdown_revision") if isinstance(state, dict) else None
+        return bool(recorded) and recorded == self._markdown_revision()
 
     def _index_state_usable(self) -> bool:
         """The BM25 index exists for this exact identity, revision aside.
@@ -1751,6 +2003,7 @@ class QmdLocalRetriever:
             "index_spec_version": INDEX_SPEC_VERSION,
             "memory_root": str(self.memory_root),
             "source_revision": self._source_revision(),
+            "markdown_revision": self._markdown_revision(),
         }
         self._atomic_json(state_path, state)
 
@@ -1769,6 +2022,78 @@ class QmdLocalRetriever:
             "vectors": count(r"Vectors:\s*(\d+)\s+embedded"),
             "pending": count(r"Pending:\s*(\d+)"),
         }
+
+    # -- Remembered status counts --------------------------------------------
+    #
+    # `qmd status` starts Node to count what the index database holds, and a
+    # startup pays for it more than once (start, the embedding snapshot, the
+    # launcher's follow-up status). The counts are a function of the database
+    # files, so they are kept with the identity of everything they depend on
+    # and reused only while that identity is unchanged and recent.
+
+    def _status_counts_path(self) -> Path:
+        return self._runtime_root() / "status-counts.json"
+
+    def _status_identity(self) -> dict[str, Any]:
+        """The index database and its write-ahead log, QMD's index
+        configuration, this adapter's index and vector receipts, and the
+        executables that would answer `qmd status`."""
+
+        def version(path: str | Path | None) -> list[int] | None:
+            if not path:
+                return None
+            try:
+                found = os.stat(path)
+            except OSError:
+                return None
+            return [found.st_ino, found.st_size, found.st_mtime_ns]
+
+        index = self._index_path()
+        command = self._command()
+        executable = shutil.which(command[0], path=self.environment.get("PATH")) or command[0]
+        node = self.environment.get("EGREGORE_QMD_NODE_BIN", "")
+        config_dir = self.environment.get("QMD_CONFIG_DIR")
+        config = Path(config_dir) / f"{self.index_name}.yml" if config_dir else None
+        return {
+            "schema": STATUS_COUNTS_SCHEMA,
+            "qmd": [QMD_VERSION, INDEX_SPEC_VERSION, self.index_name, self.collection],
+            # Every file argument too: `node /path/qmd.js` runs the script.
+            "command": [*command, version(executable), [version(part) for part in command[1:]],
+                        node, version(node)],
+            "database": version(index),
+            "wal": version(f"{index}-wal"),
+            "config": version(config),
+            "receipts": [version(self._index_state_path()), version(self._semantic_state_path())],
+            "index_path": str(index),
+        }
+
+    def _remembered_status_counts(self) -> dict[str, int] | None:
+        try:
+            stored = json.loads(self._status_counts_path().read_text(encoding="utf-8"))
+            if not 0 <= time.time() - float(stored["observed_at"]) <= STATUS_COUNTS_MAX_AGE_SECONDS:
+                return None
+            if stored["identity"] != self._status_identity():
+                return None
+            return {key: int(stored["counts"][key]) for key in ("documents", "vectors", "pending")}
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def _remember_status_counts(self, observed: dict[str, Any], counts: Mapping[str, int]) -> None:
+        try:
+            if observed != self._status_identity():
+                return  # the database moved while QMD counted it
+            # Whole-second timestamps cannot tell two writes in one second
+            # apart: wait until the newest is safely in the past.
+            stamps = [observed[name][2] for name in ("database", "wal") if observed[name]]
+            if stamps and all(stamp % 1_000_000_000 == 0 for stamp in stamps) \
+                    and time.time_ns() - max(stamps) < 2_000_000_000:
+                return
+            self._atomic_json(
+                self._status_counts_path(),
+                {"identity": observed, "counts": dict(counts), "observed_at": time.time()},
+            )
+        except OSError:
+            pass  # remembering is an optimization; health never fails on it
 
     def _semantic_state_path(self) -> Path:
         return self._runtime_root() / "semantic-state.json"
@@ -1841,7 +2166,7 @@ class QmdLocalRetriever:
             },
         )
 
-    def _embedding_state(self, status: str, *, semantic_ready: bool = False) -> str:
+    def _embedding_state(self, counts: Mapping[str, int], *, semantic_ready: bool = False) -> str:
         if self._live_lock(self._embed_lock_path()):
             return "running"
         # Model presence outranks stored-vector completeness: query-time
@@ -1851,7 +2176,6 @@ class QmdLocalRetriever:
             return "missing_model"
         if semantic_ready:
             return "ready"
-        counts = self._status_counts(status)
         if counts["pending"] > 0 or counts["documents"] > 0:
             return "pending"
         return "not_built"
@@ -1998,6 +2322,154 @@ class QmdLocalRetriever:
         return f"{operation} failed ({completed.returncode}): {detail[:400]}"
 
 
+def read_document_vectors(
+    repository_root: Path,
+    paths: Sequence[str],
+    dimension_prefix: int = 256,
+    *,
+    memory_root: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+    hashes: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Read fresh, mean-pooled document embeddings without starting QMD.
+
+    Paths are relative to memory, optionally prefixed with ``memory/``. Each
+    chunk's dimension prefix is L2-normalised, then the document mean is
+    L2-normalised. Missing, stale, unsafe, or incomplete documents are absent.
+    The fingerprint describes the coordinate system, not corpus membership.
+    sqlite-vec's ordinary shadow tables need no extension; a read transaction
+    includes WAL updates while keeping rows and vector blocks consistent.
+    ``hashes`` (path → sha256 of the bytes the caller read) replaces reading
+    the files, so a vector always belongs to the bytes the caller holds.
+    """
+    if not isinstance(dimension_prefix, int) or dimension_prefix < 1:
+        raise ValueError("dimension_prefix must be a positive integer")
+    adapter = QmdLocalRetriever(
+        repository_root=repository_root, memory_root=memory_root, environment=environment,
+    )
+    result: dict[str, Any] = {"vectors": {}, "fingerprint": "", "dimension": dimension_prefix}
+    index = adapter._index_path()
+    if not index.is_file() or not paths:
+        return result
+    requested: dict[str, list[str]] = {}
+    read: dict[str, str] = {}
+    for original in sorted(set(paths)):
+        relative = original.removeprefix("memory/")
+        candidate = adapter.memory_root / relative
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            continue
+        try:
+            if hashes is not None:
+                if original not in hashes:
+                    continue
+                read[relative] = hashes[original]
+            elif not candidate.resolve().is_relative_to(adapter.memory_root):
+                continue
+            else:  # QMD hashes UTF-8 text, including any original line endings.
+                read[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            requested.setdefault(relative, []).append(original)
+        except OSError:
+            continue
+    try:
+        with closing(sqlite3.connect(index.as_uri() + "?mode=ro", uri=True)) as connection:
+            connection.execute("BEGIN")
+            schema = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name = 'vectors_vec'"
+            ).fetchone()
+            match = re.search(r"float\s*\[\s*(\d+)\s*\]", schema[0] if schema else "", re.I)
+            if not match or dimension_prefix > int(match.group(1)):
+                return result
+            stored_dimensions = int(match.group(1))
+            fresh: dict[str, list[str]] = {}
+            for path, content_hash in connection.execute(
+                "SELECT path, hash FROM documents WHERE collection = ? AND active = 1",
+                (adapter.collection,),
+            ):
+                if path in read and read[path] == content_hash:
+                    fresh.setdefault(content_hash, []).extend(requested[path])
+            if not fresh:
+                return result
+            rows = []
+            ordered_hashes = sorted(fresh)
+            for offset in range(0, len(ordered_hashes), 500):
+                batch = ordered_hashes[offset:offset + 500]
+                rows.extend(connection.execute(
+                    "SELECT c.hash, c.seq, c.total_chunks, c.model, c.embed_fingerprint, "
+                    "r.chunk_id, r.chunk_offset FROM content_vectors c "
+                    "JOIN vectors_vec_rowids r ON r.id = c.hash || '_' || c.seq "
+                    "WHERE c.hash IN (" + ",".join("?" for _ in batch) + ") "
+                    "ORDER BY c.hash, c.seq", batch,
+                ).fetchall())
+            models = {(str(row[3]), str(row[4])) for row in rows}
+            result["fingerprint"] = hashlib.sha256(json.dumps(
+                [INDEX_SPEC_VERSION, stored_dimensions, dimension_prefix, sorted(models)],
+                separators=(",", ":"),
+            ).encode()).hexdigest()[:20]
+            # An index being re-embedded can contain fresh text hashes from
+            # two models at once. Those vectors are not comparable, including
+            # chunks of the same document. Let the caller select its complete
+            # fallback representation instead of mixing coordinate systems.
+            if len(models) != 1:
+                return result
+            blocks = {}
+            for chunk_id in sorted({row[5] for row in rows}):
+                block = connection.execute(
+                    "SELECT vectors FROM vectors_vec_vector_chunks00 WHERE rowid = ?", (chunk_id,)
+                ).fetchone()
+                if block:
+                    blocks[chunk_id] = block[0]
+            pooled: dict[str, list[list[float]]] = {}
+            expected: dict[str, int] = {}
+            sequences: dict[str, set[int]] = {}
+            invalid = set()
+            decoder = struct.Struct("<" + "f" * dimension_prefix)
+            for content_hash, seq, count, model, fingerprint, chunk_id, chunk_offset in rows:
+                count = int(count)
+                seen = sequences.setdefault(content_hash, set())
+                if (not isinstance(seq, int) or count < 1 or not 0 <= seq < count
+                        or seq in seen or expected.get(content_hash, count) != count):
+                    invalid.add(content_hash)
+                    continue
+                expected[content_hash] = count
+                seen.add(seq)
+                blob = blocks.get(chunk_id, b"")
+                start = int(chunk_offset) * stored_dimensions * 4
+                if start < 0 or start + decoder.size > len(blob):
+                    invalid.add(content_hash)
+                    continue
+                vector = decoder.unpack_from(blob, start)
+                norm = math.sqrt(sum(value * value for value in vector))
+                if not math.isfinite(norm) or norm <= 0:
+                    invalid.add(content_hash)
+                    continue
+                pooled.setdefault(content_hash, []).append([value / norm for value in vector])
+            for content_hash, chunks in sorted(pooled.items()):
+                if (content_hash in invalid or len(chunks) != expected[content_hash]
+                        or sequences[content_hash] != set(range(expected[content_hash]))):
+                    continue
+                vector = [sum(values) for values in zip(*chunks)]
+                norm = math.sqrt(sum(value * value for value in vector))
+                if norm <= 0:
+                    continue
+                vector = [value / norm for value in vector]
+                for path in fresh[content_hash]:
+                    result["vectors"][path] = vector
+    except (sqlite3.Error, OSError, ValueError, TypeError, struct.error):
+        # A missing or incompatible optional index must leave callers able to
+        # choose one complete fallback coordinate system for the export.
+        result["vectors"] = {}
+    return result
+
+
+def vectors_receipt(repository_root: Path, *, environment: Mapping[str, str] | None = None) -> Path:
+    """Where a complete vector build leaves its receipt, found without starting anything: its
+    change is the cheap sign that ``read_document_vectors`` may now read other vectors."""
+    adapter = object.__new__(QmdLocalRetriever)  # the path rules only; no Node check, no layout
+    adapter.environment = dict(os.environ if environment is None else environment)
+    adapter.memory_root = (Path(repository_root).resolve() / "memory").resolve()
+    return adapter._semantic_state_path()
+
+
 __all__ = [
     "EMBEDDING_MODEL",
     "INDEX_SPEC_VERSION",
@@ -2007,4 +2479,6 @@ __all__ = [
     "QmdAdapterError",
     "QmdLocalRetriever",
     "QmdRuntimeMetadata",
+    "read_document_vectors",
+    "vectors_receipt",
 ]

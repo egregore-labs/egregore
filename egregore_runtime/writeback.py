@@ -6,14 +6,20 @@ and telemetry implementations stay behind their respective adapters.
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import os
+import stat
+import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Sequence
 
 from .artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    ArtifactConflictError,
     CanonicalArtifactStore,
     CanonicalDocument,
     artifact_id_from_path,
@@ -37,7 +43,46 @@ from .contracts import (
     WritebackStatus,
 )
 from .telemetry import TELEMETRY_SCHEMA_VERSION
-from .policy import scope_allows_path
+from .policy import allows
+from .held import package
+
+
+_LINK_REFUSAL = "canonical file path must not pass through a symbolic link"
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_FOLDER = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NO_FOLLOW
+_STAGING = ".staging"
+_IGNORE_ALL = b"*\n"
+_STALE_STAGING_SECONDS = 24 * 60 * 60
+# What a link failure means when the filesystem has no hard links at all.
+_NO_HARD_LINKS = frozenset({errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.ENOSYS})
+# The calls creating a file makes through folder descriptors, captured at
+# import so that a wrapped function is not mistaken for a missing one.
+_DIR_FD_CALLS = tuple(getattr(os, name, None) for name in ("open", "mkdir", "link", "stat", "unlink"))
+_LINK, _LISTDIR = getattr(os, "link", None), os.listdir
+
+
+class UnsupportedPlatformError(OSError):
+    """This platform cannot walk folders and link files through descriptors,
+    so it cannot create a file safely. Checked before anything is written."""
+
+
+class NoHardLinksError(OSError):
+    """This filesystem has no hard links, so a file cannot appear complete
+    without replacing another. The staged copy is removed; nothing is written."""
+
+
+def require_descriptor_calls() -> None:
+    """Refuse, before any write, a platform (Windows, for one) without the
+    descriptor-relative calls creating a file depends on."""
+
+    if not (
+        all(call in os.supports_dir_fd for call in _DIR_FD_CALLS)
+        and _LINK in os.supports_follow_symlinks
+        and _LISTDIR in os.supports_fd
+    ):
+        raise UnsupportedPlatformError(
+            "this platform cannot create files through folder descriptors; nothing was written"
+        )
 
 
 def canonical_file_path(memory_root: Path, raw_path: str) -> Path:
@@ -59,6 +104,148 @@ def canonical_file_path(memory_root: Path, raw_path: str) -> Path:
     if ".git" in relative.parts or not source.is_file():
         raise ValueError("canonical path must name an existing file inside memory/")
     return source
+
+
+def canonical_new_file_path(memory_root: Path, raw_path: str) -> tuple[Path, str]:
+    """Name a file to create inside canonical memory, reached through no link.
+
+    Authorization names the lexical path, so the file written must be that
+    path: a symbolic link anywhere below memory/ (a directory linked to
+    ../private, or the file itself) would carry the write somewhere else.
+    """
+
+    memory = memory_root.resolve()
+    relative = canonical_relative_path(raw_path.strip().removeprefix("memory/"))
+    parts = PurePosixPath(relative).parts
+    if ".git" in parts:
+        raise ValueError("canonical file must be inside memory/, outside .git")
+    if relative.casefold().endswith(".md"):
+        raise ValueError("Markdown is written through the artifact store, which checks its envelope")
+    target = memory
+    for part in parts:
+        target = target / part
+        if target.is_symlink():
+            raise ValueError(_LINK_REFUSAL)
+    return target, relative
+
+
+def _open_below(name: str, folder: int, flags: int, mode: int = 0o777) -> int:
+    """Open ``name`` inside the open folder ``folder``, never through a link."""
+
+    try:
+        return os.open(name, flags | _NO_FOLLOW, mode, dir_fd=folder)
+    except FileNotFoundError:
+        raise
+    except OSError:
+        with contextlib.suppress(OSError):
+            if stat.S_ISLNK(os.stat(name, dir_fd=folder, follow_symlinks=False).st_mode):
+                raise ValueError(_LINK_REFUSAL) from None
+        raise
+
+
+def _open_folders(memory: Path, names: Sequence[str]) -> int:
+    """The folder a new file goes in, reached from the memory root one name at
+    a time through open descriptors, creating missing folders and following
+    no link. No path string is resolved after this walk, so a folder swapped
+    for a link while it runs cannot carry the write elsewhere."""
+
+    folder = os.open(memory, _FOLDER)
+    try:
+        for name in names:
+            try:
+                child = _open_below(name, folder, _FOLDER)
+            except FileNotFoundError:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(name, 0o755, dir_fd=folder)
+                child = _open_below(name, folder, _FOLDER)
+            os.close(folder)
+            folder = child
+    except BaseException:
+        os.close(folder)
+        raise
+    return folder
+
+
+def _open_staging(memory: Path, top: Sequence[str]) -> int:
+    """The folder a file is written in before it is published: ``.staging``
+    in the destination's top folder (``taste/.staging/`` for an event), on
+    the destination's filesystem, reached by the same descriptor walk. Its
+    ``.gitignore`` holds ``*`` and is written before anything is staged, so
+    Git and autosave's ``git add -A`` never see the folder or anything in
+    it, the ``.gitignore`` included. Staged files a crash left there more
+    than a day ago are removed."""
+
+    staging = _open_folders(memory, (*top, _STAGING))
+    try:
+        if _read_below(".gitignore", staging) != _IGNORE_ALL:
+            # Written in place, never emptied first: two first writers both
+            # put the same bytes at the start, so a file that already
+            # ignores everything keeps doing so while the other stages.
+            ignore = _open_below(".gitignore", staging, os.O_WRONLY | os.O_CREAT, 0o644)
+            try:
+                os.pwrite(ignore, _IGNORE_ALL, 0)
+                os.ftruncate(ignore, len(_IGNORE_ALL))
+                os.fsync(ignore)
+            finally:
+                os.close(ignore)
+    except BaseException:
+        os.close(staging)
+        raise
+    cutoff = time.time() - _STALE_STAGING_SECONDS
+    with contextlib.suppress(OSError):
+        for name in os.listdir(staging):
+            with contextlib.suppress(OSError):
+                found = os.stat(name, dir_fd=staging, follow_symlinks=False)
+                if name.endswith(".tmp") and stat.S_ISREG(found.st_mode) and found.st_mtime < cutoff:
+                    os.unlink(name, dir_fd=staging)
+    return staging
+
+
+def _read_below(name: str, folder: int) -> bytes | None:
+    try:
+        descriptor = _open_below(name, folder, os.O_RDONLY)
+    except FileNotFoundError:
+        return None
+    with open(descriptor, "rb") as handle:
+        return handle.read()
+
+
+def _publish(data: bytes, name: str, folder: int, staging: int) -> os.stat_result:
+    """Write and flush ``data`` in staging, then link it into ``folder`` as
+    ``name``: the file appears complete or not at all. A link never replaces
+    a name, so ``FileExistsError`` means another writer published first. A
+    filesystem without hard links refuses; a rename would replace a name."""
+
+    staged = f"{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o644, dir_fd=staging)
+    try:
+        with open(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            written = os.fstat(handle.fileno())
+        try:
+            os.link(staged, name, src_dir_fd=staging, dst_dir_fd=folder, follow_symlinks=False)
+        except OSError as error:
+            if error.errno in _NO_HARD_LINKS:
+                raise NoHardLinksError(
+                    "this memory folder's filesystem cannot create files safely (no hard links); "
+                    "nothing was written"
+                ) from error
+            raise
+        try:
+            os.fsync(folder)  # the new name survives a power loss
+        except OSError as error:
+            if error.errno not in (errno.EINVAL, errno.ENOTSUP):
+                raise
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(staged, dir_fd=staging)
+    return written
+
+
+_ECHOED = ("artifact_type", "title", "created_by", "status", "workstream", "visibility", "relationships", "supersedes",
+           "provenance")
 
 
 class CanonicalArtifactWriteback:
@@ -87,6 +274,21 @@ class CanonicalArtifactWriteback:
 
     def _event_id(self) -> str:
         return self.id_factory()
+
+    def _echo(self, receipt, root: Path | None = None):
+        """A receipt as its writer reads it back: the names of documents held from them leave its title and
+        warnings (a sync or index message can name another file); when that fails, both are dropped."""
+        root = root if root is not None else getattr(self.store, "root", None)
+        if root is None:
+            return receipt
+        artifact = getattr(receipt, "artifact", None)  # an existing document's metadata comes from memory
+        shown = {"warnings": receipt.warnings, **({name: getattr(artifact, name) for name in _ECHOED} if artifact else {})}
+        kept = package(receipt.permission_decision, shown, root=Path(root))
+        if kept == shown:
+            return receipt
+        kept = kept or {name: type(value)() for name, value in shown.items()}
+        warnings = kept.pop("warnings")
+        return replace(replace(receipt, artifact=replace(artifact, **kept)) if artifact else receipt, warnings=warnings)
 
     def _emit(
         self,
@@ -151,6 +353,7 @@ class CanonicalArtifactWriteback:
             warnings=(source_document.warnings if source_document else ()),
             replaces_existing=(source_document.replaces_existing if source_document else False),
             expected_revision=(source_document.expected_revision if source_document else None),
+            expected_sha256=(source_document.expected_sha256 if source_document else None),
         )
 
     def write(
@@ -159,22 +362,28 @@ class CanonicalArtifactWriteback:
         artifact: CanonicalArtifact,
         content: str,
     ) -> WritebackEvent:
-        return self._write(actor, artifact, content, policy_hints={}, source_document=None)
+        return self._echo(self._write(actor, artifact, content, policy_hints={}, source_document=None))
 
     def write_document(
         self,
         actor: ActorContext,
         document: CanonicalDocument,
+        *,
+        message: str | None = None,
     ) -> WritebackEvent:
-        """Richer local API that preserves advisory envelope policy hints."""
+        """Richer local API that preserves advisory envelope policy hints.
 
-        return self._write(
+        ``message`` replaces the commit's own ``docs(memory): capture <type>``
+        (an edit names its file and why); without it nothing changes."""
+
+        return self._echo(self._write(
             actor,
             document.artifact,
             document.body,
             policy_hints=dict(document.policy_hints),
             source_document=document,
-        )
+            message=message,
+        ))
 
     def commit_files(
         self,
@@ -183,12 +392,16 @@ class CanonicalArtifactWriteback:
         *,
         memory_root: Path,
         message: str,
+        refresh_retrieval: bool = True,
     ) -> CanonicalFilesWritebackEvent:
         """Version rendered auxiliary canonical files through the normal transport.
 
         YAML registries and compatibility ledgers have no artifact envelope to
         normalize or project. Their authorized Git provenance, retrieval refresh,
         and telemetry still belong to the same Runtime writeback boundary.
+        ``refresh_retrieval=False`` is for files search never reads: retrieval
+        indexes Markdown, so there is nothing to refresh, and its next update
+        records the new revision without rescanning an unchanged corpus.
         """
 
         if not paths or not message.strip():
@@ -207,8 +420,8 @@ class CanonicalArtifactWriteback:
                 )
         event_id = self._event_id()
         decision = self.authorizer.authorize_action(actor, Permission.WRITE, canonical_paths)
-        if decision.allowed and decision.scopes and any(
-            not scope_allows_path(f"memory/{path}", decision.scopes)
+        if decision.allowed and any(
+            not allows(decision, f"memory/{path}", "write", root=memory)
             for path in canonical_paths
         ):
             decision = replace(
@@ -232,9 +445,9 @@ class CanonicalArtifactWriteback:
             except Exception as exc:
                 warnings.append(f"sync: {exc}")
 
-            if git_revision is None:
+            if refresh_retrieval and git_revision is None:
                 warnings.append("retrieval: skipped because canonical Git provenance failed")
-            else:
+            elif refresh_retrieval:
                 try:
                     health = self.retriever.update(tuple(str(source) for source in sources))
                     index_revision = health.index_revision
@@ -270,7 +483,7 @@ class CanonicalArtifactWriteback:
             if status is WritebackStatus.ACCEPTED:
                 status = WritebackStatus.PARTIAL
 
-        return CanonicalFilesWritebackEvent(
+        return self._echo(CanonicalFilesWritebackEvent(
             event_id=event_id,
             canonical_path=canonical_paths[0],
             canonical_paths=canonical_paths,
@@ -280,6 +493,104 @@ class CanonicalArtifactWriteback:
             index_revision=index_revision,
             embedding_state=embedding_state,
             warnings=tuple(warnings),
+        ), memory)
+
+    def create_file(
+        self,
+        actor: ActorContext,
+        raw_path: str,
+        content: str,
+        *,
+        memory_root: Path,
+        message: str,
+    ) -> CanonicalFilesWritebackEvent:
+        """Create one immutable canonical file, then version it.
+
+        The append-only lifecycle for records search never reads, such as one
+        JSON file per event. The content is written and flushed in a staging
+        folder Git ignores, on the same filesystem, then linked into place,
+        so the file appears complete or not at all: an autosave, a rebase or
+        a crash never sees it partly written. A platform or filesystem that
+        cannot do this is refused with nothing written, never served by a
+        replacing rename. A link never replaces a name, so a rebase cannot
+        overwrite it and two clones never write the same path. A path already
+        holding exactly this content (a retry, or a file an autosave committed
+        first) is only versioned again; different content is an
+        ``ArtifactConflictError``. Authorization comes before any write. No
+        step below memory/ may be a symbolic link: the path is checked before
+        authorization, the folders are then walked through descriptors that
+        follow no link, and the path is checked again before Git receives it.
+        Retrieval indexes Markdown only, so no index refresh is asked for.
+        """
+
+        if not message.strip():
+            raise ValueError("canonical file creation requires a non-empty message")
+        require_descriptor_calls()
+        memory = memory_root.resolve()
+        target, relative = canonical_new_file_path(memory, raw_path)
+        event_id = self._event_id()
+        decision = self.authorizer.authorize_action(actor, Permission.WRITE, (relative,))
+        # Revalidate after authorization: it may have swapped a parent for a symlink.
+        canonical_new_file_path(memory, relative)
+        if decision.allowed and not allows(decision, f"memory/{relative}", "write", root=memory):
+            decision = replace(
+                decision,
+                allowed=False,
+                reasons=(*decision.reasons, "canonical write path is outside the actor's authorized scope"),
+            )
+        if not decision.allowed:
+            warnings = tuple(decision.reasons)
+            try:
+                self._emit(
+                    actor=actor, event_id=event_id, artifact_id="",
+                    status=WritebackStatus.REJECTED, warning_count=len(warnings),
+                )
+            except Exception:
+                warnings += ("telemetry: failed to record denied writeback",)
+            return CanonicalFilesWritebackEvent(
+                event_id=event_id,
+                canonical_path=relative,
+                canonical_paths=(relative,),
+                permission_decision=decision,
+                status=WritebackStatus.REJECTED,
+                warnings=warnings,
+            )
+
+        data = content.encode("utf-8")
+        *names, name = PurePosixPath(relative).parts
+        folder = _open_folders(memory, names)
+        written = None
+        try:
+            existing = _read_below(name, folder)
+            if existing is None:
+                staging = _open_staging(memory, names[:1])
+                try:
+                    written = _publish(data, name, folder, staging)
+                except FileExistsError:
+                    existing = _read_below(name, folder)
+                finally:
+                    os.close(staging)
+            if existing is not None and existing != data:
+                raise ArtifactConflictError(
+                    f"{relative} already holds different content; an immutable file is never replaced"
+                )
+            try:
+                # Git receives the path, so the path must still name these
+                # bytes through no link; else what was just published goes.
+                canonical_new_file_path(memory, relative)
+                with open(os.open(target, os.O_RDONLY | _NO_FOLLOW), "rb") as handle:
+                    if handle.read() != data:
+                        raise ArtifactConflictError(f"{relative} changed while it was written")
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    found = os.stat(name, dir_fd=folder, follow_symlinks=False)
+                    if written is not None and (found.st_dev, found.st_ino) == (written.st_dev, written.st_ino):
+                        os.unlink(name, dir_fd=folder)
+                raise
+        finally:
+            os.close(folder)
+        return self.commit_files(
+            actor, (str(target),), memory_root=memory, message=message, refresh_retrieval=False,
         )
 
     def write_documents(
@@ -320,16 +631,10 @@ class CanonicalArtifactWriteback:
             )
             for document in documents
         )
-        if decision.scopes:
-            outside = tuple(
-                document.artifact.canonical_path
-                for document in prepared
-                if not scope_allows_path(
-                    f"memory/{document.artifact.canonical_path}", decision.scopes
-                )
-            )
-            if outside:
-                raise PermissionError("canonical write path is outside the actor's authorized scope")
+        outside = tuple(document.artifact.canonical_path for document in prepared
+                        if not allows(decision, f"memory/{document.artifact.canonical_path}", "write", root=self.store.root))
+        if outside:
+            raise PermissionError("canonical write path is outside the actor's authorized scope")
 
         # Catch deterministic conflicts before any item changes. persist() checks
         # again so concurrent changes cannot bypass the store's normal rules.
@@ -430,7 +735,7 @@ class CanonicalArtifactWriteback:
             receipt.status is WritebackStatus.ACCEPTED for receipt in receipts
         ):
             receipts = tuple(replace(receipt, status=status, warnings=tuple(warnings)) for receipt in receipts)
-        return receipts + rejected
+        return tuple(self._echo(receipt) for receipt in receipts + rejected)
 
     def _write(
         self,
@@ -440,6 +745,7 @@ class CanonicalArtifactWriteback:
         *,
         policy_hints: dict[str, object],
         source_document: CanonicalDocument | None,
+        message: str | None = None,
     ) -> WritebackEvent:
         event_id = self._event_id()
         resource = artifact.artifact_id or artifact.canonical_path
@@ -465,7 +771,7 @@ class CanonicalArtifactWriteback:
             )
 
         path = canonical_relative_path(artifact.canonical_path)
-        if decision.scopes and not scope_allows_path(f"memory/{path}", decision.scopes):
+        if not allows(decision, f"memory/{path}", "write", root=self.store.root):
             raise PermissionError("canonical write path is outside the actor's authorized scope")
 
         document = self._prepare(
@@ -485,7 +791,7 @@ class CanonicalArtifactWriteback:
 
         try:
             sync = self.sync_transport.push(
-                message=f"docs(memory): capture {artifact.artifact_type}",
+                message=message or f"docs(memory): capture {artifact.artifact_type}",
                 paths=(str(persisted_path),),
             )
             git_revision = sync.local_revision

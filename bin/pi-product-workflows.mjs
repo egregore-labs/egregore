@@ -106,10 +106,7 @@ export function parseViewRequest(root, rawArgs) {
 }
 
 function rendererCommand(root) {
-  const local = join(root, "packages", "egregore-artifacts", "bin", "cli.js");
-  const react = join(root, "packages", "egregore-artifacts", "node_modules", "react");
-  if (existsSync(local) && existsSync(react)) return { command: "node", prefix: [local] };
-  return { command: "npx", prefix: ["-y", "egregore-artifacts@latest"] };
+  return { command: "bash", prefix: [join(root, "bin", "artifact-renderer.sh")] };
 }
 
 function artifactPath(output) {

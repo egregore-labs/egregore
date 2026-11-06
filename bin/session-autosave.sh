@@ -133,9 +133,12 @@ if git -C "$DIR/memory" rev-parse --git-dir >/dev/null 2>&1; then
   fi
   if [ -n "$(git -C "$DIR/memory" log origin/main..HEAD --oneline 2>/dev/null)" ]; then
     for _try in 1 2 3; do
-      if git -C "$DIR/memory" pull --rebase origin main --quiet 2>/dev/null \
-         && git -C "$DIR/memory" push origin main --quiet 2>/dev/null; then
-        break
+      if git -C "$DIR/memory" pull --rebase origin main --quiet 2>/dev/null; then
+        if bash "$SCRIPT_ROOT/bin/memory-push.sh" --repository "$DIR/memory" --branch main >/dev/null 2>&1; then
+          break
+        else
+          case "$?" in 75) ;; *) break ;; esac
+        fi
       fi
       sleep 1
     done

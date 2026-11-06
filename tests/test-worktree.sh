@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # E2E tests for git worktree support.
-# Tests worktree.sh lifecycle + session-start.sh boundary/detection logic.
+# Tests worktree.sh lifecycle + session-start.sh boundary/detection logic,
+# and the tool links (node_modules, .egregore/tools) both creation paths make:
+# worktree.sh setup and the WorktreeCreate hook (bin/worktree-create.sh).
 #
 # Runs in an isolated temp git repo — never touches the real project.
 # Usage: bash tests/test-worktree.sh
@@ -40,12 +42,20 @@ memory
 .egregore-state.json
 .egregore-session-id
 EOF
+  # The real ignore rules too, so status checks see what a real worktree sees.
+  cat "$SCRIPT_DIR/.gitignore" >> .gitignore
   echo "# test memory" > memory/README.md
+  # A package for the per-package node_modules link.
+  mkdir -p packages/demo
+  echo '{"name":"demo","private":true}' > packages/demo/package.json
 
-  # Copy the actual worktree.sh into the test repo
+  # Copy the actual worktree.sh, the WorktreeCreate hook, and the helpers
+  # they source into the test repo
   cp "$WORKTREE_SH" bin/worktree.sh
+  cp "$SCRIPT_DIR/bin/worktree-create.sh" bin/worktree-create.sh
   cp "$SCRIPT_DIR/bin/lib/worktree-links.sh" bin/lib/worktree-links.sh
-  chmod +x bin/worktree.sh
+  cp "$SCRIPT_DIR/bin/lib/config.sh" bin/lib/config.sh
+  chmod +x bin/worktree.sh bin/worktree-create.sh
 
   git add -A
   git commit -m "init" --quiet
@@ -648,6 +658,274 @@ else
 fi
 
 bash bin/worktree.sh cleanup "$WT_PERSIST" >/dev/null 2>&1
+
+# ============================================================
+# Phase 5: Tool links (node_modules, .egregore/tools)
+# ============================================================
+# Installed modules and the managed renderer are gitignored, so a fresh
+# worktree has neither and its tests and renderer fail before the work
+# starts. Both creation paths link them from the main checkout through one
+# helper (bin/lib/worktree-links.sh).
+
+echo ""
+echo "--- Phase 5: Tool links ---"
+
+cd "$MAIN_REPO" || exit 1
+TOOL_LINKS="node_modules packages/demo/node_modules .egregore/tools"
+for rel in $TOOL_LINKS; do
+  mkdir -p "$MAIN_REPO/$rel"
+  echo "$rel" > "$MAIN_REPO/$rel/marker"
+done
+
+# Each tool path in the worktree is a link that resolves to the main
+# checkout's install. Args: <worktree> <label>
+assert_tool_links() {
+  local wt="$1" label="$2" rel
+  for rel in $TOOL_LINKS; do
+    if [ -L "$wt/$rel" ] \
+       && [ "$(realpath "$wt/$rel" 2>/dev/null)" = "$(realpath "$MAIN_REPO/$rel")" ] \
+       && [ "$(cat "$wt/$rel/marker" 2>/dev/null)" = "$rel" ]; then
+      pass "$label: $rel linked and resolves to the main checkout"
+    else
+      fail "$label: $rel is not a working link to the main checkout"
+    fi
+  done
+}
+
+# git status in the worktree lists none of the tool paths. Args: <worktree> <label>
+assert_links_ignored() {
+  local wt="$1" label="$2" status
+  status=$(git -C "$wt" status --porcelain --untracked-files=all 2>&1)
+  if grep -qE 'node_modules|\.egregore/tools' <<< "$status"; then
+    fail "$label: git status lists a tool link: $status"
+  else
+    pass "$label: git status does not list the tool links"
+  fi
+}
+
+# --- Test 5.1: setup links the main checkout's tools ---
+echo ""
+echo "Test 5.1: setup links node_modules and .egregore/tools"
+
+git branch tools-branch develop 2>/dev/null || true
+WT_TOOLS="$MAIN_REPO/.claude/worktrees/tools-test"
+git worktree add "$WT_TOOLS" tools-branch --quiet 2>/dev/null
+bash bin/worktree.sh setup "$WT_TOOLS" "$MAIN_REPO" >/dev/null 2>"$TEST_ROOT/tools-setup.err"
+
+assert_tool_links "$WT_TOOLS" "setup"
+if [ -s "$TEST_ROOT/tools-setup.err" ]; then
+  fail "setup wrote to stderr with every source present: $(cat "$TEST_ROOT/tools-setup.err")"
+else
+  pass "setup prints no skip line when every source exists"
+fi
+assert_links_ignored "$WT_TOOLS" "setup"
+
+# --- Test 5.2: a worktree's own install is never replaced ---
+echo ""
+echo "Test 5.2: a real node_modules in the worktree is left alone"
+
+git branch own-modules-branch develop 2>/dev/null || true
+WT_OWN="$MAIN_REPO/.claude/worktrees/own-modules"
+git worktree add "$WT_OWN" own-modules-branch --quiet 2>/dev/null
+mkdir -p "$WT_OWN/node_modules"
+echo own > "$WT_OWN/node_modules/own-marker"
+bash bin/worktree.sh setup "$WT_OWN" "$MAIN_REPO" >/dev/null 2>&1
+
+if [ -d "$WT_OWN/node_modules" ] && [ ! -L "$WT_OWN/node_modules" ] \
+   && [ -f "$WT_OWN/node_modules/own-marker" ]; then
+  pass "real node_modules directory kept, not replaced by a link"
+else
+  fail "the worktree's own node_modules was replaced or lost"
+fi
+if [ -L "$WT_OWN/packages/demo/node_modules" ]; then
+  pass "the other tool links are still made beside it"
+else
+  fail "packages/demo/node_modules not linked beside a real root node_modules"
+fi
+
+# --- Test 5.3: removing a worktree never reaches through its links ---
+echo ""
+echo "Test 5.3: removing a worktree leaves the main checkout's installs"
+
+bash bin/worktree.sh cleanup "$WT_TOOLS" >/dev/null 2>&1
+bash bin/worktree.sh cleanup "$WT_OWN" >/dev/null 2>&1
+INSTALLS_KEPT=true
+for rel in $TOOL_LINKS; do
+  [ -f "$MAIN_REPO/$rel/marker" ] || INSTALLS_KEPT=false
+done
+if [ ! -d "$WT_TOOLS" ] && [ "$INSTALLS_KEPT" = true ]; then
+  pass "worktree removed, main checkout installs untouched"
+else
+  fail "removing a linked worktree damaged the main checkout's installs"
+fi
+
+# --- Test 5.4: the WorktreeCreate hook makes the same links ---
+echo ""
+echo "Test 5.4: the WorktreeCreate hook links the tools"
+
+# The hook branches from origin/<base>, so the fixture needs a remote.
+git init --bare --quiet "$TEST_ROOT/origin.git"
+git -C "$MAIN_REPO" remote add origin "$TEST_ROOT/origin.git"
+git -C "$MAIN_REPO" push --quiet origin develop 2>/dev/null
+
+HOOK_START=$(date +%s)
+HOOK_OUT=$(printf '{"name":"tools-hook"}' | CLAUDE_PROJECT_DIR="$MAIN_REPO" bash "$MAIN_REPO/bin/worktree-create.sh" 2>"$TEST_ROOT/hook.err")
+HOOK_RC=$?
+HOOK_ELAPSED=$(( $(date +%s) - HOOK_START ))
+WT_HOOK="$MAIN_REPO/.claude/worktrees/tools-hook"
+
+if [ "$HOOK_RC" -eq 0 ] && [ "$HOOK_OUT" = "$WT_HOOK" ]; then
+  pass "hook exits 0 and stdout is only the worktree path"
+else
+  fail "hook exit $HOOK_RC, stdout '$HOOK_OUT': $(cat "$TEST_ROOT/hook.err")"
+fi
+if [ "$HOOK_ELAPSED" -le 1 ]; then
+  pass "hook finished well inside its 2-second budget (${HOOK_ELAPSED}s)"
+else
+  fail "hook took ${HOOK_ELAPSED}s"
+fi
+assert_tool_links "$WT_HOOK" "hook"
+if [ -s "$TEST_ROOT/hook.err" ]; then
+  fail "hook wrote to stderr with every source present: $(cat "$TEST_ROOT/hook.err")"
+else
+  pass "hook prints no skip line when every source exists"
+fi
+assert_links_ignored "$WT_HOOK" "hook"
+
+# --- Test 5.5: an absent source is skipped silently ---
+echo ""
+echo "Test 5.5: no link and no stderr line when a source is absent"
+
+mv "$MAIN_REPO/.egregore/tools" "$MAIN_REPO/.egregore/tools-away"
+HOOK_OUT=$(printf '{"name":"tools-absent"}' | CLAUDE_PROJECT_DIR="$MAIN_REPO" bash "$MAIN_REPO/bin/worktree-create.sh" 2>"$TEST_ROOT/hook-absent.err")
+mv "$MAIN_REPO/.egregore/tools-away" "$MAIN_REPO/.egregore/tools"
+WT_ABSENT="$MAIN_REPO/.claude/worktrees/tools-absent"
+
+if [ "$HOOK_OUT" = "$WT_ABSENT" ] && [ ! -e "$WT_ABSENT/.egregore/tools" ] \
+   && [ ! -L "$WT_ABSENT/.egregore/tools" ]; then
+  pass "no .egregore/tools link, and stdout is still only the path"
+else
+  fail "absent source: stdout '$HOOK_OUT', or a .egregore/tools link was made"
+fi
+if [ -s "$TEST_ROOT/hook-absent.err" ]; then
+  fail "an absent source wrote to stderr: $(cat "$TEST_ROOT/hook-absent.err")"
+else
+  pass "an absent source prints nothing"
+fi
+if [ -L "$WT_ABSENT/node_modules" ] && [ -L "$WT_ABSENT/packages/demo/node_modules" ]; then
+  pass "the sources that exist are still linked"
+else
+  fail "present sources not linked when another one was absent"
+fi
+
+# A worktree whose .gitignore carries directory-only patterns, as an
+# installed instance's own .gitignore may: they never match a link.
+# Args: <worktree name>
+slash_worktree() {
+  local wt="$MAIN_REPO/.claude/worktrees/$1"
+  git branch "$1-branch" develop 2>/dev/null || true
+  git worktree add "$wt" "$1-branch" --quiet 2>/dev/null
+  printf '%s\n' memory .env .egregore-state.json .egregore-session-id \
+    .egregore-worktree-tty 'node_modules/' '.egregore/tools/' > "$wt/.gitignore"
+}
+
+# --- Test 5.6: a link the ignore rules miss is hidden through info/exclude ---
+echo ""
+echo "Test 5.6: ignore rules that miss a link fall back to info/exclude"
+
+# Every worktree shares the main repository's info/exclude. Start it without
+# a final newline, so each recorded pattern must open its own line.
+EXCLUDE="$MAIN_REPO/.git/info/exclude"
+mv "$EXCLUDE" "$TEST_ROOT/exclude.saved"
+printf '%s' '# local rules' > "$EXCLUDE"
+
+slash_worktree slash-ignore
+WT_SLASH="$MAIN_REPO/.claude/worktrees/slash-ignore"
+bash bin/worktree.sh setup "$WT_SLASH" "$MAIN_REPO" >/dev/null 2>"$TEST_ROOT/slash.err"
+
+assert_tool_links "$WT_SLASH" "info/exclude fallback"
+if [ -s "$TEST_ROOT/slash.err" ]; then
+  fail "the info/exclude fallback wrote to stderr: $(cat "$TEST_ROOT/slash.err")"
+else
+  pass "the info/exclude fallback prints nothing"
+fi
+assert_links_ignored "$WT_SLASH" "info/exclude fallback"
+EXCLUDE_OK=true
+for rel in $TOOL_LINKS; do
+  [ "$(grep -cxF "/$rel" "$EXCLUDE")" = 1 ] || EXCLUDE_OK=false
+done
+grep -qxF '# local rules' "$EXCLUDE" || EXCLUDE_OK=false
+if [ "$EXCLUDE_OK" = true ]; then
+  pass "info/exclude holds each anchored pattern once, each on its own line"
+else
+  fail "unexpected info/exclude: $(cat "$EXCLUDE")"
+fi
+(
+  source "$MAIN_REPO/bin/lib/worktree-links.sh"
+  _egregore_exclude "$WT_SLASH" /node_modules
+)
+if [ "$(grep -cxF /node_modules "$EXCLUDE")" = 1 ]; then
+  pass "recording a pattern again adds no second line"
+else
+  fail "info/exclude repeats /node_modules: $(cat "$EXCLUDE")"
+fi
+
+# --- Test 5.7: the refusal line only when info/exclude cannot take a pattern ---
+echo ""
+echo "Test 5.7: no link, and one line per link, when info/exclude cannot be written"
+
+# Exclude content without the patterns 5.6 recorded.
+printf '%s\n' '# local rules' > "$TEST_ROOT/exclude-clean"
+
+# Args: <label> <worktree name>
+assert_refused() {
+  local label="$1" wt="$MAIN_REPO/.claude/worktrees/$2" err="$TEST_ROOT/$2.err"
+  slash_worktree "$2"
+  bash bin/worktree.sh setup "$wt" "$MAIN_REPO" >/dev/null 2>"$err"
+  if [ ! -L "$wt/node_modules" ] && [ ! -L "$wt/.egregore/tools" ] \
+     && [ ! -L "$wt/packages/demo/node_modules" ]; then
+    pass "$label: no link left for the next save to commit"
+  else
+    fail "$label: a link was left that the next save would commit"
+  fi
+  if [ "$(grep -c '^worktree: not linking ' "$err")" = 3 ] \
+     && [ "$(wc -l < "$err" | tr -d ' ')" = 3 ]; then
+    pass "$label: one 'not linking' line per link, and nothing else"
+  else
+    fail "$label: expected 3 'not linking' lines, got: $(cat "$err")"
+  fi
+  assert_links_ignored "$wt" "$label"
+  bash bin/worktree.sh cleanup "$wt" >/dev/null 2>&1
+}
+
+# Git reads a symlinked info/exclude, but the helper, like
+# recordRuntimeGitExcludes, writes only to a regular file.
+rm -f "$EXCLUDE"
+cp "$TEST_ROOT/exclude-clean" "$TEST_ROOT/exclude-target"
+ln -s "$TEST_ROOT/exclude-target" "$EXCLUDE"
+assert_refused "symlinked info/exclude" refused-symlink
+if cmp -s "$TEST_ROOT/exclude-clean" "$TEST_ROOT/exclude-target"; then
+  pass "symlinked info/exclude: nothing written through the link"
+else
+  fail "the helper wrote through a symlinked info/exclude"
+fi
+
+# A read-only info/exclude refuses the append. Root writes regardless.
+rm -f "$EXCLUDE"
+cp "$TEST_ROOT/exclude-clean" "$EXCLUDE"
+chmod 444 "$EXCLUDE"
+if [ "$(id -u)" = 0 ]; then
+  skip "read-only info/exclude: root can write a read-only file"
+else
+  assert_refused "read-only info/exclude" refused-readonly
+fi
+chmod 644 "$EXCLUDE"
+rm -f "$EXCLUDE"
+mv "$TEST_ROOT/exclude.saved" "$EXCLUDE"
+
+for WT_DONE in "$WT_HOOK" "$WT_ABSENT" "$WT_SLASH"; do
+  bash bin/worktree.sh cleanup "$WT_DONE" >/dev/null 2>&1
+done
 
 # ============================================================
 # Results

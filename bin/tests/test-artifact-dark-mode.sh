@@ -65,17 +65,23 @@ pass "document renders without error"
 OUT="$TMP/out.html"
 
 # --- 1. Theme scaffolding present ---
-if grep -Eq '<html[^>]*data-theme="vellum"' "$OUT" &&
-   grep -Eq '<html[^>]*data-theme-pair="meridian"' "$OUT" &&
+# The default pair is whatever the registry routes to, never a name pinned here.
+read -r PAIR LIGHT DARK < <(node -e '
+  const r = require(process.argv[1]);
+  const pair = r.routing.defaultPair;
+  console.log(pair, r.pairs[pair].light, r.pairs[pair].dark);
+' "$PKG_DIR/lib/vendor/design-system/themes/registry.json")
+if grep -Eq "<html[^>]*data-theme=\"$LIGHT\"" "$OUT" &&
+   grep -Eq "<html[^>]*data-theme-pair=\"$PAIR\"" "$OUT" &&
    grep -Eq '<html[^>]*data-theme-mode="auto"' "$OUT"; then
-  pass "document defaults to Meridian vellum in auto mode"
+  pass "document defaults to the registry pair ($PAIR, $LIGHT) in auto mode"
 else
-  fail "missing document theme, pair, or mode attribute"
+  fail "missing document theme, pair, or mode attribute (expected $PAIR/$LIGHT)"
 fi
-if grep -Fq '[data-theme="vellum"]{' "$OUT" && grep -Fq '[data-theme="nocturne"]{' "$OUT"; then
-  pass "Meridian light and dark palette CSS blocks present"
+if grep -Fq "[data-theme=\"$LIGHT\"]{" "$OUT" && grep -Fq "[data-theme=\"$DARK\"]{" "$OUT"; then
+  pass "light and dark palette CSS blocks present ($LIGHT, $DARK)"
 else
-  fail "missing vellum or nocturne palette CSS"
+  fail "missing $LIGHT or $DARK palette CSS"
 fi
 grep -q 'eg-theme-toggle' "$OUT" && pass "theme toggle button present" || fail "missing toggle button"
 grep -q 'eg-theme-mode' "$OUT" && pass "localStorage key referenced" || fail "missing localStorage persistence"

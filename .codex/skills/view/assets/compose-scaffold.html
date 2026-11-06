@@ -6,7 +6,7 @@
   How to use: copy this file, then
     1. fill <title>, the manifest `register`/`grammar`, nav brand + links,
        the hero (series / h1 / standfirst / chips), and the footer.
-    2. replace the <!-- COMPONENTS: … --> region with composed sections built
+    2. replace the COMPONENTS comment region with composed sections built
        from the component kit below — do NOT mirror the markdown; transform
        the substance into the grammar (statement titles, panels, cards, …).
     3. every theme-sensitive color MUST be a var(--token). Never inline hex
@@ -24,9 +24,9 @@
 <script type="application/json" id="egregore-design-manifest">{"system":"egregore-design-convention","version":"0.3.0","lineage":"meridian","pair":"meridian","mode":"auto","resolvedTheme":"vellum","target":"browser","register":"__REGISTER__","grammar":"__GRAMMAR__","composed":true}</script>
 <style>
 :root{--serif:"Fraunces",Georgia,serif;--sans:"Hanken Grotesk",system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,monospace;--ease:cubic-bezier(.22,.61,.36,1)}
-[data-theme="vellum"]{--paper:#eceef2;--paper-2:#e2e6ec;--card:#f8fafc;--ink:#15212e;--ink-soft:#4d5a68;--ink-faint:#8492a0;--line:#cbd4de;--line-soft:#dde3ea;--prussian:#2c4a6b;--prussian-bright:#3f74ad;--brass:#9a7521;--brass-bright:#c0962f;--teal:#1d7a6e;--rose:#a8493e;--t1:#9a7521;--t1-bg:#f3ead0;--t2:#1d7a6e;--t2-bg:#ddefea;--t3:#a8493e;--t3-bg:#f4ddd7;--contour:#bcc6d2;--shadow:0 1px 2px rgba(21,33,46,.06),0 12px 34px -18px rgba(21,33,46,.34)}
-[data-theme="nocturne"]{--paper:#0e151d;--paper-2:#131c26;--card:#18222e;--ink:#e7ecf2;--ink-soft:#aab6c2;--ink-faint:#76838f;--line:#2a3744;--line-soft:#202b36;--prussian:#5b8cc0;--prussian-bright:#7aa9d8;--brass:#d8b25a;--brass-bright:#e7c878;--teal:#3fb0a0;--rose:#d2796b;--t1:#d8b25a;--t1-bg:#2c2616;--t2:#3fb0a0;--t2-bg:#152b29;--t3:#d2796b;--t3-bg:#2c1c18;--contour:#283543;--shadow:0 1px 2px rgba(0,0,0,.4),0 18px 40px -20px rgba(0,0,0,.7)}
-[data-theme="loam"]{--paper:#f0ece2;--paper-2:#e7e1d3;--card:#faf7f0;--ink:#241d12;--ink-soft:#5c4f3a;--ink-faint:#8f8168;--line:#d3c9b4;--line-soft:#e2dac8;--prussian:#5a6b3a;--brass:#9a6b21;--teal:#3a7a5c;--rose:#a85a3e;--t1:#9a6b21;--t1-bg:#efe2c8;--t2:#3a7a5c;--t2-bg:#dcebe0;--t3:#a85a3e;--t3-bg:#f2ded4;--contour:#c8bca0;--shadow:0 1px 2px rgba(36,29,18,.06),0 12px 34px -18px rgba(36,29,18,.3)}
+[data-theme="vellum"]{--paper:#eceef2;--paper-2:#e2e6ec;--card:#f8fafc;--ink:#15212e;--ink-soft:#4d5a68;--ink-faint:#8492a0;--line:#cbd4de;--line-soft:#dde3ea;--prussian:#2c4a6b;--prussian-bright:#3f74ad;--brass:#9a7521;--brass-bright:#c0962f;--teal:#1d7a6e;--rose:#a8493e;--t1:#9a7521;--t1-bg:#f3ead0;--t2:#1d7a6e;--t2-bg:#ddefea;--t3:#a8493e;--t3-bg:#f4ddd7;--ok:#1d7a6e;--ok-bg:#ddefea;--note:#3a6b96;--note-bg:#ddeaf6;--warn:#8c680b;--warn-bg:#f3ead0;--critical:#a8493e;--critical-bg:#f4ddd7;--neutral:#667381;--neutral-bg:#e4e8ed;--contour:#bcc6d2;--shadow:0 1px 2px rgba(21,33,46,.06),0 12px 34px -18px rgba(21,33,46,.34)}
+[data-theme="nocturne"]{--paper:#0e151d;--paper-2:#131c26;--card:#18222e;--ink:#e7ecf2;--ink-soft:#aab6c2;--ink-faint:#76838f;--line:#2a3744;--line-soft:#202b36;--prussian:#5b8cc0;--prussian-bright:#7aa9d8;--brass:#d8b25a;--brass-bright:#e7c878;--teal:#3fb0a0;--rose:#d2796b;--t1:#d8b25a;--t1-bg:#2c2616;--t2:#3fb0a0;--t2-bg:#152b29;--t3:#d2796b;--t3-bg:#2c1c18;--ok:#3fb0a0;--ok-bg:#152b29;--note:#6fa6d4;--note-bg:#1a2834;--warn:#d8b25a;--warn-bg:#2c2616;--critical:#d2796b;--critical-bg:#2c1c18;--neutral:#8694a2;--neutral-bg:#21262b;--contour:#283543;--shadow:0 1px 2px rgba(0,0,0,.4),0 18px 40px -20px rgba(0,0,0,.7)}
+[data-theme="loam"]{--paper:#f0ece2;--paper-2:#e7e1d3;--card:#faf7f0;--ink:#241d12;--ink-soft:#5c4f3a;--ink-faint:#8f8168;--line:#d3c9b4;--line-soft:#e2dac8;--prussian:#5a6b3a;--brass:#9a6b21;--teal:#3a7a5c;--rose:#a85a3e;--t1:#9a6b21;--t1-bg:#efe2c8;--t2:#3a7a5c;--t2-bg:#dcebe0;--t3:#a85a3e;--t3-bg:#f2ded4;--ok:#3a5a40;--ok-bg:#e7eee2;--note:#3d6a78;--note-bg:#d9ecf2;--warn:#8e6900;--warn-bg:#f3e9cf;--critical:#a4543b;--critical-bg:#f0ddd2;--neutral:#746a5a;--neutral-bg:#eae6dd;--contour:#c8bca0;--shadow:0 1px 2px rgba(36,29,18,.06),0 12px 34px -18px rgba(36,29,18,.3)}
 
 /* ── base ── */
 *{box-sizing:border-box;margin:0;padding:0}
@@ -113,12 +113,17 @@ h2{font-family:var(--serif);font-weight:430;font-size:clamp(1.9rem,3.4vw,2.6rem)
 .verdict-band{background:var(--t2-bg);border:1px solid var(--t2);border-radius:12px;padding:16px 22px;font:500 .82rem/1.7 var(--mono);color:var(--ink)}
 .verdict-band b{color:var(--t2)}
 
-/* ── highlight callout ── */
-.hl{background:var(--t2-bg);border:1px solid var(--t2);border-radius:14px;padding:22px 26px;margin:18px 0}
-.hl.brass{background:var(--t1-bg);border-color:var(--t1)} .hl.rose{background:var(--t3-bg);border-color:var(--t3)}
-.hl .k{font:600 .66rem/1 var(--mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--t2)}
-.hl.brass .k{color:var(--t1)} .hl.rose .k{color:var(--t3)}
-.hl h3{font-family:var(--serif);font-weight:500;font-size:1.3rem;margin:8px 0 10px}
+/* ── highlight: the one thing to land, as a quiet status panel (no side stripe) ──
+   6% tone tint, a 1px tone hairline all round, 12px radius. The tone comes from
+   the role tokens and the .k label carries its shape, so it reads in greyscale:
+   .hl = ok ● (decided) · .hl.brass = warn ▲ (owed, the ask) · .hl.rose = critical ■ (risk) */
+.hl{--tone:var(--ok);background:color-mix(in oklab,var(--tone) 6%,var(--card));border:1px solid color-mix(in oklab,var(--tone) 30%,transparent);border-radius:12px;padding:16px 20px 18px;margin:18px 0}
+.hl.brass{--tone:var(--warn)} .hl.rose{--tone:var(--critical)}
+.hl .k{display:inline-flex;align-items:center;gap:8px;font:500 .69rem/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--tone)}
+.hl .k::before{content:"";width:8px;height:8px;background:currentColor;border-radius:50%;flex:none}
+.hl.brass .k::before{border-radius:0;width:9px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.hl.rose .k::before{border-radius:1px}
+.hl h3{font-family:var(--serif);font-weight:500;font-size:1.3rem;margin:10px 0 8px}
 .hl p{font-size:.96rem} .hl .num{font-family:var(--serif);font-style:italic;color:var(--ink)}
 
 /* ── Q/A ledger ── */
@@ -163,9 +168,10 @@ h2{font-family:var(--serif);font-weight:430;font-size:clamp(1.9rem,3.4vw,2.6rem)
 .dot{display:inline-block;width:18px;height:18px;line-height:18px;border-radius:50%;font-size:.72rem;font-weight:700}
 .dot.ok{background:var(--t2-bg);color:var(--t2)} .dot.half{background:var(--t1-bg);color:var(--t1)} .dot.no{background:var(--t3-bg);color:var(--t3)} .dot.neu{background:var(--paper-2);color:var(--ink-faint)}
 
-/* ── accent-left readout ── */
-.readout{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--t1);border-radius:4px;padding:20px 24px;margin:28px 0;font-size:1rem;color:var(--ink-soft)}
-.readout b{color:var(--ink)}
+/* ── readout: the bottom line as a key point — bigger type, no box ── */
+.readout{margin:28px 0;max-width:62ch;font-size:1.15em;line-height:1.5;font-weight:500;color:var(--ink)}
+.readout b{color:var(--ink);font-weight:650}
+.readout p{color:inherit;margin:0 0 .5em} .readout p:last-child{margin-bottom:0}
 
 /* ── footer ── */
 footer{padding:64px 0 90px;font:400 .74rem/1.8 var(--mono);color:var(--ink-faint)}

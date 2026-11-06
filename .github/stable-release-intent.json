@@ -3,21 +3,21 @@
   "packages": [
     {
       "name": "create-egregore",
-      "version": "0.21.1",
+      "version": "0.22.0",
       "action": "publish",
-      "reason": "Existing-user identity reconciliation fix released as create-egregore 0.21.1."
+      "reason": "Select create-egregore 0.22.0, the 5 Nov catch-up release: main now carries develop (minus client work and the held API changes), so installs get session records (off until an organization turns them on), one access check for shared memory, the wall between instances on every harness, situated patterns, the saved startup card and the shell half of the retired-address fix. Fresh-install proof passes 9/9 on the candidate. Companion packages remain deferred."
     },
     {
       "name": "egregore-artifacts",
       "version": "0.30.0",
-      "action": "publish",
-      "reason": "Companion renderer for the preserved staircase and Runtime artifact features; source 0.30.0 is not yet available on npm."
+      "action": "defer",
+      "reason": "No renderer change is selected for 0.22.0; installs keep egregore-artifacts 0.30.0. The redesigned renderer ships later with its own check."
     },
     {
       "name": "egregore-emissary",
       "version": "0.20.1",
       "action": "defer",
-      "reason": "Release preparation only; select and version this package in the reviewed production candidate before publication."
+      "reason": "No emissary change is selected for 0.22.0; retain egregore-emissary 0.20.1 without republishing."
     }
   ]
 }

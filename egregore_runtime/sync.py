@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Sequence
@@ -59,9 +60,13 @@ class LocalGitSyncTransport:
     locally-ahead history is reconciled on the next pull.
     """
 
-    def __init__(self, repository: Path, *, push_remote: bool = True) -> None:
+    def __init__(self, repository: Path, *, push_remote: bool = True,
+                 allow_local_transport: bool = False) -> None:
         self.repository = repository.resolve()
         self.push_remote = push_remote
+        # Explicit host option for disposable local-remote fixtures. All history
+        # and destination checks still run; no environment variable enables it.
+        self.allow_local_transport = allow_local_transport
         self.async_remote_push = os.environ.get("EGREGORE_ASYNC_REMOTE_PUSH") == "1"
         self._lock_warnings: list[str] = []
 
@@ -238,26 +243,25 @@ class LocalGitSyncTransport:
         return completed.stdout.strip() if completed.returncode == 0 else None
 
     def _push_remote_background(self) -> str | None:
-        environment = dict(os.environ)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         environment["GIT_TERMINAL_PROMPT"] = "0"
+        module_root = Path(__file__).resolve().parents[1]
+        environment["PYTHONPATH"] = str(module_root)
+        branch = self._required("branch", "--show-current")
+        if not branch:
+            return "memory saved locally; publication requires a named branch"
+        command = [sys.executable, "-m", "egregore_runtime.memory_push",
+                   "--repository", str(self.repository), "--branch", branch]
+        if self.allow_local_transport:
+            command.append("--allow-local-transport")
         try:
             subprocess.Popen(
-                (
-                    "git",
-                    "-c",
-                    "http.lowSpeedLimit=1",
-                    "-c",
-                    "http.lowSpeedTime=15",
-                    "-C",
-                    str(self.repository),
-                    "push",
-                    "origin",
-                    "HEAD",
-                ),
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=environment,
+                cwd=module_root,
                 start_new_session=True,
             )
         except OSError as exc:
@@ -440,16 +444,20 @@ class LocalGitSyncTransport:
         autostashed rebase and retried — the exact manual recovery this
         failure class always needed — before anything is reported as failed.
         """
+        from .memory_push import push_memory
         detail = ""
         for attempt in range(attempts):
-            pushed = self._run("push", "origin", "HEAD", timeout=180)
-            if pushed.returncode == 0:
-                return []
-            detail = (pushed.stderr or pushed.stdout).strip()
-            if attempt == attempts - 1:
-                break
             branch = self._required("branch", "--show-current")
             if not branch:
+                return ["memory saved locally; publication requires a named branch"]
+            receipt = push_memory(self.repository, branch=branch,
+                                  allow_local_transport=self.allow_local_transport)
+            if receipt.get("status") in {"pushed", "already-current"}:
+                return []
+            detail = str(receipt.get("cause", "guard_unavailable"))
+            if not receipt.get("retry_safe"):
+                return [f"memory saved locally; guarded publication pending: {detail}"]
+            if attempt == attempts - 1:
                 break
             if self._run("fetch", "origin", branch, timeout=180).returncode != 0:
                 break
@@ -472,7 +480,17 @@ class LocalGitSyncTransport:
         staged = self._run("diff", "--cached", "--quiet", "--", *selected, literal_pathspecs=True)
         if staged.returncode not in (0, 1):
             raise GitSyncError((staged.stderr or staged.stdout).strip() or "git diff failed")
-        if staged.returncode == 1:
+        named = tuple(getattr(message, "trailers", ()))
+        if staged.returncode == 1 and named:
+            # A message with its own trailers (a CommitMessage): its text as given, then one trailer
+            # paragraph, its trailers first and the provenance ones it does not name after them.
+            keys = {trailer.split(":", 1)[0].strip().casefold() for trailer in named}
+            trailers = [*named, *(trailer for trailer in self._provenance_trailers()
+                                  if trailer.split(":", 1)[0].strip().casefold() not in keys)]
+            arguments = ["commit", "--only", "--cleanup=whitespace", "-m", str(message), "-m", "\n".join(trailers),
+                         "--", *selected]
+            self._required(*arguments, literal_pathspecs=True)
+        elif staged.returncode == 1:
             arguments = [
                 "commit",
                 "--only",

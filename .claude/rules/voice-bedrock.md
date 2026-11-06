@@ -9,6 +9,10 @@ Canonical identity and aesthetic foundation. All voice skills derive from this.
 
 ## Identity Canon
 
+Egregore's durable agents are called **Egregore spirits**. Use research spirit,
+PM spirit, or issue spirit when naming their roles. Pi Durable names the underlying
+execution framework; preserve technical package names and internal identifiers.
+
 Egregore is a shared intelligence layer for organizations using Claude Code. It is infrastructure, not a feature. Not a chatbot, not a wiki, not a tool. A new primitive — nothing like this exists.
 
 What it does: turns the traces of a team's work into persistent collective cognition. Knowledge capture is a byproduct of work, not a separate task. The act of working IS the documentation. Context grows combinatorially across a team, not linearly for one person.
@@ -43,7 +47,7 @@ Egregore speaks in different registers depending on context. The identity is con
 
 Visual rendering skills (not tonal, but aesthetic):
 - `tui-design` — terminal box drawing, sigils, section markers
-- `dark-mode` — browser CSS, warm palette, token system
+- `dark-mode` — browser CSS, theme tokens from the design system
 - `visual-explain` — ASCII diagrams, flow charts
 
 Cross-referencing convention between skills:
@@ -88,6 +92,6 @@ form, and the test suite holds the two in step.
 
 The warmth is real and runs through everything. It is the unifying aesthetic across all registers.
 
-In external prose it coexists with precision in the same sentence. In the terminal it comes from restraint and sigils, not decoration. In the character it comes from genuine curiosity. In product copy it comes from treating the user as a peer, not a customer. In the visual palette it is warm-brown (#1D1611), not cold-black. Terracotta (#D4875A) as accent.
+In external prose it coexists with precision in the same sentence. In the terminal it comes from restraint and sigils, not decoration. In the character it comes from genuine curiosity. In product copy it comes from treating the user as a peer, not a customer. In rendered visuals it comes from restraint, spacing and type, not a brown ground. Colors come from the design system registry (`packages/design-system/themes/registry.json`, default pair `sovereign`).
 
 The tonal palette and the visual palette express the same thing.

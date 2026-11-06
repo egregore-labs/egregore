@@ -21,26 +21,54 @@ Use when the user says 'we decided', 'I realized', or 'that's a pattern' — cap
 ## Context
 
 Reuse attached `EGREGORE_ORG_CONTEXT_V1` evidence. When it is sufficient, do
-not search or reopen sources. If a named gap remains, make one
-`bash bin/search.sh query "<concept>" -n 6` call and open only the missing
-canonical source through `bash bin/search.sh open`. Never query implementation
-infrastructure or storage directly.
+not reopen sources. If a named gap remains, make one
+`bash bin/search.sh find "<concept>" --kind hybrid -n 6` call and open only the
+missing canonical source through `bash bin/search.sh open`. Never query
+implementation infrastructure or storage directly.
+
+## Two layers
+
+Knowledge is saved as a **pattern** (a general motif) and **evidence** (the
+specific, dated, sourced case, a `finding` with subtype `evidence`) linked by
+`instance-of`. Before classifying, search existing motifs once:
+`bash bin/search.sh find "<motif in general words>" --kind hybrid --prefix memory/knowledge/patterns -n 5`.
+
+- A pattern fits: create only the evidence, linked to that pattern's id (or
+  canonical path). `bash bin/knowledge.sh instances <pattern-id>` lists what
+  already instances it.
+- No pattern fits and the insight recurs or generalizes: create the pattern
+  first, then the evidence linked to the `artifact_id` in its receipt.
+- A one-off fact or a decision needs no pattern.
+
+A pattern reads as a general motif: no organization or people names and no
+dates in the motif sentence; the evidence keeps the specifics. Pattern body
+sections: Motif, Where it lives, When it shows up, How to recognise it, The
+move, When it doesn't apply, Situations (for discovery). Name the first case in
+one line under Instances; the live list is the `instances` command. Situations
+go in as repeatable flags: `--situation-domain` (a field such as meta-harness
+design), `--situation-path` (repository-relative glob), `--situation-activity`
+(what someone is doing). A matching later session gets one offer line,
+`Patterns that may apply: …`; `knowledge.sh situated` runs it on demand.
+
+Relationships: `instance-of` (evidence → pattern), `responds-to` (decision →
+the evidence it answers), `applies` (decision → the pattern it acts on),
+`supersedes`, `relates-to`. Other relations are kept with a warning.
 
 ## Flow
 
 1. Extract the title, exact insight, context, rationale, two to four topics,
    workstream, explicit relationships, and superseded artifact IDs when known.
-2. Classify each distinct insight as `decision`, `finding`, or `pattern`.
-   Create at most three. Do not infer supersession or authority from recency.
-3. Use already-returned evidence for dedupe. If a likely duplicate exists,
-   open it through the Runtime boundary and ask whether to supersede it or
-   create a distinct artifact.
-4. Preview the proposed artifacts and wait for `y`, edits, or `skip`. Nothing
-   is canonical before this acceptance.
-5. For each accepted artifact, render its complete Markdown body to a temporary file
-   under `tmp/` and call exactly one domain command; `{artifact-file}` is that file, and
-   `{artifact-type}`, `{title}`, `{topic}`, and `{workstream}` are the accepted
-   artifact's type, title, topic, and workstream:
+2. Classify each distinct insight as `decision`, `finding`, or `pattern` and
+   place it in the two layers above. Create at most three artifacts. Do not
+   infer supersession or authority from recency.
+3. Use returned evidence for dedupe. If a likely duplicate exists, open it
+   through the Runtime boundary and ask whether to supersede it or create a
+   distinct artifact.
+4. Preview every proposed artifact, the pattern and its evidence together, and
+   wait for `y`, edits, or `skip`. Nothing is canonical before this acceptance.
+5. For each accepted artifact, render its complete Markdown body to a temporary
+   file under `tmp/` and call exactly one domain command; `{artifact-file}` is
+   that file and the other values come from the accepted artifact:
 
 ```bash
 bash bin/knowledge.sh create \
@@ -51,12 +79,13 @@ bash bin/knowledge.sh create \
   --workstream '{workstream}'
 ```
 
-Add repeated `--topic`, `--relationship "RELATION:TARGET"`, or
-`--supersedes "ARTIFACT_ID"` arguments only when explicit. The Runtime resolves
-ActorContext, authorizes, assigns stable identity/provenance, persists canonical
-Markdown, records Git provenance, refreshes retrieval, starts background
-embedding, and emits content-free telemetry. Treat `partial` projection
-warnings honestly; the canonical artifact remains authoritative.
+Add repeated `--topic`, `--subtype evidence`, `--relationship "RELATION:TARGET"`,
+`--situation-*`, or `--supersedes "ARTIFACT_ID"` arguments only when they apply.
+The Runtime resolves ActorContext, authorizes, assigns stable
+identity/provenance, persists canonical Markdown, records Git provenance,
+refreshes retrieval, starts background embedding, and emits content-free
+telemetry. Report receipt `warnings` and `partial` projection honestly; the
+canonical artifact remains authoritative.
 
 ## Boundaries
 

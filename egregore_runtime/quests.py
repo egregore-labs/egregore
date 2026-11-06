@@ -15,8 +15,8 @@ from .artifacts import (
     parse_canonical_markdown,
     split_frontmatter,
 )
-from .contracts import ActorContext, CanonicalArtifact, WritebackEvent
-from .policy import scope_allows_path
+from .contracts import ActorContext, CanonicalArtifact, WritebackEvent, PolicyDecision
+from .policy import check, action_for
 
 
 QUEST_STATUSES = frozenset({"active", "paused", "completed"})
@@ -291,13 +291,14 @@ class CanonicalQuestService:
         current = replace(snapshot, document=document)
         return current, self.write_document(actor, document)
 
-    def read(self, actor: ActorContext, slug: str) -> QuestSnapshot:
-        path = self._path(slug)
+    def read(self, actor: ActorContext, slug: str, *, source: Path | None = None) -> QuestSnapshot:
+        """Read a quest; a read surface passes the ``source`` the predicate resolved."""
+        path = source or self._path(slug)
         if not path.is_file():
             raise ValueError(f"quest does not exist: {_slug(slug)}")
         return parse_quest_markdown(
             path.read_text(encoding="utf-8"),
-            slug=path.stem,
+            slug=self._path(slug).stem,
             org_id=actor.profile.org_id,
         )
 
@@ -306,7 +307,7 @@ class CanonicalQuestService:
         actor: ActorContext,
         *,
         include_completed: bool = False,
-        authorized_scopes: tuple[str, ...] | None = None,
+        decision: PolicyDecision,
     ) -> tuple[QuestSnapshot, ...]:
         quest_dir = self.memory_root / "quests"
         if not quest_dir.is_dir():
@@ -316,11 +317,10 @@ class CanonicalQuestService:
             if path.name in {"_template.md", "index.md"}:
                 continue
             canonical = f"memory/quests/{path.name}"
-            if authorized_scopes is not None and not scope_allows_path(
-                canonical, authorized_scopes
-            ):
+            verdict = check(decision, canonical, action_for(decision.permission), root=self.memory_root)
+            if not verdict.allowed:
                 continue
-            snapshots.append(self.read(actor, path.stem))
+            snapshots.append(parse_quest_markdown(verdict.resolved.read_text(encoding="utf-8"), slug=path.stem, org_id=actor.profile.org_id))
         if not include_completed:
             snapshots = [row for row in snapshots if row.status != "completed"]
         return tuple(sorted(snapshots, key=lambda row: (row.priority, row.started), reverse=True))

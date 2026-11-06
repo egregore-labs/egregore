@@ -12,8 +12,9 @@ import tempfile
 import fcntl
 import hashlib
 import re
+import stat
 from contextlib import contextmanager
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,16 @@ from uuid import uuid4
 
 from .contracts import (
     AccountIdentity,
+    EgregoreProfile,
     ActorContext,
     ActorIdentity,
     ActorKind,
     OrgMembership,
+    PolicyDecision,
 )
+from . import held
 from .entitlements import resolve_entitlements
+from .policy import check
 from .profile import initialize_org_config, load_profile, render_identity_document
 
 
@@ -48,9 +53,10 @@ class OrganizationMemberPresentation:
     aliases: tuple[str, ...]
 
 
-def _profile_identity(path: Path) -> dict[str, Any]:
+def _profile_identity(path: Path, source: Path | None = None, data: bytes | None = None) -> dict[str, Any]:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")[:4_000]
+        text = (data.decode("utf-8", "replace") if data is not None
+                else (source or path).read_text(encoding="utf-8", errors="replace"))[:4_000]
     except OSError:
         return {}
     title = re.search(r"(?m)^#\s+(.+?)\s*$", text)
@@ -83,6 +89,10 @@ def _profile_identity(path: Path) -> dict[str, Any]:
 def organization_member_presentations(
     root: Path,
     actor: ActorContext | None = None,
+    *,
+    decision: PolicyDecision | None,
+    sources: Mapping[str, bytes] | None = None,
+    removed: Iterable[str] | None = None,
 ) -> tuple[OrganizationMemberPresentation, ...]:
     """Load stable member names without treating aliases as extra people.
 
@@ -90,31 +100,50 @@ def organization_member_presentations(
     reconciliation. Profiles with the same Person-ID collapse into one member;
     an explicit Alias-Of title is the preferred presentation witness for
     legacy canonical profiles whose title is still a provider handle.
+
+    ``decision`` is required: a profile is read only when the one predicate
+    admits it for that reader, from the path it checked, so prompt context and
+    query terms name nobody the reader may not see. ``decision=None`` is an
+    explicit opt-out for a caller that applies its own holds (the exporter's
+    hand-over chain); leaving it out is an error, never an unchecked read.
+    ``sources`` (canonical path → bytes a caller already read and authorized,
+    as a hand-over holds them) replaces reading the profiles from disk, and
+    ``removed`` the working tree's removal ledger (another principal's
+    hand-over passes the committed one).
     """
 
     people = root / "memory" / "people"
-    if not people.is_dir():
+    if sources is None and not people.is_dir():
         return ()
     # Durable removals: the committed ledger in egregore.json outranks file
     # presence — a person file resurrected by a session write or sync never
     # resurfaces a removed member in the roster.
-    removed: set[str] = set()
-    try:
-        config = json.loads((root / "egregore.json").read_text(encoding="utf-8"))
-        removed = {
-            str(handle).strip().casefold()
-            for handle in (config.get("people_removed") or [])
-            if str(handle).strip()
-        }
-    except (OSError, ValueError):
-        removed = set()
+    if removed is None:
+        try:
+            config = json.loads((root / "egregore.json").read_text(encoding="utf-8"))
+            removed = {
+                str(handle).strip().casefold()
+                for handle in (config.get("people_removed") or [])
+                if str(handle).strip()
+            }
+        except (OSError, ValueError):
+            removed = set()
+    removed = set(removed)
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for path in sorted(people.glob("*.md")):
+    profiles = sorted(people.glob("*.md")) if sources is None else sorted(
+        root / name for name in sources if name.startswith("memory/people/") and name.count("/") == 2)
+    for path in profiles:
         if path.name == "index.md":
             continue
         if path.stem.casefold() in removed:
             continue
-        profile = _profile_identity(path)
+        source = path
+        if decision is not None:
+            verdict = check(decision, f"memory/people/{path.name}", "read", root=root / "memory")
+            if not verdict.allowed:
+                continue
+            source = verdict.resolved
+        profile = _profile_identity(path, source, None if sources is None else sources[f"memory/people/{path.name}"])
         if not profile:
             continue
         if str(profile.get("github") or "").strip().casefold() in removed:
@@ -211,7 +240,8 @@ def organization_member_presentations(
                 aliases=compact_aliases,
             )
         )
-    return tuple(sorted(members, key=lambda item: item.display_name.casefold()))
+    members.sort(key=lambda item: item.display_name.casefold())  # a readable profile can name held material too
+    return tuple(members if decision is None else held.redact(decision, members, root=root / "memory"))
 
 
 def resolve_actor_query(actor: ActorContext, query: str) -> str:
@@ -752,6 +782,102 @@ def _identity_lock(state_path: Path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _existing_identity_json(path: Path) -> tuple[dict[str, Any], bytes]:
+    """Bounded, no-symlink read for the opt-in non-migrating resolver."""
+    path = Path(os.path.abspath(path))
+    parent = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    descriptor = None
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 200000:
+            raise ValueError("existing identity is unavailable")
+        raw = os.read(descriptor, 200001)
+        if len(raw) > 200000:
+            raise ValueError("existing identity is unavailable")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("existing identity is invalid")
+            result[key] = value
+        return result
+    try:
+        value = json.loads(raw, object_pairs_hook=unique)
+        pending = [(value, 0)]
+        while pending:
+            item, depth = pending.pop()
+            if depth > 64:
+                raise ValueError("existing identity is invalid")
+            if isinstance(item, str):
+                item.encode("utf-8")
+            elif isinstance(item, dict):
+                pending.extend((part, depth + 1) for pair in item.items() for part in pair)
+            elif isinstance(item, list):
+                pending.extend((part, depth + 1) for part in item)
+        if not isinstance(value, dict):
+            raise ValueError("existing identity is invalid")
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError("existing identity is invalid") from None
+    return value, raw
+
+
+def _existing_identifier(value: Any) -> bool:
+    return (isinstance(value, str) and bool(value) and value == value.strip()
+            and len(value.encode("utf-8")) <= 2000
+            and not any(ord(character) < 33 or ord(character) == 127 for character in value))
+
+
+def _existing_identity(root: Path):
+    """Retained IDs and config only; deliberately never read identity documents.
+
+    The profile revision has a distinct config-only namespace and cannot stand
+    in for load_profile's revision of config plus declared identity documents.
+    """
+    from .profile import PROFILE_SCHEMA, DEFAULT_CONTEXT_BUDGET
+    config, raw = _existing_identity_json(root / "egregore.json")
+    state, _ = _existing_identity_json(root / ".egregore-state.json")
+    org = config.get("org_id")
+    if not _existing_identifier(org) or any(not _existing_identifier(state.get(key)) for key in ("account_id", "actor_id", "membership_id")):
+        raise ValueError("existing identity is required")
+    nested = state.get("identity", {})
+    if not isinstance(nested, dict) or any(key in nested and nested[key] != value for key, value in {
+        "account_id": state["account_id"], "actor_id": state["actor_id"],
+        "membership_id": state["membership_id"], "org_id": org, "actor_kind": "person",
+    }.items()) or "org_id" in state and state["org_id"] != org:
+        raise ValueError("existing identity is inconsistent")
+    if not isinstance(state.get("provider_identities", {}), dict):
+        raise ValueError("existing identity is invalid")
+    declared = config.get("profile") or {}
+    if not isinstance(declared, dict):
+        raise ValueError("existing profile is invalid")
+    schema = declared.get("schema_version") or PROFILE_SCHEMA
+    budget = declared.get("default_context_budget", DEFAULT_CONTEXT_BUDGET)
+    slug, name = str(config.get("slug") or "").strip(), str(config.get("org_name") or config.get("name") or "").strip()
+    if not slug or not name or schema != PROFILE_SCHEMA or type(budget) is not int or budget <= 0:
+        raise ValueError("existing profile is invalid")
+    for field in ("purpose_path", "principles_path", "conventions_path"):
+        relative = declared.get(field)
+        if relative is not None and (not isinstance(relative, str) or Path(relative.replace("\\", "/")).is_absolute() or ".." in Path(relative.replace("\\", "/")).parts):
+            raise ValueError("existing profile is invalid")
+    profile = EgregoreProfile(
+        schema_version=schema, org_id=org, slug=slug, name=name,
+        revision="profile-config-only-sha256:" + hashlib.sha256(raw).hexdigest(),
+        purpose_path=declared.get("purpose_path"), principles_path=declared.get("principles_path"),
+        conventions_path=declared.get("conventions_path"),
+        default_policy=str(declared.get("default_policy") or "all-access-v1"), default_context_budget=budget,
+    )
+    return profile, state, config
+
+
 class LocalIdentityResolver:
     """Resolve actor context from committed org config and local user state."""
 
@@ -761,62 +887,67 @@ class LocalIdentityResolver:
         *,
         persist_migrations: bool = True,
         entitlement_row: Mapping[str, Any] | None = None,
+        require_existing: bool = False,
     ) -> None:
         self.root = Path(root)
         self.persist_migrations = persist_migrations
         self.entitlement_row = entitlement_row
+        self.require_existing = require_existing
 
     def resolve(self, *, session_id: str, harness: str) -> ActorContext:
-        profile = load_profile(self.root / "egregore.json")
-        state_path = self.root / ".egregore-state.json"
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise ValueError(f"local identity state is missing: {state_path}") from exc
-        if not isinstance(state, dict):
-            raise ValueError(f"local identity state must be an object: {state_path}")
+        if self.require_existing:
+            profile, migrated, config = _existing_identity(self.root)
+        else:
+            profile = load_profile(self.root / "egregore.json")
+            state_path = self.root / ".egregore-state.json"
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise ValueError(f"local identity state is missing: {state_path}") from exc
+            if not isinstance(state, dict):
+                raise ValueError(f"local identity state must be an object: {state_path}")
 
-        config = json.loads((self.root / "egregore.json").read_text(encoding="utf-8"))
-        id_factory = new_identity_id
-        if (
-            profile.org_id.startswith("legacy-org:")
-            and (str(config.get("mode") or "local") == "connected" or config.get("api_url"))
-        ):
-            # A pre-migration Connected install must remain usable offline, but
-            # it must not mint a new random actor in each detached checkout.
-            # These explicitly legacy ids are deterministic compatibility
-            # placeholders and are replaced only by control-plane IDs.
-            legacy_seed = json.dumps(
-                {
-                    "org": profile.org_id,
-                    "person_id": state.get("person_id"),
-                    "github_id": state.get("github_id"),
-                    "github_username": state.get("github_username"),
-                    "email": state.get("email"),
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-
-            def id_factory(prefix: str) -> str:
-                digest = hashlib.sha256(f"{prefix}:{legacy_seed}".encode()).hexdigest()[:24]
-                return f"legacy-{prefix}:{digest}"
-
-        migrated, changed = migrate_local_identity_state(
-            state, org_id=profile.org_id, id_factory=id_factory
-        )
-        if changed and self.persist_migrations:
-            # First-session races must not mint competing account/actor ids.
-            # Re-read after taking the instance lock, then persist once.
-            with _identity_lock(state_path):
-                current = json.loads(state_path.read_text(encoding="utf-8"))
-                if not isinstance(current, dict):
-                    raise ValueError(f"local identity state must be an object: {state_path}")
-                migrated, changed = migrate_local_identity_state(
-                    current, org_id=profile.org_id, id_factory=id_factory
+            config = json.loads((self.root / "egregore.json").read_text(encoding="utf-8"))
+            id_factory = new_identity_id
+            if (
+                profile.org_id.startswith("legacy-org:")
+                and (str(config.get("mode") or "local") == "connected" or config.get("api_url"))
+            ):
+                # A pre-migration Connected install must remain usable offline, but
+                # it must not mint a new random actor in each detached checkout.
+                # These explicitly legacy ids are deterministic compatibility
+                # placeholders and are replaced only by control-plane IDs.
+                legacy_seed = json.dumps(
+                    {
+                        "org": profile.org_id,
+                        "person_id": state.get("person_id"),
+                        "github_id": state.get("github_id"),
+                        "github_username": state.get("github_username"),
+                        "email": state.get("email"),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
-                if changed:
-                    _atomic_json(state_path, migrated)
+
+                def id_factory(prefix: str) -> str:
+                    digest = hashlib.sha256(f"{prefix}:{legacy_seed}".encode()).hexdigest()[:24]
+                    return f"legacy-{prefix}:{digest}"
+
+            migrated, changed = migrate_local_identity_state(
+                state, org_id=profile.org_id, id_factory=id_factory
+            )
+            if changed and self.persist_migrations:
+                # First-session races must not mint competing account/actor ids.
+                # Re-read after taking the instance lock, then persist once.
+                with _identity_lock(state_path):
+                    current = json.loads(state_path.read_text(encoding="utf-8"))
+                    if not isinstance(current, dict):
+                        raise ValueError(f"local identity state must be an object: {state_path}")
+                    migrated, changed = migrate_local_identity_state(
+                        current, org_id=profile.org_id, id_factory=id_factory
+                    )
+                    if changed:
+                        _atomic_json(state_path, migrated)
 
         provider_aliases: dict[str, str] = {}
         for provider, record in (migrated.get("provider_identities") or {}).items():

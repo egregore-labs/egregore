@@ -67,6 +67,12 @@ its default recipient is **Egregore support, private**. Local/OSS users may
 explicitly choose `upstream` for a **public** report. Connected users can also
 choose public upstream explicitly. Never fall back from private to public.
 
+Treat the historical `egregore:` prefix as framework-support intent and use
+this reviewed reporting flow. Never route a framework bug through the
+legacy session-feedback helper: it only stores feedback and does not
+file a support issue or send a Telegram notification. Being Connected does not
+turn an internal issue in the customer's memory into a report to Egregore.
+
 Use `'{title}'` for the concise title derived from the user's report and
 `'{report}'` for the report text the user supplied or reviewed.
 Write an embedded single quote as `'\''` in each substituted value.
@@ -118,6 +124,13 @@ issues, links, comments, ownership or live workflow state. The Egregore team can
 review the private issue in its Project/Archive. Keep a failed/uncertain report's
 request ID; no backend failure authorizes public publication or a fresh blind
 submission.
+
+Report the confirmed outcome precisely: a preview is not submitted; a local
+issue is saved within this organization; only a matching private receipt with
+`submission_state: filed` means filed with Egregore support. Other states need
+recovery using the same request ID. A filed issue does not prove Telegram
+delivery: `notification_state: unverified` must never be described as sent or
+received. Only a separate delivery receipt can establish that.
 
 Public reports use the reporter's GitHub authentication and return a public
 issue URL. Destination comes only from HTTPS GitHub `upstream_url`; absent means

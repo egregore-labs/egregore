@@ -495,7 +495,39 @@ if [ "$EXIT_CODE" -eq 0 ] && json_is '.affected_skills == null
   pass 'optional engine failure preserves inventory and its stderr'
 else fail 'optional engine failure'; fi
 
-# 11. Real source engine review is read-only and connects the static gate to both skills.
+# Root JavaScript suites use the same working-tree and pinned-tree reference
+# discovery as shell/Python suites, without evaluating any test code.
+fixture_git clone "$scratch/origin.git" "$scratch/mjs" >/dev/null 2>&1
+configure_author "$scratch/mjs"
+fixture_git -C "$scratch/mjs" switch -c mjs-topic >/dev/null 2>&1
+printf '%s\n' original > "$scratch/mjs/docs/mjs-source.md"
+printf '%s\n' 'throw new Error("must not execute: docs/mjs-source.md");' > "$scratch/mjs/tests/test-mjs-owner.mjs"
+fixture_git -C "$scratch/mjs" add docs/mjs-source.md tests/test-mjs-owner.mjs
+fixture_git -C "$scratch/mjs" commit -qm 'Add root JavaScript owner fixture'
+mjs_oid=$(fixture_git -C "$scratch/mjs" rev-parse HEAD)
+printf '%s\n' changed > "$scratch/mjs/docs/mjs-source.md"
+printf '%s\n' '// docs/mjs-source.md' > "$scratch/mjs/tests/test-mjs-untracked.mjs"
+capture fixture_run "$scratch/mjs" bin/qa-inventory.sh docs/mjs-source.md --base main --json
+if [ "$EXIT_CODE" -eq 0 ] && json_is '[.candidate_suites[].suite] == ["tests/test-mjs-owner.mjs", "tests/test-mjs-untracked.mjs"]'; then
+  pass 'working-tree discovery includes tracked and untracked root JavaScript suites without execution'
+else fail 'working-tree root JavaScript discovery'; fi
+# A linked suite must not bring external contents into the reference corpus.
+printf '%s\n' '// docs/mjs-source.md' > "$scratch/external-suite.mjs"
+ln -s "$scratch/external-suite.mjs" "$scratch/mjs/tests/test-mjs-linked.mjs"
+capture fixture_run "$scratch/mjs" bin/qa-inventory.sh docs/mjs-source.md --base main --json
+if [ "$EXIT_CODE" -eq 0 ] && json_is '[.candidate_suites[].suite] == ["tests/test-mjs-owner.mjs", "tests/test-mjs-untracked.mjs"]' \
+   && grep -Fq 'skipped 1 suite path(s)' "$scratch/stderr"; then
+  pass 'root JavaScript discovery skips linked suite paths'
+else fail 'root JavaScript linked suite exclusion'; fi
+fixture_git -C "$scratch/mjs" restore docs/mjs-source.md
+fixture_git -C "$scratch/mjs" switch --detach main >/dev/null 2>&1
+capture fixture_run "$scratch/mjs" bin/qa-inventory.sh --base main --branch "$mjs_oid" --json
+if [ "$EXIT_CODE" -eq 0 ] && json_is '[.candidate_suites[].suite] == ["tests/test-mjs-owner.mjs"]' \
+   && [ ! -e "$scratch/mjs/tests/test-mjs-owner.mjs" ]; then
+  pass 'pinned-tree discovery reads the selected root JavaScript blob, not checkout or untracked suites'
+else fail 'pinned-tree root JavaScript discovery'; fi
+
+# Real source engine review is read-only and connects the static gate to both skills.
 before=$(fixture_git -C "$SCRIPT_DIR" status --porcelain=v1 --untracked-files=all)
 capture fixture_run "$SCRIPT_DIR" bin/qa-inventory.sh bin/test-changes.sh --json
 after=$(fixture_git -C "$SCRIPT_DIR" status --porcelain=v1 --untracked-files=all)

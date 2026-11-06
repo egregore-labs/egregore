@@ -22,7 +22,7 @@ from .ingest import (
     LocalIngestJournal,
     LocalQuarantine,
 )
-from .policy import scope_allows_path
+from .policy import allows, action_for
 from .runtime import local_runtime, runtime_root
 from .scratch import read_and_consume
 
@@ -70,7 +70,7 @@ def _require(runtime, actor, permission: Permission, source_id: str):
         raise PermissionError(
             "; ".join(decision.reasons) or f"ingest {permission.value} denied"
         )
-    if not scope_allows_path(_canonical_directory(source_id), decision.scopes):
+    if not allows(decision, _canonical_directory(source_id), action_for(decision.permission), root=runtime.canonical_root):
         raise PermissionError("ingest path is outside the actor's authorized scope")
     return decision
 

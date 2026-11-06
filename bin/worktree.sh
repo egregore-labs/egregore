@@ -57,6 +57,12 @@ case "$CMD" in
       ln -sfn "$MAIN_DIR/egregore.json" "$WT_PATH/egregore.json"
     fi
 
+    # Installed tools (node_modules, .egregore/tools), through the same helper
+    # as the WorktreeCreate hook; a link git cannot be made to ignore is
+    # reported on stderr.
+    # shellcheck source=bin/lib/worktree-links.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/worktree-links.sh" && egregore_link_tools "$WT_PATH" "$MAIN_DIR"
+
     # Find terminal TTY for statusline matching
     _pid=$$
     _tty=""

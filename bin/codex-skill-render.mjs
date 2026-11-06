@@ -148,6 +148,20 @@ function classifyGraph(data, options = {}) {
   };
 }
 
+function spiritRows(data, personal = false) {
+  const rows = firstArray(data, personal ? ['my_spirit_records'] : ['spirit_records']);
+  if (!rows.length && !data.unsupported_native_records && !data.held_records?.length) return [];
+  const lines = [rule(), padLine('SPIRIT RECORDS')];
+  rows.slice(0, 5).forEach((row) => {
+    const state = row.state || {};
+    lines.push(padLine(`${row.producer_principal_id || 'spirit'} · ${state.execution || 'unknown'}`, `outcome ${state.outcome || 'unknown'}`));
+    lines.push(padLine(`verification ${state.verification || 'unknown'} · partial coverage`));
+  });
+  if (data.unsupported_native_records) lines.push(padLine(`${data.unsupported_native_records} unsupported records · metadata unavailable`));
+  if (data.held_records?.length) lines.push(padLine(`${data.held_records.length} held records · details withheld`));
+  return lines;
+}
+
 function renderActivity(data) {
   const graph = classifyGraph(data, { mode: data.mode || 'connected', attempt: 'retry' });
   const org = data.org || data.organization || 'Egregore';
@@ -218,6 +232,8 @@ function renderActivity(data) {
       lines.push(padLine(`#${valueOf(pr, ['number'], '')} ${valueOf(pr, ['title'], 'pull request')}`, valueOf(pr.author || {}, ['login', 'name'], '')));
     });
   }
+
+  lines.push(...spiritRows(data));
 
   lines.push(rule());
   if (handoffs.length > 0) {
@@ -304,6 +320,8 @@ function renderDashboard(data) {
       lines.push(padLine(valueOf(quest, ['id', 'quest', 'slug', 'title'], 'quest'), valueOf(quest, ['status', 'summary'], '')));
     });
   }
+
+  lines.push(...spiritRows(data, true));
 
   lines.push(rule());
   const total = stats.totalSessions ?? data.local_sessions?.session_count ?? sessions.length;

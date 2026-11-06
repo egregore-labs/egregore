@@ -8,6 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d -t egregore-agent-protocol-XXXXXX)"
+TMP="$(cd "$TMP" && pwd -P)"
 # Exercise real local Git/Runtime transactions, never the launching session's
 # credentials, runtime indexes, global Git configuration or package installers.
 trap 'rm -rf "$TMP"' EXIT
@@ -21,6 +22,7 @@ export HOME="$TMP/home"
 export XDG_CACHE_HOME="$HOME/.cache" XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
 export GIT_ALLOW_PROTOCOL=file PYTHONPATH=""
+export PYTHONDONTWRITEBYTECODE=1
 export EGREGORE_CANONICAL_ONLY=1 EGREGORE_NO_TELEMETRY=1
 export EGREGORE_LIFECYCLE_STATE_DIR="$TMP/lifecycle"
 export EGREGORE_QMD_BIN="$TMP/fake-bin/qmd" EGREGORE_QMD_PERSISTENT=0
@@ -71,9 +73,41 @@ copy_runtime() {
   cp "$ROOT/bin/handoff-pr-backfill.sh" "$dest/bin/handoff-pr-backfill.sh"
   cp "$ROOT/bin/publish-artifact.sh" "$dest/bin/publish-artifact.sh"
   cp "$ROOT/bin/artifact-writeback.sh" "$dest/bin/artifact-writeback.sh"
+  cp "$ROOT/bin/memory-push.sh" "$dest/bin/memory-push-production.sh"
   cp "$ROOT/bin/question.sh" "$dest/bin/question.sh"
   cp -R "$ROOT/bin/lib/." "$dest/bin/lib/"
   cp -R "$ROOT/egregore_runtime" "$dest/egregore_runtime"
+  # The fixture host explicitly selects local bare transport. Keep the actual
+  # CLI wrapper and Runtime byte-identical; the thin adapters only opt in for
+  # this instance's exact physical memory directory, including task worktrees.
+  python3 - "$dest" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+memory = root.parent / "memory"
+(root / "sitecustomize.py").write_text(f'''from pathlib import Path
+from egregore_runtime.sync import LocalGitSyncTransport
+
+_fixture_memory = Path({str(memory.resolve())!r})
+_production_init = LocalGitSyncTransport.__init__
+
+def _fixture_init(self, repository, *, push_remote=True, allow_local_transport=False):
+    if Path(repository).resolve() != _fixture_memory:
+        raise ValueError("fixture transport selected a non-fixture repository")
+    _production_init(self, repository, push_remote=push_remote, allow_local_transport=True)
+
+LocalGitSyncTransport.__init__ = _fixture_init
+''')
+(root / "bin/memory-push.sh").write_text('''#!/usr/bin/env bash
+set -eu
+root="$(cd "$(dirname "$0")/.." && pwd)"
+''' + f'fixture_memory={shlex.quote(str(memory.resolve()))}\n' + '''[ "$#" -eq 4 ] && [ "$1" = --repository ] && [ "$3" = --branch ] && [ "$4" = main ] || exit 2
+[ "$(cd "$2" && pwd -P)" = "$fixture_memory" ] || exit 2
+exec bash "$root/bin/memory-push-production.sh" "$@" --allow-local-transport
+''')
+PY
 }
 
 write_config() {
@@ -121,7 +155,7 @@ EOF
   # The runtime package is tracked like it is in a real instance, so a raw
   # worktree of the instance carries its own copy (launchers no longer fall
   # back to whatever package sits in the working directory).
-  git -C "$core" add bin egregore_runtime egregore.json .gitignore
+  git -C "$core" add bin egregore_runtime egregore.json .gitignore sitecustomize.py
   git -C "$core" commit -m "Init portable agent runtime" --quiet
   git -C "$core" branch -M main
   git init --bare --initial-branch=main --quiet "$base/origin.git"

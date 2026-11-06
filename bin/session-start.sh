@@ -3,10 +3,39 @@ set -o pipefail
 
 # Framework version — bumped on greeting/startup changes.
 # Used for drift detection across team members.
-FRAMEWORK_VERSION="7"
+FRAMEWORK_VERSION="8"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
+
+# --- Card delivery by contract (bin/lib/card-delivery.sh) ---
+# Inside a Claude Code hook the harness shows the card to the user (hook
+# systemMessage) and the model receives only the context, so the model never
+# retypes it. The launcher-printed card (#1420/#1472) could not do this: Claude
+# Code ≥2.1.89 boots into the alternate screen and hid it (#1493).
+# The startup runs as an inner pass with its stdout captured to a file:
+# anything printed before the greeting (worktree warnings, repo checks,
+# onboarding_needed) stays out of the JSON, and detached jobs inherit the file
+# rather than the hook's pipe. With a fresh saved card the outer pass instead
+# runs a quick pass (per-session work only), shows the saved card, and runs
+# the full startup detached as a refresh pass. Harness mode exists only inside
+# these passes, so a run that cannot capture falls back to the plain greeting
+# and its display instruction.
+source "$SCRIPT_DIR/bin/lib/card-delivery.sh"
+_CARD_PASS=""
+case "${_EGREGORE_CARD_PASS:-}" in
+  inner|quick|refresh)
+    _CARD_PASS="$_EGREGORE_CARD_PASS"
+    EGREGORE_CARD_DELIVERY="harness"
+    export -n EGREGORE_CARD_DELIVERY _EGREGORE_CARD_PASS 2>/dev/null || true
+    ;;
+  *)
+    if [ "$(egregore_card_delivery_mode)" = "harness" ]; then
+      egregore_card_outer_pass "$SCRIPT_DIR" "$FRAMEWORK_VERSION"
+    fi
+    EGREGORE_CARD_DELIVERY="text"
+    ;;
+esac
 
 # --- Transient development-checkout detection ---
 # Git worktrees have .git as a FILE. The launcher also marks standalone
@@ -30,6 +59,9 @@ if [ -f "$SCRIPT_DIR/bin/lib/worktree-links.sh" ]; then
   egregore_link_shared_state "$SCRIPT_DIR" "$MAIN_PROJECT_DIR" >/dev/null 2>/dev/null || true
 fi
 
+# A refresh pass runs after the session is live: the quick pass already reset
+# consent, and a grant the user gave since then must survive.
+if [ "$_CARD_PASS" != "refresh" ]; then
 # Clear any branch-guard consent from a previous session — consent to write on
 # a protected branch is asked fresh each session (see CLAUDE.md branch-guard protocol).
 rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch-consent" 2>/dev/null
@@ -38,6 +70,7 @@ rm -f "$SCRIPT_DIR/.egregore-branch-consent" "$MAIN_PROJECT_DIR/.egregore-branch
 rm -f "$SCRIPT_DIR/.egregore-boundary-consent" "$MAIN_PROJECT_DIR/.egregore-boundary-consent" 2>/dev/null
 # Prune abandoned scratch without blocking startup or fresh sibling work.
 ( bash "$SCRIPT_DIR/bin/scratch-sweep.sh" --older-than 60 >/dev/null 2>&1 & ) 2>/dev/null
+fi
 
 # --- Health tracking (rendered as dots in greeting) ---
 HEALTH_GITHUB="skip"
@@ -68,6 +101,22 @@ egregore_trace_mark "libs-loaded" 2>/dev/null || true
 # ============================================================
 # 1. Resolve identity
 # ============================================================
+# Claude Code hands this hook its own session id on stdin. identity.sh maps
+# it to the Egregore id it mints (bin/session-id.sh), so this session's
+# commits resolve their own id. Shell variables only: daemons started here
+# outlive the session and must not inherit it. Only a SessionStart hook run
+# (Claude Code sets CLAUDE_ENV_FILE for those alone) reads stdin; every other
+# run, manual or scripted, never waits on it and maps nothing.
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ ! -t 0 ] && command -v jq >/dev/null 2>&1; then
+  _HOOK_INPUT=""
+  IFS= read -r -t 1 -d '' _HOOK_INPUT || true
+  _HOOK_SESSION=$(printf '%s' "$_HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  if [ -n "$_HOOK_SESSION" ]; then
+    EGREGORE_NATIVE_SESSION_ID="$_HOOK_SESSION" EGREGORE_NATIVE_HARNESS=claude
+    EGREGORE_START_HARNESS=claude
+  fi
+  unset _HOOK_INPUT _HOOK_SESSION
+fi
 source "$SCRIPT_DIR/bin/lib/identity.sh"
 egregore_trace_mark "identity" 2>/dev/null || true
 
@@ -171,7 +220,7 @@ if [ "$LOCAL_MODE" != "true" ]; then
       if [ -n "$EXPECTED_SLUG" ] && [ "$KEY_SLUG" != "$EXPECTED_SLUG" ] \
          && _graph_projection_enabled; then
         # Slug differs from config — ask the API whether the key actually works
-        PROBE_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+        PROBE_URL=$(_config_api_url) || PROBE_URL=""
         PROBE_CODE="000"
         if [ -n "$PROBE_URL" ]; then
           PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
@@ -200,7 +249,7 @@ if [ "$LOCAL_MODE" != "true" ]; then
   fi
 fi
 
-if [ "$KEY_NEEDS_FIX" = "true" ]; then
+if [ "$KEY_NEEDS_FIX" = "true" ] && [ "$_CARD_PASS" != "quick" ]; then
   # Plain background job, NOT double-forked: git-sync's `wait` must join this
   # before the graph bootstrap runs — a repaired key that lands after boot
   # means that launch already skipped auto-capture with no WAL entry to
@@ -208,7 +257,7 @@ if [ "$KEY_NEEDS_FIX" = "true" ]; then
   # fine, this block never runs) and bounds broken-key boots at curl's 10s cap.
   (
     GITHUB_TOKEN=$(grep '^GITHUB_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-)
-    API_URL=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+    API_URL=$(_config_api_url) || API_URL=""
     GITHUB_ORG=$(jq -r '.github_org // empty' "$CONFIG" 2>/dev/null)
 
     if [ -n "$GITHUB_TOKEN" ] && [ -n "$API_URL" ] && [ -n "$GITHUB_ORG" ]; then
@@ -245,158 +294,48 @@ fi
 # 4. Instance registry + boundary
 # ============================================================
 
-# --- Self-register in instance registry (for pre-registry installs) ---
-# Worktrees should NOT register as separate instances
-# Wrapped in subshell — registration is optional, must not block session start
-if [ "$IS_WORKTREE" = "false" ] && command -v jq &>/dev/null && [ -f "$CONFIG" ]; then
+# --- Instance registry maintenance (bin/lib/instance-registry.sh) ---
+# Prune entries that are runtime state of another instance (a checkout inside
+# its .egregore/, such as an evaluation sandbox), then self-register this
+# checkout (for pre-registry installs). Worktrees should NOT register as
+# separate instances, and neither does runtime state. Wrapped in a subshell —
+# maintenance is optional and must not block session start.
+if [ "$_CARD_PASS" != "quick" ] && command -v jq &>/dev/null && [ -f "$SCRIPT_DIR/bin/lib/instance-registry.sh" ]; then
   ( (
     REGISTRY_DIR="$HOME/.egregore"
     REGISTRY="$REGISTRY_DIR/instances.json"
-    INST_SLUG=$(jq -r '.slug // empty' "$CONFIG")
-    if [ -z "$INST_SLUG" ]; then
-      # No slug in egregore.json — skip instance registration
-      exit 0
-    fi
-    INST_NAME=$(jq -r '.org_name // empty' "$CONFIG")
-    INST_ORG=$(jq -r '.org_id // empty' "$CONFIG")
-
-    if [ -n "$INST_SLUG" ] && [ -n "$INST_NAME" ]; then
-      mkdir -p "$REGISTRY_DIR"
-      if [ ! -f "$REGISTRY" ]; then echo "[]" > "$REGISTRY"; fi
-
-      ALREADY=$(jq --arg p "$SCRIPT_DIR" '[.[] | select(.path == $p)] | length' "$REGISTRY")
-      if [ "$ALREADY" = "0" ]; then
-        # org_id is the stable identity other sessions use to prove this
-        # checkout is same-organization rather than foreign
-        ENTRY=$(jq -n --arg s "$INST_SLUG" --arg n "$INST_NAME" --arg p "$SCRIPT_DIR" --arg o "$INST_ORG" \
-          '{slug: $s, name: $n, path: $p} + (if $o == "" then {} else {org_id: $o} end)')
-        jq --argjson e "$ENTRY" '. + [$e]' "$REGISTRY" > "$REGISTRY.tmp" \
-          && mv "$REGISTRY.tmp" "$REGISTRY"
-      elif [ -n "$INST_ORG" ]; then
-        # Backward compatibility: patch this checkout's own legacy entry with
-        # its org_id so other sessions can prove identity instead of failing
-        # closed against it
-        jq --arg p "$SCRIPT_DIR" --arg o "$INST_ORG" \
-          'map(if .path == $p and ((.org_id // "") == "") then . + {org_id: $o} else . end)' \
-          "$REGISTRY" > "$REGISTRY.tmp" \
-          && mv "$REGISTRY.tmp" "$REGISTRY"
-      fi
+    source "$SCRIPT_DIR/bin/lib/instance-registry.sh"
+    egregore_registry_prune "$REGISTRY"
+    if [ "$IS_WORKTREE" = "false" ] && [ -f "$CONFIG" ]; then
+      # Registration needs a slug and org_name in egregore.json; without them it does nothing.
+      INST_SLUG=$(jq -r '.slug // empty' "$CONFIG")
+      INST_NAME=$(jq -r '.org_name // empty' "$CONFIG")
+      INST_ORG=$(jq -r '.org_id // empty' "$CONFIG")
+      egregore_registry_register "$REGISTRY" "$SCRIPT_DIR" "$INST_SLUG" "$INST_NAME" "$INST_ORG"
     fi
   ) >/dev/null 2>&1 & ) 2>/dev/null || true
 fi
 
 # --- Compute session boundary for environment isolation ---
 compute_boundary() {
-  local hash
-  hash=$(echo -n "$SCRIPT_DIR" | md5 2>/dev/null || echo -n "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1)
-  local boundary_file="/tmp/egregore-boundary-${hash}.json"
-  local project_dir="$SCRIPT_DIR"
-
-  # Resolve memory directory (follow symlink)
-  local memory_dir=""
-  if [ -L "$SCRIPT_DIR/memory" ]; then
-    memory_dir=$(realpath "$SCRIPT_DIR/memory" 2>/dev/null || echo "")
-  fi
-
-  # Validate and resolve managed repos
-  local managed_repos_json="[]"
-  local parent_dir
-  parent_dir="$(dirname "$SCRIPT_DIR")"
-  local repos
-  repos=$(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  if [ -n "$repos" ]; then
-    # Validate repos first
+  # repos[] traversal warnings stay visible in the greeting.
+  if [ -n "$(jq -r '(.repos[]? // empty)' "$SCRIPT_DIR/egregore.json" 2>/dev/null)" ]; then
     bash "$SCRIPT_DIR/bin/boundary.sh" validate-repos 2>/dev/null || true
-    managed_repos_json="["
-    local first=true
-    for repo in $repos; do
-      # Skip entries with path traversal or absolute paths
-      [[ "$repo" == *".."* ]] && continue
-      [[ "$repo" == /* ]] && continue
-      local resolved
-      resolved=$(realpath "$parent_dir/$repo" 2>/dev/null || echo "")
-      [ -z "$resolved" ] && continue
-      # Must resolve under parent directory
-      [[ "$resolved" != "$parent_dir"/* ]] && continue
-      $first || managed_repos_json="$managed_repos_json,"
-      managed_repos_json="$managed_repos_json\"$resolved\""
-      first=false
-    done
-    managed_repos_json="$managed_repos_json]"
   fi
 
-  # Collect denied paths from instance registry. Only checkouts proven to
-  # share this instance's stable organization identity (org_id) are excluded;
-  # ancestry or a matching slug proves nothing, and entries without org_id
-  # stay denied (fail closed). Shared logic: bin/boundary.sh compute-denied.
-  local denied_paths_json="[]"
-  local registry="$HOME/.egregore/instances.json"
-  if [ -f "$registry" ]; then
-    local self_org
-    self_org=$(jq -r '.org_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-    denied_paths_json=$(bash "$SCRIPT_DIR/bin/boundary.sh" compute-denied \
-      "$registry" "$project_dir" "$self_org" 2>/dev/null || echo "[]")
-    case "$denied_paths_json" in "["*) ;; *) denied_paths_json="[]" ;; esac
-  fi
+  # Memory, managed repos, denied instances (only checkouts proven to share
+  # this instance's org_id are excluded; ancestry or a slug proves nothing),
+  # posture and read roots come from one shared computation — the same one the
+  # Codex/Pi/Prime session start, worktree creation, and every pre-action
+  # check use. An unreadable registry is recorded, never read as empty.
+  local deny_rules settings_local="$SCRIPT_DIR/.claude/settings.local.json"
+  bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/bin/boundary-guard.cjs" write-cache "$SCRIPT_DIR" >/dev/null 2>&1 || true
 
-  # --- Boundary policy: posture + read roots (two-tier consent model) ---
-  # Org layer: egregore.json .boundary { posture, read[], locked } — committed.
-  # Personal layer: .egregore-boundary.local.json { posture, read[] } — gitignored,
-  # ignored entirely when the org layer sets locked: true.
-  local posture locked personal_file="$SCRIPT_DIR/.egregore-boundary.local.json"
-  posture=$(jq -r '.boundary.posture // "standard"' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  locked=$(jq -r '.boundary.locked // false' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  case "$posture" in strict|standard|open) ;; *) posture="standard" ;; esac
-  [ "$locked" = "true" ] || locked="false"
-  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
-    local p_posture
-    p_posture=$(jq -r '.posture // empty' "$personal_file" 2>/dev/null)
-    case "$p_posture" in strict|standard|open) posture="$p_posture" ;; esac
-  fi
-
-  # Read roots: inbox defaults (unless strict) + org read[] + personal read[] (unless locked)
-  local read_roots_json="[]" raw_roots=""
-  if [ "$posture" != "strict" ]; then
-    raw_roots="$HOME/Downloads
-$HOME/Desktop"
-  fi
-  local org_roots
-  org_roots=$(jq -r '.boundary.read[]? // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
-  [ -n "$org_roots" ] && raw_roots="$raw_roots
-$org_roots"
-  if [ "$locked" != "true" ] && [ -f "$personal_file" ]; then
-    local personal_roots
-    personal_roots=$(jq -r '.read[]? // empty' "$personal_file" 2>/dev/null)
-    [ -n "$personal_roots" ] && raw_roots="$raw_roots
-$personal_roots"
-  fi
-  if [ -n "$raw_roots" ]; then
-    read_roots_json=$(printf '%s\n' "$raw_roots" | sed -e '/^$/d' -e "s|^~|$HOME|" | sort -u | jq -R . | jq -s -c .)
-    [ -z "$read_roots_json" ] && read_roots_json="[]"
-  fi
-
-  # Write boundary file (atomic: write to tmp, then mv)
-  jq -n \
-    --arg project_dir "$project_dir" \
-    --arg memory_dir "$memory_dir" \
-    --arg posture "$posture" \
-    --argjson locked "$locked" \
-    --argjson read_roots "$read_roots_json" \
-    --argjson managed_repos "$managed_repos_json" \
-    --argjson denied_paths "$denied_paths_json" \
-    '{project_dir: $project_dir, memory_dir: $memory_dir, posture: $posture, locked: $locked, read_roots: $read_roots, managed_repos: $managed_repos, denied_paths: $denied_paths}' \
-    > "$boundary_file.tmp" && mv "$boundary_file.tmp" "$boundary_file"
-
-  # Generate dynamic deny rules in .claude/settings.local.json
-  local settings_local="$SCRIPT_DIR/.claude/settings.local.json"
-  local deny_rules="[]"
-  if [ "$denied_paths_json" != "[]" ]; then
-    deny_rules=$(echo "$denied_paths_json" | jq '[.[] | "Read(" + . + "/**)", "Edit(" + . + "/**)"]')
-  fi
-  # Deny writing to instance registry (reads allowed for multi-instance features).
-  # Edit() alone covers Write/NotebookEdit too — Write() rules are never matched by
-  # the permission checker and only trigger a startup "not matched" warning if included.
-  deny_rules=$(echo "$deny_rules" | jq '. + ["Edit(~/.egregore/instances.json)"]')
+  # Claude's native deny rules (a second line of defence behind the hook):
+  # generated by the same module, so they carry its self-scope carve-out and
+  # registry protection instead of a second copy of the rules.
+  deny_rules=$(bash "$SCRIPT_DIR/bin/node-run.sh" "$SCRIPT_DIR/bin/boundary-guard.cjs" native-denials "$SCRIPT_DIR" 2>/dev/null) || return 0
+  printf '%s' "$deny_rules" | jq -e 'type == "array"' >/dev/null 2>&1 || return 0
 
   # Merge with existing settings.local.json — only touch permissions.deny
   mkdir -p "$SCRIPT_DIR/.claude"
@@ -409,15 +348,49 @@ $personal_roots"
   fi
 }
 
-# Run boundary computation (non-blocking, but fast — just file I/O)
-compute_boundary 2>/dev/null || true
+# Run boundary computation (non-blocking, but fast — just file I/O). The
+# quick pass already wrote it for a refreshing session.
+[ "$_CARD_PASS" != "refresh" ] && { compute_boundary 2>/dev/null || true; }
+
+# The quick pass ends here: the per-session work is done and the outer pass
+# shows the saved card, then runs everything below as a detached refresh.
+# That refresh leaves working trees alone under the live session
+# (EGREGORE_GIT_SYNC_LIVE), so the checkout and the managed repos on their
+# base branch catch up to the last fetch here: local, no network. The fast
+# path runs only on the base branch.
+if [ "$_CARD_PASS" = "quick" ]; then
+  # No hooks: a post-merge hook must never stall the hook's quick path.
+  if [ "$(git branch --show-current 2>/dev/null)" = "$BASE_BRANCH" ]; then
+    git -c core.hooksPath=/dev/null merge --ff-only "origin/$BASE_BRANCH" --quiet >/dev/null 2>&1 || true
+  fi
+  for _REPO in $(jq -r '(.repos[]? // empty) | if type == "object" then .name else . end' "$SCRIPT_DIR/egregore.json" 2>/dev/null); do
+    case "$_REPO" in *..*|/*) continue ;; esac  # as bin/boundary.sh: siblings only
+    _REPO_DIR="$SCRIPT_DIR/../$_REPO"
+    [ -d "$_REPO_DIR/.git" ] || continue
+    _REPO_BASE=$(_get_base_branch "$_REPO" 2>/dev/null) || continue
+    [ "$(git -C "$_REPO_DIR" branch --show-current 2>/dev/null)" = "$_REPO_BASE" ] || continue
+    git -C "$_REPO_DIR" -c core.hooksPath=/dev/null merge --ff-only "origin/$_REPO_BASE" --quiet >/dev/null 2>&1 || true
+  done
+  egregore_trace_end 2>/dev/null || true
+  printf 'egregore-quick-ok %s\n' "$EGREGORE_SESSION_ID"
+  exit 0
+fi
+[ "$_CARD_PASS" = "refresh" ] && EGREGORE_GIT_SYNC_LIVE=1
 
 # ============================================================
 # 5. Git sync
 # ============================================================
 egregore_trace_mark "branch-onboarding-mode-boundary" 2>/dev/null || true
+source "$SCRIPT_DIR/bin/lib/startup-restart.sh"
+_STARTUP_HEAD=$(egregore_startup_head)
 source "$SCRIPT_DIR/bin/lib/git-sync.sh"
 egregore_trace_mark "git-sync" 2>/dev/null || true
+# A sync that pulled a newer startup finishes on it (bin/lib/startup-restart.sh),
+# in the same card pass.
+[ -n "$_CARD_PASS" ] && export _EGREGORE_CARD_PASS="$_CARD_PASS"
+egregore_startup_restart "$_STARTUP_HEAD" "$SCRIPT_DIR/bin/session-start.sh"
+export -n _EGREGORE_CARD_PASS 2>/dev/null || true
+unset _STARTUP_HEAD
 
 # Resolve a legacy instance's stable Runtime identity before SessionStart
 # finishes and UserPromptSubmit can invoke Observe. Once persisted this is a
@@ -689,12 +662,9 @@ if [ "$IS_WORKTREE" != "true" ]; then
     || rm -f "$_CARD_FILE.tmp.$$" 2>/dev/null || true
 fi
 
-# The greeting always renders in-chat — identical across OSS and Connect and
-# across launch paths. The launcher-rendered card fast path (EGREGORE_CARD_SHOWN)
-# was reverted: Claude Code ≥2.1.89 boots into the alternate screen buffer,
-# which hides anything a launcher prints pre-launch (see PR #1493 for the
-# parked re-enable). The card cache write above stays — it is harmless and the
-# re-enable path depends on it.
+# In a Claude Code hook this output is captured by the outer pass at the top
+# of this script, which turns it into the card-delivery envelope.
 cat "$_GREETING_BUF"
+( bash "$SCRIPT_DIR/bin/session-record.sh" --mode sweep >/dev/null 2>&1 & ) 2>/dev/null
 rm -f "$_GREETING_BUF" 2>/dev/null || true
 egregore_trace_end 2>/dev/null || true

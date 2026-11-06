@@ -7,7 +7,7 @@ implementation details.  Infrastructure is composed behind ``local_runtime``.
 
 from __future__ import annotations
 
-from .investigation_guidance import INVESTIGATION_GUIDANCE, RECALL_WORKFLOW_GUIDANCE
+from .investigation_guidance import INVESTIGATION_GUIDANCE, RECALL_WORKFLOW_GUIDANCE, investigation_guidance
 
 import argparse
 import fcntl
@@ -16,12 +16,14 @@ from io import StringIO
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import uuid
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -31,6 +33,7 @@ from .contracts import (
     EvidenceItem,
     OrgContext,
     Permission,
+    PolicyDecision,
     RetrievalMode,
     RetrievalRequest,
     TemporalScope,
@@ -40,7 +43,19 @@ from .identity import actor_lexical_formulations, organization_member_presentati
 from .investigation_contracts import InvestigationRequest, decode_request
 from . import episode_binding
 from .runtime import EgregoreRuntime, local_runtime
+from .policy import is_admin
+from .installation import installation_key, installation_root
+from .optional_modules import optional_module
 
+_record = optional_module(".record")
+record_notice = _record.notice if _record is not None else lambda *args, **kwargs: None
+member_cli = optional_module(".member_cli")
+from .member_authority import MemberAuthorityError
+
+
+# A later package adds a command as a new module with register(commands)
+# and one line here; relative names resolve inside each Runtime bundle.
+_COMMAND_MODULES: tuple[str, ...] = (".access_cli", ".mind_cli", ".outputs_cli")
 
 _HISTORICAL_SCOPE = re.compile(
     r"\b(history|historical|previous|older|old decision|superseded|what changed|how .* evolv(?:e|ed))\b",
@@ -98,10 +113,31 @@ _episode_session: ContextVar[str | None] = ContextVar("observe_episode_session",
 _prompt_binding: ContextVar[episode_binding.EpisodeBinding | None] = ContextVar('prompt_investigation_binding',default=None)
 _invocation_root: ContextVar[Path | None] = ContextVar('investigation_root',default=None)
 
+def _runtime(root, *, push_remote=False):
+    member = (member_cli.current() if member_cli is not None else None)
+    return (member.runtime(root, push_remote=push_remote) if member
+            else local_runtime(root, push_remote=push_remote))
+
 
 @contextmanager
 def _invocation(root, reference=None):
     """A native prompt's explicit reference is stronger than shared shell state."""
+    member = (member_cli.current() if member_cli is not None else None)
+    if member:
+        binding = (episode_binding.resolve(root, reference) if reference
+                   else episode_binding.resolve_native(root, harness="durable", session_id=member.session_id))
+        if binding is None or binding.session_id != member.session_id:
+            raise MemberAuthorityError()
+        session_token = _episode_session.set(member.session_id)
+        binding_token = _prompt_binding.set(binding)
+        root_token = _invocation_root.set(root)
+        try:
+            yield binding
+        finally:
+            _invocation_root.reset(root_token)
+            _prompt_binding.reset(binding_token)
+            _episode_session.reset(session_token)
+        return
     binding = _prompt_binding.get()
     if binding is None and (reference or os.environ.get('EGREGORE_EPISODE_ID')):
         binding = episode_binding.resolve(root,reference or os.environ['EGREGORE_EPISODE_ID'])
@@ -135,11 +171,11 @@ def _invocation(root, reference=None):
 
 def _execute_investigation(root, harness, request, *, runtime=None, actor=None, reference=None, request_id=None, origin='investigate'):
     with _invocation(root,reference) as binding:
-        runtime = runtime or local_runtime(root,push_remote=False)
+        runtime = runtime or _runtime(root,push_remote=False)
         actor = actor or _actor(runtime,root,harness)
         episode_id = binding.episode_id if binding else _session_id(root)
         # Old receipts are read only as a migration bridge; new calls never write them.
-        receipt = None if binding else _active_observe_receipt(root,harness)
+        receipt = None if binding or (member_cli.current() if member_cli is not None else None) else _active_observe_receipt(root,harness)
         contexts,initial_searches,bounds=[],0,{}
         if receipt:
             contexts=[entry.get('context',{}) for entry in _receipt_requests(receipt).values()]
@@ -150,12 +186,20 @@ def _execute_investigation(root, harness, request, *, runtime=None, actor=None, 
                 bounds['_not_before']=receipt['not_before']
             if receipt.get('terminal_gap'):
                 bounds['_legacy_terminal_gap']=True
-        return runtime.investigate(actor,request,episode_id=episode_id,seeds=contexts,
+        response = runtime.investigate(actor,request,episode_id=episode_id,seeds=contexts,
             initial_searches=initial_searches,initial_bounds=bounds,request_id=request_id,
             binding=binding,origin=origin)
+        _mind_call.set((response, origin, request))
+        return response
 
 
 def _publish_result(root, response, rendered, *, private=False, harness='shell'):
+    if (member_cli.current() if member_cli is not None else None):
+        # Member content stays on the authenticated host's private stdout.
+        # Local attachment, record and mind surfaces have their own operator
+        # lifecycle and are deliberately absent from this composition.
+        sys.stdout.write(rendered)
+        return False
     from .private_result import supports_attachment
     # An invalidated prompt cannot consume an attachment. Keep its error visible;
     # never use this fallback for successful evidence from a failed binding.
@@ -166,11 +210,13 @@ def _publish_result(root, response, rendered, *, private=False, harness='shell')
         if response['ok']:
             raise
         private = False
+    receipt = None
     if private:
         from .private_result import prepare
         reference=response['episode_id']
         session=episode_binding.resolve(root,reference).session_id if reference.startswith('ep_') else _session_id(root)
-        print(prepare(root,response,rendered,session))
+        receipt = prepare(root,response,rendered,session)
+        print(receipt)
     else:
         from .private_result import record_stdout
         try:
@@ -180,12 +226,347 @@ def _publish_result(root, response, rendered, *, private=False, harness='shell')
                 raise
             # A missing/corrupt receipt must not replace the operation's error.
         sys.stdout.write(rendered)
+    _mind_notice(root, response, rendered, harness, receipt)
     return private
+
+
+# Notices for an open memory map (experiments/egregore-mind/AGENT-SPEC.md §3.6).
+# Inert unless a map is open for this workspace. A notice goes to this
+# checkout's door ($MIND_HOME, else experiments/egregore-mind/.mind) when its
+# door.json names this checkout as the one it serves; only if that door took
+# nothing, to the instance door (.egregore/runtime/mind under the installation
+# this checkout belongs to) when its door.json names that installation. Either
+# door needs a heartbeat under 3 s old and must be the user's alone, and no
+# folder below the checkout or installation may be a link. Notices may cross
+# the checkouts of one installation, never into another instance; `mind`
+# requests stay per checkout (§3.3).
+# Each notice is one small file of paths, counts and ids, never prompt, query or
+# document text, and writing it never changes, fails or holds up the call it
+# describes: every filesystem step runs on a writer thread the call waits for
+# at most 0.1 s.
+_mind_call: ContextVar[tuple | None] = ContextVar('mind_call', default=None)
+_MIND_KINDS = ('seen-', 'asked-', 'delivered-')
+_MIND_WAITING = 1000  # files a door may hold before notices are dropped (soft: writers do not lock)
+_MIND_LARGEST = 65536  # bytes; a larger record is not written
+_MIND_WRITERS = threading.BoundedSemaphore(4)  # stuck writers a process may hold; then notices drop
+_MIND_WORKSPACE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}')
+
+
+def _mind_send(root, kind, harness, session, note):
+    if _record is None:  # the Mind runtime is not installed
+        return
+    configured = os.environ.get('MIND_HOME')
+    native, codex = os.environ.get('EGREGORE_NATIVE_SESSION_ID'), os.environ.get('CODEX_THREAD_ID')
+    # Codex first: a Codex worker started from a Claude or Pi shell inherits that session's
+    # EGREGORE_NATIVE_* variables, and its prompt hook names it codex/<thread>, so its searches must
+    # too. The reverse nesting (Claude or Pi run inside a Codex shell) is split across two agents.
+    environment = (_mind_actor('codex', codex) if codex else
+                   _mind_actor(os.environ.get('EGREGORE_NATIVE_HARNESS') or 'agent', native) if native else '')
+    if kind == 'asked' and harness == 'codex' and codex:
+        actor = _mind_actor('codex', codex)  # one Codex session is one agent, whatever its hook calls itself
+    elif kind == 'delivered':
+        actor = _mind_actor(harness, session) if session else ''  # only the hook that attached the result
+    else:
+        actor = _mind_actor(harness, session) if session else environment  # the hook's own session first
+    if not _MIND_WRITERS.acquire(blocking=False):
+        return
+
+    def write():
+        try:
+            _mind_write(root, configured, kind, harness, actor, note)
+        except Exception:
+            pass  # no map, a stopped map, or a door it must not use
+        finally:
+            _MIND_WRITERS.release()
+
+    try:
+        writer = threading.Thread(target=write, name='mind-notice', daemon=True)
+        writer.start()
+    except BaseException:
+        _MIND_WRITERS.release()
+        raise
+    writer.join(0.1)
+
+
+def _mind_actor(harness, session):
+    """`<harness>/<session>` exactly as the map's bridge accepts an actor, else ''."""
+    harness = 'claude' if harness == 'claude-code' else str(harness or '')
+    if re.fullmatch(r'[a-z][a-z0-9-]{0,19}', harness) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', str(session)):
+        return f'{harness}/{session}'
+    return ''
+
+
+def _mind_write(root, configured, kind, harness, actor, note):
+    """One notice: this checkout's door, else the instance door. True once one is renamed into place."""
+    here = os.path.realpath(root)
+    instance = os.path.realpath(installation_root(here))
+    folder = os.path.basename(here)
+    fields = {'actor': actor, 'harness': str(harness)[:40],
+              'workspace': 'main' if here == instance else folder if _MIND_WORKSPACE.fullmatch(folder) else 'other',
+              **note}
+    checkout = [configured, 'door'] if configured else [str(root), 'experiments', 'egregore-mind', '.mind', 'door']
+    return (_mind_door(checkout, 'root', here, kind, fields) or  # MIND_HOME never reaches the instance door
+            _mind_door([instance, '.egregore', 'runtime', 'mind', 'door'], 'instance', instance, kind, fields))
+
+
+def _mind_door(walk, field, expected, kind, fields):
+    """Write one notice into the live door at ``walk`` whose door.json names ``expected`` as its ``field``.
+
+    Below the first folder none may be a link, so the door checked is the door written. True once the
+    notice is renamed into place; False when the door is absent, stopped, someone else's, full, names
+    another checkout or instance, or refuses the write.
+    """
+    held = []
+    try:
+        for part in walk:
+            held.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK | (os.O_NOFOLLOW if held else 0),
+                                dir_fd=held[-1] if held else None))
+        home, door = held[-2], held[-1]
+        beat, info = os.stat('heartbeat', dir_fd=door, follow_symlinks=False), os.fstat(door)
+        if (not stat.S_ISREG(beat.st_mode) or not -1 <= time.time() - beat.st_mtime <= 3
+                or info.st_uid != os.getuid() or info.st_mode & 0o077):
+            return False  # a stopped map, or a door someone else could open
+        with os.fdopen(os.open('door.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=home), 'rb') as handle:
+            pointer = json.loads(handle.read(4096))
+        if not isinstance(pointer, dict) or pointer.get(field) != expected:
+            return False  # a map serving another checkout or instance, or one that does not say which
+        run = pointer.get('run')
+        record = json.dumps({'v': 2, 'k': kind, 't': datetime.now(UTC).isoformat(timespec='milliseconds')
+                             .replace('+00:00', 'Z'), 'run': str(run)[:40] if run else None, **fields},
+                            ensure_ascii=False) + '\n'
+        if len(record.encode('utf-8')) > _MIND_LARGEST:
+            return False
+        waiting, leftovers = 0, tuple('.' + k for k in _MIND_KINDS)
+        with os.scandir(door) as entries:
+            for entry in entries:
+                try:
+                    if entry.name.startswith(leftovers) and time.time() - entry.stat(
+                            follow_symlinks=False).st_mtime > 60:
+                        os.unlink(entry.name, dir_fd=door)  # a writer that died between create and rename
+                        continue
+                except FileNotFoundError:
+                    continue  # its writer renamed it, or another writer reclaimed it, after the listing
+                waiting += entry.name.lstrip('.').startswith(_MIND_KINDS)
+        if waiting >= _MIND_WAITING:
+            return False
+        name = f'{kind}-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}'
+        descriptor = os.open('.' + name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=door)
+        try:
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+                handle.write(record)
+            os.rename('.' + name, name, src_dir_fd=door, dst_dir_fd=door)
+        except BaseException:
+            os.unlink('.' + name, dir_fd=door)
+            raise
+        return True
+    except (OSError, ValueError):
+        return False  # no door here, or one it must not use: the next door may still take it
+    finally:
+        for descriptor in reversed(held):
+            os.close(descriptor)
+
+
+def _mind_asked(root, harness, payload):
+    """The person asked something in this session: when and where, never what."""
+    try:
+        _mind_send(root, 'asked', harness, str(payload.get('session_id') or ''), {})
+    except Exception:
+        return
+
+
+def _mind_digest(token):
+    """A short name two notices share for one attachment or cursor; never the token itself."""
+    return hashlib.sha256(str(token).encode()).hexdigest()[:16]
+
+
+def _mind_delivered(root, harness, payload, receipt):
+    """The agent's own hook attached a prepared result: the seen notice with this packet reached the agent."""
+    try:
+        _mind_send(root, 'delivered', harness, str(payload.get('session_id') or ''), {'packet': _mind_digest(receipt)})
+    except Exception:
+        return
+
+
+def _mind_notice(root, response, rendered, harness, receipt=None):
+    """What a find, open, query or investigate call showed the agent, or why it showed nothing.
+
+    With ``receipt`` (Claude's attachment line) the result was only prepared: it counts as seen
+    once a ``delivered`` notice with the same ``packet`` follows from the consuming hook.
+    """
+    if (member_cli.current() if member_cli is not None else None):
+        return
+    try:
+        call = _mind_call.get()
+        if call is None or call[0] is not response:
+            return
+        request = call[2].to_dict() if hasattr(call[2], 'to_dict') else dict(call[2])
+        operation = request.get('operation')
+        if operation not in {'discover', 'open', 'open_many'}:
+            return
+        projection = request.get('context_projection') or {}
+        retrieval = projection.get('retrieval') or {}
+        result = (response.get('result') or {}) if response.get('ok') else {}
+        context, details = result.get('context') or {}, result.get('coverage_details') or {}
+        def paths(values):
+            return list(dict.fromkeys(p for p in values if isinstance(p, str) and p.startswith('memory/')
+                                      and len(p) <= 300))[:100]
+        # A result path counts only when the published text names it, plain or as JSON either way:
+        # a query that missed its minimum evidence prints the gap, not the paths.
+        shown = [p for p in paths([row.get('path') for row in result.get('results', ())] +
+                                  [item.get('canonical_path') for item in context.get('evidence', ())])
+                 if any(form in rendered for form in
+                        (p, json.dumps(p)[1:-1], json.dumps(p, ensure_ascii=False)[1:-1]))]
+        opened = paths([s.get('path') for s in result.get('sources', [result] if 'content' in result else ())] +
+                       (shown if retrieval.get('open_sources') else []))
+        kind = ({'lex': 'keyword', 'vec': 'semantic', 'lex+vec': 'hybrid'}.get(str(retrieval.get('mode')))
+                or result.get('operation') or request.get('kind') or 'keyword')
+        def day(value):
+            return value if isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value) else None
+        days = request.get('recent_days') or projection.get('recent_days')
+        def count(value):
+            return value if type(value) is int and 0 <= value <= 10**6 else None
+        if receipt:
+            from .private_result import MARKER
+            receipt = json.loads(receipt.removeprefix(MARKER))['id']
+        _mind_send(root, 'seen', harness, None, {
+            'episode': str(response.get('episode_id') or '')[:80] or None,
+            'invocation': str(response.get('invocation_id') or '')[:80] or None,
+            'call': call[1], 'op': operation, 'delivery': 'attachment' if receipt else 'stdout',
+            'packet': _mind_digest(receipt) if receipt else None,
+            'kind': kind if operation == 'discover' and kind in
+                {'filename', 'literal', 'dates', 'keyword', 'semantic', 'hybrid'} else None,
+            # No query words: the kind, dates and paths say where the agent looked, never what it typed.
+            # A next page carries only its cursor: `continues` names the notice whose `next` handed
+            # that cursor out, and that notice holds the kind and dates this page continues.
+            'continues': _mind_digest(request['cursor']) if request.get('cursor') else None,
+            'next': _mind_digest(result['next_cursor']) if result.get('next_cursor') else None,
+            # This call's own date arguments. Bounds the Runtime kept from earlier calls in the
+            # prompt are not in its response, so these are never the whole scope searched.
+            'requested': {'after': day(request.get('after')), 'before': day(request.get('before')),
+                          'recent_days': days if type(days) is int and 1 <= days <= 36500 else None},
+            'paths': shown, 'opened': opened,
+            'searches_left': count(result.get('searches_remaining')), 'reads_left': count(result.get('reads_remaining')),
+            'coverage': {'degraded': bool(result.get('degraded') or context.get('degraded')),
+                         'absent_or_stale': count(details.get('stale_or_missing_count', 0)),
+                         'vectors_missing': count(details.get('vector_missing_count', 0)),
+                         'omitted': len(context.get('omissions') or ()),
+                         'more': count(result.get('remaining_in_result_set', 0)),
+                         'reach': str(result.get('coverage') or '')[:120]},
+            'ok': bool(response.get('ok')), 'error': str(response.get('error_code') or '')[:40] or None})
+    except Exception:
+        return
+
+
+# A worktree's parser and held rules can differ even when this hook's own
+# source is identical. Compose and validate with that checkout's imported code,
+# not just its data root. The bootstrap uses APIs present in older checkouts too.
+_RESULT_CONSUMER = '''
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+try:
+    from egregore_runtime import private_result
+    from egregore_runtime.runtime import local_runtime
+    loaded = Path(private_result.__file__).resolve()
+    if not loaded.is_relative_to(root.resolve()) or loaded.parent != (root / 'egregore_runtime').resolve():
+        raise ValueError('packet Runtime could not be loaded from its checkout')
+    for name, module in tuple(sys.modules.items()):
+        if name == 'egregore_runtime' or name.startswith('egregore_runtime.'):
+            filename = getattr(module, '__file__', None)
+            if not filename or not Path(filename).resolve().is_relative_to(root.resolve()):
+                raise ValueError('packet Runtime could not be loaded from its checkout')
+    request = json.load(sys.stdin)
+    runtime = local_runtime(root, push_remote=False)
+    actor = runtime.resolve_actor(session_id=request['session_id'], harness=request['harness'])
+    rendered = private_result.consume(root, request['id'], runtime, actor,
+        session_id=request['session_id'], native_turn_id=request['native_turn_id'])
+    result = {'rendered': rendered}
+except Exception as error:
+    result = {'error': str(error)}
+print(json.dumps(result))
+'''
+
+# Context-projection packets recheck the same collection and index revision as
+# the search. Keep those data-location overrides, not the harness environment.
+_RESULT_CONSUMER_ENV = (
+    'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE',
+    'EGREGORE_QMD_COLLECTION', 'EGREGORE_QMD_INDEX_PATH', 'EGREGORE_QMD_RUNTIME_DIR',
+)
+
+
+def _validate_packet_runtime(root: Path) -> None:
+    """Reject unchecked import paths anywhere in the packet's Runtime package."""
+    package = root / 'egregore_runtime'
+
+    def check(entry, regular_type):
+        # lstat rejects links, including directory links that os.walk won't follow.
+        if (not regular_type(entry.lstat().st_mode)
+                or not entry.resolve(strict=True).is_relative_to(checkout)):
+            raise ValueError('uncontained Runtime entry')
+
+    def walk_error(error):
+        raise error
+
+    try:
+        checkout = root.resolve(strict=True)
+        check(package, stat.S_ISDIR)
+        for directory, directories, files in os.walk(package, followlinks=False, onerror=walk_error):
+            for name in directories:
+                check(Path(directory) / name, stat.S_ISDIR)
+            for name in files:
+                check(Path(directory) / name, stat.S_ISREG)
+        # Preserve the required package entry points as well as tree containment.
+        for name in ('__init__.py', 'private_result.py'):
+            check(package / name, stat.S_ISREG)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise EgregoreRuntimeError('packet Runtime is not contained in its checkout') from error
+
+
+def _consume_private_result(root, identifier, *, session_id, harness, native_turn_id):
+    """Use the admitted packet checkout's Runtime without mixing module versions."""
+    from .private_result import consume
+    package = root / 'egregore_runtime'
+    # Data-only Runtime roots use the installed package. A checkout carrying
+    # its own package must validate with that package, with no fallback on error.
+    checkout_package = package.exists() or package.is_symlink()
+    if checkout_package:
+        _validate_packet_runtime(root)
+    if checkout_package and package.resolve() != Path(__file__).resolve().parent:
+        environment = {name: os.environ[name] for name in _RESULT_CONSUMER_ENV if name in os.environ}
+        environment['EGREGORE_ROOT'] = str(root)
+        try:
+            worker = subprocess.run(
+                [sys.executable, '-I', '-B', '-c', _RESULT_CONSUMER, str(root)],
+                input=json.dumps({'id': identifier, 'session_id': session_id,
+                                  'harness': harness, 'native_turn_id': native_turn_id}),
+                cwd=root, env=environment,
+                capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as error:
+            raise EgregoreRuntimeError('packet Runtime validation timed out') from error
+        if worker.returncode:
+            raise EgregoreRuntimeError('packet Runtime validation failed')
+        try:
+            result = json.loads(worker.stdout)
+            if not isinstance(result, dict):
+                raise ValueError('expected a result object')
+            if 'error' in result:
+                raise EgregoreRuntimeError(str(result['error']))
+            if not isinstance(result.get('rendered'), str):
+                raise ValueError('expected rendered evidence')
+            return result['rendered']
+        except (ValueError, TypeError) as error:
+            # Never include worker stdout in a failure: it may contain evidence.
+            raise EgregoreRuntimeError('packet Runtime returned an invalid delivery') from error
+    runtime = local_runtime(root, push_remote=False)
+    actor = runtime.resolve_actor(session_id=session_id, harness=harness)
+    return consume(root, identifier, runtime, actor, session_id=session_id, native_turn_id=native_turn_id)
 
 
 def _result_hook(args):
     """Native PostToolUse adapter; stdin and stdout use the host hook contract."""
-    from .private_result import allowed_root, consume, receipts_from_tool
+    from .private_result import allowed_root, receipts_from_tool
+    delivered=[]
     try:
         payload=json.load(sys.stdin)
         if payload.get('tool_name')!='Bash':
@@ -197,20 +578,25 @@ def _result_hook(args):
         for receipt in receipts_from_tool(payload):
             root=allowed_root(_root(),receipt['root'])
             session=str(payload.get('session_id') or _session_id(root))
-            runtime=local_runtime(root,push_remote=False)
-            actor=runtime.resolve_actor(session_id=session,harness=args.harness)
-            results.append(consume(root,receipt['id'],runtime,actor,session_id=session,
-                                   native_turn_id=payload.get('turn_id') or payload.get('prompt_id')))
+            results.append(_consume_private_result(root,receipt['id'],session_id=session,harness=args.harness,
+                native_turn_id=payload.get('turn_id') or payload.get('prompt_id')))
+            delivered.append((root,receipt['id']))
         if not results:
             return 0
         context='EGREGORE_RETRIEVAL_CONTEXT_V1\nAuthorized Runtime evidence for this invocation. Do not reproduce ranking traces.\n'+'\n'.join(results)+'\nEND_EGREGORE_RETRIEVAL_CONTEXT_V1'
     except (OSError,ValueError,TypeError,KeyError,EgregoreRuntimeError) as error:
         context=f'Runtime private result could not be attached: {error}. Do not treat it as received evidence.'
+        delivered=[]  # nothing in this tool call reached the agent
     print(json.dumps({'hookSpecificOutput':{'hookEventName':'PostToolUse','additionalContext':context}}))
+    for root,receipt in delivered:
+        record_notice(root,'delivered',args.harness,payload.get('session_id'))
+        _mind_delivered(root,args.harness,payload,receipt)
     return 0
 
 
 def _session_id(root: Path) -> str:
+    if member := (member_cli.current() if member_cli is not None else None):
+        return member.session_id
     if pinned := _episode_session.get():
         return pinned
     configured = os.environ.get("EGREGORE_SESSION_ID", "").strip()
@@ -293,11 +679,83 @@ def _actor_contract_marker_path(
     session there and rewritten by each new one, so keying on it alone made
     parallel sessions re-attach the full contract on every prompt."""
 
+    return _session_state_path(root, "actor-contract", harness, session, ".sent")
+
+
+def _session_state_path(root: Path, kind: str, harness: str, session: str | None, suffix: str) -> Path:
     session = re.sub(r"[^A-Za-z0-9_.-]", "-", session or _session_id(root))[:120]
-    return (
-        root / ".egregore" / "runtime" / "observe"
-        / f"actor-contract-{harness}-{session}.sent"
+    return root / ".egregore" / "runtime" / "observe" / f"{kind}-{harness}-{session}{suffix}"
+
+
+def _situated_hints_enabled(root: Path) -> bool:
+    """Off switch: ``egregore.json`` → ``knowledge.situated_hints: false``."""
+    try:
+        config = json.loads((root / "egregore.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    knowledge = config.get("knowledge") if isinstance(config, dict) else None
+    return not (isinstance(knowledge, dict) and knowledge.get("situated_hints") is False)
+
+
+def _working_paths(root: Path) -> list[str]:
+    """Paths changed in this workspace: tracked edits plus untracked files."""
+    paths: list[str] = []
+    # NUL-delimited so Git does not quote non-ASCII names ("caf\303\251.md").
+    for args in (("diff", "--name-only", "-z", "HEAD"), ("ls-files", "-z", "--others", "--exclude-standard")):
+        try:
+            result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            paths.extend(name for name in result.stdout.split("\0") if name)
+    return list(dict.fromkeys(paths))[:500]
+
+
+def _sweep_situated_state(directory: Path, max_age_days: int = 7) -> None:
+    """Drop per-session offer records older than a week; a new session starts one."""
+    cutoff = time.time() - max_age_days * 86400
+    try:
+        for stale in directory.glob("situated-*.json"):
+            try:
+                if stale.stat().st_mtime < cutoff:
+                    stale.unlink()
+            except OSError:
+                continue
+    except OSError:
+        return
+
+
+def _situated_hint(runtime, root: Path, harness: str, session: str | None, prompt: str) -> str:
+    """At most one offer line per prompt, each pattern at most once per session.
+
+    An offer, never a gate: the working changes and the prompt are matched
+    against pattern situations; nothing is retrieved for the model.
+    """
+    memory = root / "memory"
+    if not (memory / "knowledge" / "patterns").is_dir() or not _situated_hints_enabled(root):
+        return ""
+    from .knowledge import CanonicalKnowledgeService, situated_hint_line
+    state = _session_state_path(root, "situated", harness, session, ".json")
+    try:
+        offered = set(json.loads(state.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        offered = set()
+        _sweep_situated_state(state.parent)
+    found = CanonicalKnowledgeService(runtime, memory).situated(
+        _actor(runtime, root, harness), paths=_working_paths(root), text=prompt,
+        limit=len(offered) + 3, count_instances=False,
     )
+    for hit in found["patterns"]:
+        line = situated_hint_line(hit["title"], hit["canonical_path"])
+        if hit["id"] in offered or not line:
+            continue
+        try:
+            state.parent.mkdir(parents=True, exist_ok=True)
+            state.write_text(json.dumps(sorted(offered | {hit["id"]})), encoding="utf-8")
+        except OSError:
+            return ""  # without the record the same offer would repeat every prompt
+        return line
+    return ""
 
 
 def _receipt_requests(receipt) -> dict:
@@ -511,11 +969,12 @@ def _query(args: argparse.Namespace) -> int:
 
 
 def _query_in_episode(args: argparse.Namespace, root: Path) -> int:
-    runtime = local_runtime(root, push_remote=False)
+    runtime = _runtime(root, push_remote=False)
     actor = _actor(runtime, root, args.harness)
     request = _request(
         task=args.task, org_id=actor.profile.org_id, actor_id=actor.actor.actor_id,
-        lex=identity_aware_lexical_formulations(root, actor, args.task, tuple(args.lex)),
+        lex=identity_aware_lexical_formulations(root, actor, args.task, tuple(args.lex),
+                                                decision=runtime.authorize(actor, Permission.READ)),
         vec=tuple(args.vec), mode=args.mode, limit=args.limit,
         temporal_scope=getattr(args, 'temporal_scope', None),
         recent_days=getattr(args, 'recent_days', None),
@@ -535,6 +994,7 @@ def _query_in_episode(args: argparse.Namespace, root: Path) -> int:
                 private=True,harness=args.harness)
             return 0 if attached else 2  # Claude's attachment carries its operation error.
         print(response['error'], file=sys.stderr)
+        _mind_notice(root, response, '', args.harness)
         return 2
     context = _restore_context(response['result']['context'])
     entry = _observe_entry(context)
@@ -585,35 +1045,41 @@ def _actor_context_block(
             if value and value.strip() and value.strip().casefold() != actor.display_name.casefold()
         )
     ) or "none"
+    # Prompt context is a read surface: only profiles this actor may read name anyone.
+    readable = runtime.authorize(actor_context, Permission.READ)
     member_names = "; ".join(
         f"{', '.join(member.aliases)} → {member.display_name}"
         if member.aliases
         else member.display_name
-        for member in organization_member_presentations(root, actor_context)
+        for member in organization_member_presentations(root, actor_context, decision=readable)
     ) or "unavailable"
     search_command = 'bash bin/search.sh find "<query>" --kind <kind>'
     if harness == "claude":
         search_command += " --context-packet"
     if not full:
+        # Rides on every later prompt, so every line here costs once per turn.
         return "\n".join(
             (
                 "EGREGORE_ACTOR_CONTEXT_V1",
-                "Reminder — the full contract was attached earlier in this session.",
-                RECALL_WORKFLOW_GUIDANCE,
+                "Reminder: the full contract was attached earlier in this session; if it is no longer "
+                "in your context, read `.claude/context/retrieval-investigation.md` once.",
                 f"Actor: {actor.display_name} · Actor ID: {actor.actor_id} · "
                 f"Organization ID: {actor_context.profile.org_id} · Runtime root: {root}",
+                "`me` and `myself` mean this actor; never infer identity from OS, Git, or GitHub names.",
                 _RECALL_ONLY_SCOPE,
+                RECALL_WORKFLOW_GUIDANCE,
                 "When a prompt needs that recall and no EGREGORE_ORG_CONTEXT_V1 block is "
                 f"attached, choose the operation kind and use `{search_command}`; exact latest/oldest/open "
                 "handoff questions use `bash bin/search.sh handoffs …` instead.",
-                'Reuse evidence; batch source reads with search.sh open path-a path-b. '
-                'Runtime retains evidence and enforces the prompt budget and date boundary.',
-                "`me` and `myself` mean this Actor ID and display name; never infer identity "
-                "from the OS user, Git, or GitHub names.",
                 "END_EGREGORE_ACTOR_CONTEXT_V1",
             )
         )
-    return "\n".join(
+    packet_note = (
+        "On Claude, `--context-packet` keeps the internal evidence trace out of the user "
+        "transcript and attaches it through PostToolUse. Keep that flag on model-led "
+        "searches; never repeat the attached ranking trace in the answer."
+    ) if harness == "claude" else None
+    return "\n".join(line for line in
         (
             "EGREGORE_ACTOR_CONTEXT_V1",
             "Resolved automatically by EgregoreRuntime before the ritual.",
@@ -638,25 +1104,18 @@ def _actor_context_block(
             "work, a prior handoff, or continuation of earlier work and no "
             "EGREGORE_ORG_CONTEXT_V1 block is attached, choose the operation kind and use "
             f"`{search_command}`. ",
-            INVESTIGATION_GUIDANCE,
-            "On Claude, `--context-packet` keeps the internal evidence trace out of the user "
-            "transcript and attaches it through PostToolUse. Keep that flag on model-led "
-            "searches; never repeat the attached ranking trace in the answer.",
-            "Exact lifecycle questions route differently: recognize them from meaning, not "
-            "fixed phrases. When the user asks for the latest/newest/oldest handoff addressed "
-            "to or sent by a specific person (including `me`), or open/unresolved handoffs, "
-            "run the typed deterministic lookup `bash bin/search.sh handoffs "
-            "[--mine|--sent|--addressed-to X|--sent-by X] [--status open] "
-            "[--order newest|oldest] [--limit N] [--open]` instead of a semantic query — one "
-            "memory-form retrieval beat, then answer from its result. Topical or synthesis "
-            "questions about handoffs (`the handoff about privacy`) remain semantic "
-            "`search.sh find` recall.",
+            investigation_guidance(harness),
+            packet_note,
+            "Recognize exact lifecycle questions from meaning: the latest/newest/oldest handoff "
+            "addressed to or sent by someone (including `me`), or open/unresolved handoffs, use "
+            "`bash bin/search.sh handoffs` with [--mine|--sent|--addressed-to X|--sent-by X] "
+            "[--status open] [--order newest|oldest] [--limit N] [--open], never a semantic "
+            "query. Topical handoff questions (`the handoff about privacy`) stay `search.sh find` recall.",
             "Do not substitute Activity, Dashboard, Project, Git inspection, optional hosted indexes, or raw "
             "memory scans for that recall. A named request to display a status card is an "
             "explicit status workflow; a question asking for an explained synthesis of "
             "organizational work is Runtime/QMD recall. Do not query optional hosted indexes unless the user "
-            "explicitly requests relationship "
-            "or optional hosted index status.",
+            "explicitly requests relationship or optional hosted index status.",
             "For every identity-bearing workflow, `me`, `myself`, `from me`, "
             "and `to myself` mean this Actor ID and display name. Use the "
             "display name for presentation and the Actor ID for ownership, "
@@ -664,7 +1123,7 @@ def _actor_context_block(
             "respondent fields. Never infer identity from the OS user, Git, "
             "GitHub, a branch name, or prose aliases.",
             "END_EGREGORE_ACTOR_CONTEXT_V1",
-        )
+        ) if line is not None
     )
 
 
@@ -691,13 +1150,16 @@ def identity_aware_lexical_formulations(
     actor: object,
     task: str,
     formulations: tuple[str, ...],
+    *,
+    decision: PolicyDecision,
 ) -> tuple[str, ...]:
     """Bind the active actor and expand explicitly named organization members.
 
     This keeps cold BM25 retrieval equivalent to stable identity resolution:
     a chosen display name, provider handle, and legacy local alias all refer to
     one member. First-person references use the active actor; the directory is
-    never added wholesale. Semantic identity binding happens at request construction.
+    never added wholesale, and only profiles ``decision`` lets the reader see
+    add terms. Semantic identity binding happens at request construction.
     """
 
     def normalized(value: str) -> str:
@@ -710,7 +1172,7 @@ def identity_aware_lexical_formulations(
     task_tokens = f" {normalized(task)} "
     expanded = list(actor_lexical_formulations(actor, task, formulations))
     seen = {value.strip().casefold() for value in expanded if value.strip()}
-    for member in organization_member_presentations(root, actor):
+    for member in organization_member_presentations(root, actor, decision=decision):
         references = (member.display_name, *member.aliases)
         if not any(
             reference_normalized
@@ -727,7 +1189,95 @@ def identity_aware_lexical_formulations(
     return tuple(expanded)
 
 
+def _member_prompt_hook(args):
+    """Trusted Durable hook: member identity only, no operator startup surfaces."""
+    member = (member_cli.current() if member_cli is not None else None)
+    raw = sys.stdin.read(262145)
+    if len(raw) > 262144:
+        raise MemberAuthorityError()
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        raise MemberAuthorityError() from None
+    if (not isinstance(payload, dict) or payload.get("session_id") != member.native_session
+            or not isinstance(payload.get("prompt", payload.get("user_prompt", "")), str)):
+        raise MemberAuthorityError()
+    prompt = payload.get("prompt", payload.get("user_prompt", "")).strip()
+    runtime = member.runtime(member.root)
+    actor = runtime.resolve_actor(session_id=member.session_id, harness="durable")
+    if not runtime.authorize(actor, Permission.READ).allowed:
+        raise MemberAuthorityError()
+    binding = episode_binding.begin(
+        member.root, actor, harness="durable", session_id=member.session_id,
+        native_turn_id=payload.get("turn_id") or payload.get("prompt_id"), question=prompt,
+    )
+    context = "\n".join((
+        episode_binding.context_line(binding),
+        "EGREGORE_ACTOR_CONTEXT_V1",
+        f"Actor ID: {actor.actor.actor_id}",
+        f"Actor display name: {actor.actor.display_name}",
+        f"Organization ID: {actor.profile.org_id}",
+        "`me` and `myself` mean this verified member, never the host operator.",
+        "Organizational retrieval status: NOT_PERFORMED.",
+        _RECALL_ONLY_SCOPE,
+        'Use the supplied memory tools: `bash bin/search.sh find "<query>" --kind <kind>`, '
+        '`bash bin/search.sh open memory/path.md`, or `bash bin/search.sh handoffs --mine`.',
+        "The host supplies member authority to those tools. Status and identity context do not grant access.",
+        INVESTIGATION_GUIDANCE,
+        "END_EGREGORE_ACTOR_CONTEXT_V1",
+    ))
+    # Verification is current at delivery, not only before writing the binding.
+    if not runtime.authorize(actor, Permission.READ).allowed:
+        raise MemberAuthorityError()
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit", "additionalContext": context,
+    }}, separators=(",", ":")))
+    return 0
+
+
+def _member_ready(args):
+    member = (member_cli.current() if member_cli is not None else None)
+    if member is None:
+        raise MemberAuthorityError()
+    runtime = member.runtime(member.root)
+    actor = runtime.resolve_actor(session_id=member.session_id, harness="durable")
+    if not runtime.retrieval_health().available:
+        raise MemberAuthorityError()
+    if not all(runtime.authorize(actor, operation).allowed
+               for operation in (Permission.DISCOVER, Permission.READ)):
+        raise MemberAuthorityError()
+    print(json.dumps({
+        "schema": "egregore.member-ready/v1",
+        "accountId": actor.account.account_id,
+        "orgId": actor.profile.org_id,
+        "actorId": actor.actor.actor_id,
+        "membershipId": actor.membership.membership_id,
+        "verifiedAt": int(time.time() * 1000),
+    }, separators=(",", ":")))
+    return 0
+
+
+def _bind_native_session(root: Path, harness: str, session) -> None:
+    """Codex starts before its thread exists, so its first prompt maps it.
+
+    bin/session-id.sh binds the thread to the Egregore session id it resolves
+    now and keeps an existing map, so commits made in this thread keep their
+    own Egregore-Session trailer after a later session start elsewhere.
+    """
+    script = Path(root) / 'bin' / 'session-id.sh'
+    if not isinstance(session, str) or not session or not script.is_file():
+        return
+    try:
+        subprocess.run(['bash', str(script), 'bind', harness, session, '--root', str(root)],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=2, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass  # a missing map falls back to the shared file; never cost the prompt
+
+
 def _prompt_hook(args: argparse.Namespace) -> int:
+    if (member_cli.current() if member_cli is not None else None):
+        return _member_prompt_hook(args)
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, OSError):
@@ -735,7 +1285,12 @@ def _prompt_hook(args: argparse.Namespace) -> int:
     if not isinstance(payload, dict):
         return 0
     prompt = str(payload.get("prompt") or payload.get("user_prompt") or "").strip()
-    root = _prompt_root(payload, _root())
+    launch = _root()
+    root = _prompt_root(payload, launch)
+    if args.harness == 'codex':
+        _bind_native_session(launch, 'codex', payload.get('session_id'))
+    record_notice(launch, 'asked', args.harness, payload.get('session_id'))
+    _mind_asked(launch, args.harness, payload)  # the root the hook runs in (§3.3), never one the prompt names
     try:
         native_session = str(payload.get('session_id') or '').strip()
         if native_session:
@@ -783,11 +1338,17 @@ def _prompt_hook_in_episode(args, payload, prompt, root):
                 marker.write_text(datetime.now(UTC).isoformat(), encoding="utf-8")
             except OSError:
                 pass
+        try:
+            hint = _situated_hint(runtime, root, args.harness, hook_session, prompt)
+        except Exception:  # an offer only; a failure never costs the prompt its context
+            hint = ""
+        if hint:
+            additional_context += "\n" + hint
     except Exception as exc:  # Hooks are advisory and must never block a prompt.
         additional_context = (
             f"Actor context is unavailable ({type(exc).__name__}). "
             "Do not guess actor identity. Organizational retrieval has not run.\n"
-            + INVESTIGATION_GUIDANCE
+            + investigation_guidance(args.harness)
         )
     if _prompt_binding.get():
         additional_context = episode_binding.context_line(_prompt_binding.get()) + '\n' + additional_context
@@ -812,58 +1373,10 @@ def _admin_status(args: argparse.Namespace) -> int:
         actor = _actor(runtime, root, args.harness)
         result["display_name"] = actor.actor.display_name
         result["actor_id"] = actor.actor.actor_id
-        gate = runtime.admin_gate
-        result["admin"] = bool(gate is not None and gate.actor_is_admin(actor))
+        result["admin"] = is_admin(runtime.authorize(actor, Permission.READ))
     except Exception:
         result = {"admin": False, "display_name": None, "actor_id": None}
     print(json.dumps(result, sort_keys=True))
-    return 0
-
-
-def _access_status(args: argparse.Namespace) -> int:
-    """One authorized snapshot of identity, membership, and capabilities.
-
-    The Runtime authorization backend is the source of truth: every value is
-    a real authorize() decision, never derived independently by a UI. Any
-    failure reports status "attention" and nothing else — no partial claims.
-    """
-
-    root = _root()
-    try:
-        runtime = local_runtime(root, push_remote=False)
-        actor = _actor(runtime, root, args.harness)
-        gate = runtime.admin_gate
-
-        def allowed(*permissions: Permission) -> bool:
-            return all(
-                runtime.authorize(actor, permission).allowed
-                for permission in permissions
-            )
-
-        read_decision = runtime.authorize(actor, Permission.READ)
-        membership = actor.membership
-        out = {
-            "status": "ok",
-            "display_name": actor.actor.display_name,
-            "actor_id": actor.actor.actor_id,
-            "org_name": actor.profile.name,
-            "org_id": actor.profile.org_id,
-            "membership_status": membership.status if membership else "unknown",
-            "roles": sorted(membership.roles) if membership else [],
-            "admin": bool(gate is not None and gate.actor_is_admin(actor)),
-            "capabilities": {
-                "read": allowed(Permission.READ),
-                "create": allowed(Permission.WRITE),
-                "update": allowed(Permission.WRITE),
-                "publish": allowed(Permission.SHARE),
-                "notify": allowed(Permission.SHARE, Permission.EXECUTE),
-                "org_settings": allowed(Permission.ADMINISTER),
-            },
-            "shared_memory_scope": sorted(read_decision.scopes),
-        }
-    except Exception:
-        out = {"status": "attention"}
-    print(json.dumps(out, sort_keys=True))
     return 0
 
 
@@ -878,7 +1391,7 @@ def _handoffs(args: argparse.Namespace) -> int:
     from .handoff_lookup import HandoffLookupService
 
     root = _root()
-    runtime = local_runtime(root, push_remote=False)
+    runtime = _runtime(root, push_remote=False)
     actor = _actor(runtime, root, args.harness)
     service = HandoffLookupService(runtime, root)
     started = time.monotonic()
@@ -893,57 +1406,62 @@ def _handoffs(args: argparse.Namespace) -> int:
     lookup_ms = round((time.monotonic() - started) * 1000)
     if args.timing:
         print(f"lookup: {lookup_ms}ms", file=sys.stderr)
+    from . import held
+    from .policy import allows
+    decision, memory = runtime.authorize(actor, Permission.READ), service.memory_root
+    records = [record for record in records  # the lookup's rows, decided again where they are printed
+               if allows(decision, "memory/" + record.canonical_path.removeprefix("memory/"), root=memory)]
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "records": [asdict(record) for record in records],
-                    "lookup_ms": lookup_ms,
-                },
-                sort_keys=True,
-            )
-        )
-        return 0
-    if not records:
-        print("no matching handoff exists for that filter")
-        return 0
+        return held.emit(decision, {"records": [asdict(record) for record in records], "lookup_ms": lookup_ms},
+                         root=memory, render=lambda shown: json.dumps(shown, sort_keys=True))
+    lines = []
     for index, record in enumerate(records, start=1):
         day = record.occurred_at.split("T")[0]
-        print(f"{index}. {day} · from {record.sender} · to {record.recipient} · {record.status} · {record.topic}")
-        if record.claim:
-            print(f"   claim: {record.claim}")
-        if record.ask:
-            print(f"   ask: {record.ask}")
-        print(f"   source: {record.canonical_path}")
+        lines.append(f"{index}. {day} · from {record.sender} · to {record.recipient} · {record.status} · {record.topic}")
+        lines += [f"   claim: {record.claim}"] * bool(record.claim) + [f"   ask: {record.ask}"] * bool(record.ask)
+        lines.append(f"   source: {record.canonical_path}")
     if args.open and records:
-        content = runtime.open_source(actor, records[0].canonical_path)
-        print()
-        print(content)
-    return 0
+        lines += ["", runtime.open_source(actor, records[0].canonical_path)]
+    return held.emit(decision, "\n".join(lines) or "no matching handoff exists for that filter", root=memory, render=str)
 
 
 def _status(args: argparse.Namespace) -> int:
-    health = local_runtime(_root(), push_remote=False).retrieval_health()
-    if args.json:
-        print(json.dumps(health.to_dict(), indent=2))
-    else:
-        print(f"adapter: {health.adapter} {health.adapter_version}")
-        print(f"index spec: {health.index_spec_version}")
-        print(f"index revision: {health.index_revision}")
-        print(f"source revision: {health.source_revision}")
-        print(f"embedding: {health.embedding_state}")
-        print(f"readiness: {health.runtime_state}")
-        print(f"bm25 ready: {'yes' if health.bm25_ready else 'no'}")
-        print(f"semantic ready: {'yes' if health.semantic_ready else 'no'}")
-        print(f"semantic build: {health.semantic_source_revision or 'none'}")
-        print(f"worker pid: {health.runtime_pid or 'none'}")
-        print(f"endpoint: {health.runtime_endpoint or 'none'}")
-        print(f"index: {health.index_path or 'unknown'}")
-        print(f"collection: {health.collection or 'unknown'}")
-        print(f"available: {'yes' if health.available else 'no'}")
-        for warning in health.warnings:
-            print(f"warning: {warning}")
-    return 0 if health.available else 1
+    from dataclasses import replace
+    from . import held
+    root = _root()
+    runtime = local_runtime(root, push_remote=False)
+    health = runtime.retrieval_health()
+    try:
+        actor = _actor(runtime, root, "shell")
+    except Exception:  # noqa: BLE001 - no identity: health still prints, its warnings (which can name memory) counted
+        actor = None
+        health = replace(health, warnings=(f"{len(health.warnings)} warnings withheld: identity is unavailable",)
+                         if health.warnings else ())
+    value = health.to_dict() if args.json else "\n".join((
+        f"adapter: {health.adapter} {health.adapter_version}",
+        f"index spec: {health.index_spec_version}",
+        f"index revision: {health.index_revision}",
+        f"source revision: {health.source_revision}",
+        f"embedding: {health.embedding_state}",
+        f"readiness: {health.runtime_state}",
+        f"bm25 ready: {'yes' if health.bm25_ready else 'no'}",
+        f"semantic ready: {'yes' if health.semantic_ready else 'no'}",
+        f"semantic build: {health.semantic_source_revision or 'none'}",
+        f"worker pid: {health.runtime_pid or 'none'}",
+        f"endpoint: {health.runtime_endpoint or 'none'}",
+        f"index: {health.index_path or 'unknown'}",
+        f"collection: {health.collection or 'unknown'}",
+        f"available: {'yes' if health.available else 'no'}",
+        *(f"warning: {warning}" for warning in health.warnings)))
+    render = (lambda shown: json.dumps(shown, indent=2)) if args.json else str  # JSON packaged field by field
+    shown = held.emit_for(runtime, actor, value, render=render) if actor else _content_free(render(value))
+    return shown or (0 if health.available else 1)
+
+
+def _content_free(text: str) -> int:
+    """Health with every warning replaced by a count: no memory text to package."""
+    print(text)
+    return 0
 
 
 _RUNTIME_CANDIDATE_VERSION = re.compile(
@@ -1052,7 +1570,7 @@ def _upgrade(args: argparse.Namespace) -> int:
     if action == "status":
         state = upgrade_module.describe(store.load())
         state["active_version"] = _active_runtime_version(root, store)
-        state["instance_hash"] = upgrade_module.instance_key(root)
+        state["instance_hash"] = installation_key(root)
         # A live apply journal means a previous candidate application died
         # mid-transaction; the next activate recovers deterministically.
         state["interrupted_apply"] = store.load_apply_journal() is not None
@@ -1101,7 +1619,7 @@ def _upgrade(args: argparse.Namespace) -> int:
         state = upgrade_module.new_state(
             instance_path=root,
             org_id=org_id,
-            instance_hash=upgrade_module.instance_key(root),
+            instance_hash=installation_key(root),
             candidate_version=version,
             active_version=_active_runtime_version(root, store),
             candidate_source=str(tarball),
@@ -1279,6 +1797,7 @@ def _open(args: argparse.Namespace) -> int:
                 private=True,harness=args.harness)
             return 0 if attached else 2  # Claude's attachment carries its operation error.
         print(response['error'],file=sys.stderr)
+        _mind_notice(root, response, '', args.harness)
         return 2
     sources = response['result'].get('sources', [response['result']])
     parts = []
@@ -1384,7 +1903,12 @@ def _session_env(args):
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="egregore-runtime")
+    if member_cli is not None:
+        member_cli.add_arguments(parser)
     commands = parser.add_subparsers(dest="command", required=True)
+    if member_cli is not None:
+        member_ready = commands.add_parser("member-ready", help=argparse.SUPPRESS)
+        member_ready.set_defaults(handler=_member_ready)
 
     session_env = commands.add_parser('session-env', help=argparse.SUPPRESS)
     session_env.add_argument('--harness', choices=['claude'], required=True)
@@ -1469,12 +1993,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     handoffs.set_defaults(handler=_handoffs)
 
-    access_status = commands.add_parser("access-status")
-    access_status.add_argument(
-        "--harness", default=os.environ.get("EGREGORE_RUNTIME", "shell")
-    )
-    access_status.set_defaults(handler=_access_status)
-
     readiness = commands.add_parser("readiness")
     readiness.add_argument("--json", action="store_true")
     readiness.add_argument("--plain", action="store_true")
@@ -1518,14 +2036,21 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument('--request-id',help='stable id for retrying this exact invocation')
     source.add_argument('--private-result',action='store_true',help=argparse.SUPPRESS)
     source.set_defaults(handler=_open)
+    for name in _COMMAND_MODULES:
+        module = optional_module(name)
+        if module is not None:
+            module.register(commands)
     return parser
 
 
-def main() -> int:
-    args = _parser().parse_args()
+def main(argv=None) -> int:
+    args = _parser().parse_args(argv)
     if getattr(args, "limit", None) is not None and args.limit < 1:
         raise ValueError("retrieval limit must be positive")
-    return args.handler(args)
+    with (member_cli.invocation(args, _root(), allowed_commands={
+        "prompt-hook", "find", "open", "handoffs", "member-ready",
+    }) if member_cli is not None else nullcontext()):
+        return args.handler(args)
 
 
 if __name__ == "__main__":

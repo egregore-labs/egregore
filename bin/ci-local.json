@@ -1,0 +1,333 @@
+{
+  "version": 1,
+  "about": [
+    "What CI runs for each planner group, as bin/ci-local.py runs it on a developer machine.",
+    "Jobs run in this order. Each CI step is listed under steps (run here), setup",
+    "(installs and probes this machine is expected to have done) or left_to_ci",
+    "(what only CI can run, as the report names it). A step's run is the CI command,",
+    "or the CI command's lines in order without its installs. needs names what",
+    "must be installed for a step to run here: a path, pip:NAME, or pip:-r FILE;",
+    "when something is missing the step is left to CI. tests/test_ci_workflow.py",
+    "keeps this table and .github/workflows/ci.yml in step."
+  ],
+  "jobs": {
+    "multiplayer-poc-tests": {
+      "group": "multiplayer",
+      "env": {
+        "TZ": "UTC",
+        "LC_ALL": "C.UTF-8",
+        "NODE_ENV": "",
+        "NODE_OPTIONS": ""
+      },
+      "steps": {
+        "Test multiplayer Thread protocol, governance, lifecycle, and dependency continuation": "node --test threads/experiments/multiplayer-poc/test/*.test.mjs"
+      }
+    },
+    "artifacts-tests": {
+      "group": "artifacts",
+      "env": {
+        "TZ": "UTC",
+        "LC_ALL": "C.UTF-8",
+        "NODE_ENV": "",
+        "NODE_OPTIONS": ""
+      },
+      "setup": [
+        "Install egregore-artifacts deps",
+        "Require renderer dependencies for shell coverage"
+      ],
+      "steps": {
+        "Re-vendor design-system (build dist + copy into the package)": {
+          "run": "npm run vendor",
+          "cwd": "packages/egregore-artifacts",
+          "needs": [
+            "packages/egregore-artifacts/node_modules"
+          ]
+        },
+        "Test egregore-artifacts": {
+          "run": "npm test",
+          "cwd": "packages/egregore-artifacts",
+          "needs": [
+            "packages/egregore-artifacts/node_modules"
+          ]
+        },
+        "Test design-system": {
+          "run": "npm test",
+          "cwd": "packages/design-system"
+        },
+        "Test deterministic view rendering with installed dependencies": {
+          "run": "bash bin/tests/test-view-render.sh",
+          "needs": [
+            "packages/egregore-artifacts/node_modules/react",
+            "packages/egregore-artifacts/node_modules/react-dom"
+          ]
+        },
+        "Test artifact dark mode with installed dependencies": {
+          "run": "bash bin/tests/test-artifact-dark-mode.sh",
+          "needs": [
+            "packages/egregore-artifacts/node_modules/react",
+            "packages/egregore-artifacts/node_modules/react-dom"
+          ]
+        }
+      }
+    },
+    "shell-contracts": {
+      "group": "shell_contracts",
+      "setup": [
+        "Install shell suite dependencies"
+      ],
+      "steps": {
+        "Syntax check — all shell scripts": "FAIL=0\nfor f in bin/*.sh bin/lib/*.sh; do\n  if ! bash -n \"$f\" 2>/dev/null; then\n    echo \"FAIL: $f\"\n    FAIL=1\n  fi\ndone\nexit $FAIL",
+        "No hardcoded internal references": "# Check bin/ scripts for Curve-Labs references (should be parameterized)\nFOUND=$(grep -rn \"Curve-Labs\\|curve-labs\\|curvelabs\" bin/ --include='*.sh' | grep -v 'test-' || true)\nif [ -n \"$FOUND\" ]; then\n  echo \"Found internal references in bin/ scripts:\"\n  echo \"$FOUND\"\n  exit 1\nfi",
+        "No unsafe .env sourcing": "FOUND=$(grep -rn 'source.*\\.env' bin/ --include='*.sh' | grep -v 'test-' | grep -v '#' || true)\nif [ -n \"$FOUND\" ]; then\n  echo \"Found unsafe 'source .env':\"\n  echo \"$FOUND\"\n  exit 1\nfi",
+        "No echo or printf piped into grep -q under pipefail": "FOUND=$(grep -l pipefail bin/tests/*.sh tests/*.sh | xargs grep -nE '(printf .%s[^ ]*|echo) .\\$[^ ]* \\| *grep -[A-Za-z]*q' | grep -vE '^[^:]+:[0-9]+: *#' || true)\nif [ -n \"$FOUND\" ]; then\n  echo \"Found a pipe into grep -q under pipefail (use grep -q PATTERN <<< \\\"\\$VAR\\\"):\"\n  echo \"$FOUND\"\n  exit 1\nfi",
+        "No manual JSON construction": "FOUND=$(grep -rn '\"{\\\\\\\"' bin/ --include='*.sh' | grep -v 'test-' || true)\nif [ -n \"$FOUND\" ]; then\n  echo \"Found manual JSON construction (use jq -n):\"\n  echo \"$FOUND\"\n  exit 1\nfi",
+        "Local mode graceful degradation": "FAIL=0\nfor script in bin/graph.sh bin/notify.sh bin/graph-op.sh; do\n  if [ -f \"$script\" ] && ! grep -q '\"local\"' \"$script\" 2>/dev/null; then\n    echo \"FAIL: $script missing local mode handling\"\n    FAIL=1\n  fi\ndone\nexit $FAIL",
+        "Commands have valid structure": "FAIL=0\nCOMMAND_FILES=$(find .claude/commands -name '*.md' -type f 2>/dev/null || true)\nif [ -z \"$COMMAND_FILES\" ]; then\n  COMMAND_FILES=$(find .claude/skills -name 'SKILL.md' -type f 2>/dev/null || true)\nfi\nif [ -z \"$COMMAND_FILES\" ]; then\n  echo \"FAIL: no Claude command or skill files found\"\n  exit 1\nfi\nwhile IFS= read -r cmd; do\n  [ -n \"$cmd\" ] || continue\n  # Every command should have content (not empty)\n  LINES=$(wc -l < \"$cmd\" | tr -d ' ')\n  if [ \"$LINES\" -lt 3 ]; then\n    echo \"FAIL: $cmd is too short ($LINES lines)\"\n    FAIL=1\n  fi\ndone <<< \"$COMMAND_FILES\"\necho \"Checked $(echo \"$COMMAND_FILES\" | wc -l | tr -d ' ') command/skill files\"\nexit $FAIL",
+        "Harvest question palette contract": "bash tests/test-harvest-question-palette.sh",
+        "Convention parity (commit/PR format paragraphs)": "bash tests/test-convention-parity.sh",
+        "Run worktree tests": "bash tests/test-worktree.sh",
+        "Verify traced memory recall passes through untraced and nests spans when traced": "bash tests/test-search-traced.sh",
+        "Verify session records and personal controls": "bash tests/test-session-record.sh",
+        "Verify session record greeting": "bash tests/test-greeting-records.sh",
+        "Test greeting in Bash and Zsh": "bash bin/test-greeting.sh",
+        "Test pending-turn greeting projection": "bash tests/test-greeting-pending-turns.sh",
+        "Test runtime mode status": "bash bin/tests/test-runtime-mode-status.sh",
+        "Test boundary consent guidance": "bash bin/tests/test-boundary-check-askuserquestion.sh",
+        "Test instance isolation topologies": "bash bin/tests/test-boundary-instance-isolation.sh",
+        "Test retrieval output hygiene": "bash bin/tests/test-retrieval-output-hygiene.sh",
+        "Test runtime launch path": "bash bin/tests/test-runtime-launch-path.sh",
+        "Test card output hygiene": "bash bin/tests/test-card-output-hygiene.sh",
+        "Test prose rule contract": "bash bin/tests/test-prose-check.sh",
+        "Test brown palette guidance ratchet": "bash bin/tests/test-palette-guidance.sh",
+        "Test side-stripe ratchet": "bash bin/tests/test-side-stripes.sh",
+        "Activity and handoff lifecycle": "bash tests/test-handoff-activity-lifecycle.sh",
+        "CI suite ownership": "bash tests/test-ci-test-ownership.sh",
+        "CI shard partition": "bash tests/test-suite-shard.sh"
+      }
+    },
+    "shell-contracts-loom": {
+      "group": "shell_contracts",
+      "setup": [
+        "Install shell suite dependencies"
+      ],
+      "steps": {
+        "Run agent protocol smoke test": "bash tests/test-agent-protocol.sh",
+        "Loom routing": "bash bin/tests/test-loom.sh",
+        "Loom truth": "bash bin/tests/test-loom-truth.sh",
+        "Loom evals": "bash bin/tests/test-loom-evals.sh",
+        "Loom learner": "bash bin/tests/test-loom-learner.sh",
+        "Loom replay": "bash bin/tests/test-loom-replay.sh",
+        "Loom scenarios": "bash bin/tests/test-loom-scenarios.sh",
+        "Loom dashboard": "bash bin/tests/test-loom-dashboard.sh",
+        "Minion workflow": "bash bin/tests/test-minion-workflow.sh"
+      }
+    },
+    "emissary-tests": {
+      "group": "api_emissary",
+      "steps": {
+        "Run Emissary package tests": {
+          "run": "npm test",
+          "cwd": "packages/egregore-emissary"
+        }
+      }
+    },
+    "respond-proof": {
+      "group": "api_emissary",
+      "left_to_ci": {
+        "Prove the checked-out candidate": "the exact-commit respond-loop proof"
+      }
+    },
+    "mcp-resource-server": {
+      "group": "api_emissary",
+      "steps": {
+        "Install, test, and audit MCP": {
+          "run": "npm test\nnpm audit --omit=dev --audit-level=high",
+          "cwd": "packages/egregore-handoff/mcp",
+          "needs": [
+            "packages/egregore-handoff/mcp/node_modules"
+          ]
+        }
+      },
+      "left_to_ci": {
+        "Build and health-check the MCP image": "the MCP Docker image"
+      }
+    },
+    "static-contracts": {
+      "group": "api_emissary",
+      "setup": [
+        "Install shared handoff and validator dependencies",
+        "Install dependencies"
+      ],
+      "steps": {
+        "Verify generated JSON Schema is current": {
+          "run": "npm --prefix packages/egregore-handoff run gen-schema\ngit diff --exit-code -- docs/specs/handoff-v1.schema.json",
+          "needs": [
+            "packages/egregore-handoff/node_modules"
+          ]
+        },
+        "Run shared handoff tests": {
+          "run": "npm test\nnpm audit --omit=dev --audit-level=high",
+          "cwd": "packages/egregore-handoff",
+          "needs": [
+            "packages/egregore-handoff/node_modules"
+          ]
+        },
+        "Run schema and publication contracts": {
+          "run": "python -m pytest -q \\\n  tests/test_emissary_publish_idempotency_migration.py \\\n  tests/test_platform_migration.py \\\n  tests/test_validator_drift.py \\\n  tests/test_validate_handoff_v1.py \\\n  tests/test_publication_audit.py \\\n  tests/test_release_safety.py",
+          "needs": [
+            "pip:-r api/requirements.txt",
+            "pip:pytest",
+            "pip:pytest-asyncio",
+            "pip:pytest-html",
+            "pip:pytest-metadata",
+            "pip:pglast"
+          ]
+        }
+      }
+    },
+    "site-contract": {
+      "group": "api_site",
+      "steps": {
+        "Verify site dependency and route contracts": {
+          "run": "npm --prefix site audit --omit=dev --audit-level=high\npython -m pytest -q tests/test_emissary_site_routing.py",
+          "needs": [
+            "site/node_modules",
+            "pip:pytest"
+          ]
+        },
+        "Build the production site": {
+          "run": "npm --prefix site run build",
+          "needs": [
+            "site/node_modules"
+          ]
+        }
+      }
+    },
+    "test": {
+      "group": "api_core",
+      "setup": [
+        "Install dependencies",
+        "Install egregore-artifacts deps"
+      ],
+      "steps": {
+        "Run corpus map and MCP input contracts": {
+          "run": "python -m pytest -q tests/test_corpus_map.py tests/test_mcp_users.py",
+          "needs": [
+            "pip:-r .github/ci-api-requirements.txt"
+          ]
+        },
+        "Run API tests": {
+          "run": "node bin/capability-distribution.mjs validate\nnode api/scripts/build-connect-runtime-pack.mjs --check\ncd tests\npython -m pytest -v --tb=short -m \"api and not postgres\"",
+          "needs": [
+            "pip:-r .github/ci-api-requirements.txt",
+            "packages/egregore-artifacts/node_modules"
+          ]
+        },
+        "Run OAuth and web-auth tests": {
+          "run": "python -m pytest -q \\\n  api/test_oauth.py \\\n  api/test_web_auth.py \\\n  api/test_account_linking_routes.py \\\n  tests/test_account_linking_service.py \\\n  tests/test_member_authority_api.py \\\n  tests/test_member_authority_service.py \\\n  tests/test_member_authority_contract.py \\\n  tests/test_spirit_onboarding_api.py \\\n  tests/test_security_logging.py \\\n  api/test_html_safety.py \\\n  api/test_design_render.py \\\n  api/test_connect_runtime.py \\\n  api/test_teams.py \\\n  api/test_slack.py",
+          "needs": [
+            "pip:-r .github/ci-api-requirements.txt",
+            "packages/egregore-artifacts/node_modules"
+          ]
+        }
+      }
+    },
+    "api-image": {
+      "group": "api_image",
+      "left_to_ci": "the API Docker image"
+    },
+    "postgres-proofs": {
+      "group": "api_postgres",
+      "left_to_ci": "PostgreSQL 16 proofs (need the database service)"
+    },
+    "runtime-parity": {
+      "group": "runtime",
+      "setup": [
+        "Require Runtime fixture capabilities"
+      ],
+      "steps": {
+        "Verify bundle freshness, skill parity, and dependency completeness": {
+          "run": "npm run test:runtime",
+          "cwd": "packages/create-egregore"
+        },
+        "Verify packaged runtime portability": {
+          "run": "npm run test:package",
+          "cwd": "packages/create-egregore"
+        }
+      }
+    },
+    "runtime-contracts-python": {
+      "group": "runtime",
+      "setup": [
+        "Install focused test dependencies"
+      ],
+      "steps": {
+        "Verify strict Runtime skill migration contracts": "bash tests/test-runtime-skill-migration.sh",
+        "Verify Runtime observations, authorization, and canonical recovery": {
+          "run": "python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q tests/test_runtime_telemetry.py tests/test_operation_observations.py tests/test_runtime_observe.py tests/test_runtime_writeback.py tests/test_runtime_upgrade.py tests/test_artifact_renderer_install.py tests/test_runtime_source_open.py tests/test_runtime_artifacts.py tests/test_runtime_threads_scrolls.py tests/test_runtime_batch_recovery.py tests/test_runtime_research_ingest.py tests/test_runtime_contracts.py tests/test_harness_observe.py tests/test_runtime_continuity.py tests/test_runtime_taste.py tests/test_mind_notice.py tests/test_installation.py tests/test_otel_span.py tests/test_session_trail.py tests/test_record_outcomes.py tests/test_checkpoint_cost.py tests/test_runtime_documents.py tests/test_document_lines.py tests/test_document_modes.py tests/test_document_parity.py",
+          "needs": [
+            "pip:pytest",
+            "pip:PyYAML"
+          ]
+        },
+        "Verify retrieval readiness and save preflight without live services": {
+          "run": "python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q tests/test_qmd_retriever.py tests/test_cache_readiness_cli.py tests/test_save_preflight.py",
+          "needs": [
+            "pip:pytest",
+            "pip:PyYAML"
+          ]
+        },
+        "Verify immutable evaluation fixtures and no-model execution": {
+          "run": "python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q tests/test_eg_eval*.py tests/test_frozen_export.py",
+          "needs": [
+            "pip:pytest",
+            "pip:PyYAML"
+          ]
+        },
+        "Verify advisory triage and immutable issue drafts without live services": {
+          "run": "python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q tests/test_issue_triage.py tests/test_issue_triage_service.py tests/test_issue_triage_eval.py tests/test_github_issues.py tests/test_issue_reporting.py tests/test_issue_duplicates.py tests/test_issue_duplicate_lookup.py tests/test_issue_readiness.py",
+          "needs": [
+            "pip:pytest",
+            "pip:PyYAML"
+          ]
+        },
+        "Verify CI selection, proof reuse, and cost accounting offline": {
+          "run": "python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q tests/test_ci_plan.py tests/test_ci_workflow.py tests/test_ci_domains.py tests/test_ci_reuse.py tests/test_ci_usage.py tests/test_nightly_ci.py tests/test_release_ci.py tests/test_ci_flake_rerun.py",
+          "needs": [
+            "pip:pytest",
+            "pip:PyYAML"
+          ]
+        }
+      }
+    },
+    "runtime-contracts-spirit": {
+      "group": "runtime",
+      "left_to_ci": "Spirit, Pi and Durable contracts (need the Linux bubblewrap sandbox)"
+    },
+    "shellcheck": {
+      "group": "shellcheck",
+      "left_to_ci": "the ShellCheck action"
+    },
+    "mind-fast": {
+      "group": "mind",
+      "setup": [
+        "Fetch the exporter before compositions (compose.py PARITY_BASE)"
+      ],
+      "steps": {
+        "Run synthetic Python, pure JS and worker contracts": "python3 experiments/egregore-mind/mind/tests/gate.py --profile fast --out \"$RUNNER_TEMP/mind-fast\""
+      }
+    },
+    "baseline": {
+      "group": "baseline",
+      "setup": [
+        "Install baseline suite dependencies",
+        "Resolve the base"
+      ],
+      "steps": {
+        "Compare shell suites": {
+          "baseline": "--head-first --timeout 300"
+        }
+      }
+    }
+  }
+}

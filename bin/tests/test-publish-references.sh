@@ -189,11 +189,13 @@ FAKE="$WORK/fake-bin"
 UPLOADS="$WORK/uploads"
 mkdir -p "$INST/bin/lib" "$INST/memory/handoffs/2026-09" "$INST/memory/knowledge/decisions" \
   "$INST/memory/artifacts" "$FAKE" "$UPLOADS"
-for helper in publish-artifact.sh publish-references.sh artifact-register.sh node-run.sh; do
+for helper in publish-artifact.sh publish-references.sh artifact-register.sh node-run.sh artifact-renderer.sh; do
   cp "$SCRIPT_DIR/bin/$helper" "$INST/bin/$helper"
 done
 cp "$SCRIPT_DIR"/bin/lib/*.sh "$INST/bin/lib/"
-printf '{"slug":"acme","mode":"connected","api_url":"https://api.example.invalid"}\n' > "$INST/egregore.json"
+ln -s "$SCRIPT_DIR/egregore_runtime" "$INST/egregore_runtime"  # publish decides its sources through the Runtime
+printf '{"slug":"acme","org_name":"Acme","mode":"connected","api_url":"https://api.example.invalid"}\n' > "$INST/egregore.json"
+printf '{"github_username":"ada","display_name":"Ada"}\n' > "$INST/.egregore-state.json"
 
 PARENT_REL="memory/handoffs/2026-09/24-parent.md"
 REF_DECISION="memory/knowledge/decisions/24-foo.md"
@@ -230,7 +232,8 @@ done
 [ -n "$id" ] || id="page-$$"
 cp "$file" "$UPLOADS/$id.html"
 printf '%s\n' "$id" >> "$UPLOADS/log"
-printf '{"status":"published","id":"%s","url":"https://egregore.xyz/view/acme/%s"}\n' "$id" "$id"
+printf '{"status":"published","id":"%s","url":"https://egregore.xyz/view/acme/%s","visible_to":%s}\n' \
+  "$id" "$id" "${FAKE_AUDIENCE:-\"public\"}"
 EOF
 # Fake renderer: links each `memory/…` mention the way lib/markdown.js does.
 cat > "$FAKE/egregore-artifacts" <<'EOF'
@@ -333,6 +336,25 @@ if [ "$(hosted_link "$SECOND_PAGE" m | tr '\n' ' ')" = "$EXPECTED" ]; then
   pass "the republished parent links to the same hosted ids"
 else
   fail "republished parent links changed" "$(cat "$SECOND_PAGE" 2>/dev/null)"
+fi
+
+# --- 5. A page that opens by identity publishes none of its references ---
+# The server answers with the page's stored list, so a republish that keeps
+# the list (no --visible-to) counts too: its references would open to anyone.
+echo ""
+echo "5. A page shared by identity leaves the files it links to unpublished"
+: > "$UPLOADS/log"
+RESTRICTED_ERR="$WORK/restricted.err"
+(
+  cd "$INST" && PATH="$FAKE:$PATH" UPLOADS="$UPLOADS" EGREGORE_API_KEY=ek_acme_test \
+    EGREGORE_USE_PUBLISHED=1 GIT_CEILING_DIRECTORIES="$WORK" FAKE_AUDIENCE='[{"handle":"jing"}]' \
+    bash bin/publish-artifact.sh handoff "$PARENT_REL" --title Parent >/dev/null 2>"$RESTRICTED_ERR"
+)
+sleep 2
+if [ "$(wc -l < "$UPLOADS/log" | tr -d ' ')" = "1" ] && grep -q "were not published" "$RESTRICTED_ERR"; then
+  pass "only the restricted parent was uploaded, and the publisher is told why"
+else
+  fail "a restricted parent published its references" "$(cat "$UPLOADS/log" "$RESTRICTED_ERR" 2>/dev/null)"
 fi
 
 # --- Summary ---

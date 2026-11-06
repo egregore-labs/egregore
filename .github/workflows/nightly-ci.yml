@@ -1,11 +1,14 @@
 name: Nightly CI dispatcher
 
 # GitHub schedules run from the default branch. Keep this small control plane
-# on main; the full suite and its source checkout come from current develop.
+# on main; the full suite and its source checkout come from the integration
+# branch (egregore.json base_branch, default develop). Only the framework
+# source (upstream_url "none") runs it: team Egregores and the public template
+# receive framework code that already passed here, so they skip with a note.
 # ci.yml must have registered through at least one run before activation.
-# Scheduled runs may reuse a full success for the exact develop SHA for seven
-# days. Expiry refreshes mutable dependencies at least weekly; manual runs force
-# fresh full CI. Missing or ambiguous evidence always requests a fresh run.
+# Scheduled runs may reuse a full success for the exact integration SHA for
+# seven days. Expiry refreshes mutable dependencies at least weekly; manual runs
+# force fresh full CI. Missing or ambiguous evidence always requests a fresh run.
 on:
   schedule:
     - cron: '23 2 * * *'
@@ -24,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Verify recent full CI or request a fresh run on develop
+      - name: Verify recent full CI or request a fresh run on the integration branch
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -34,16 +37,45 @@ jobs:
             exit 1
           fi
           python3 - <<'PY'
+          import base64
           import json
           import os
           import re
           import subprocess
+          import sys
           import time
           from datetime import datetime, timedelta, timezone
+          from urllib.parse import quote
 
           repo = os.environ["GITHUB_REPOSITORY"]
           prefix = f"repos/{repo}"
           deadline = time.monotonic() + 45
+
+          def summarize(text):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write(text)
+
+          # The commit this schedule runs from decides the repository's role.
+          response = subprocess.run(
+              ["gh", "api", "--method", "GET", f"{prefix}/contents/egregore.json?ref={os.environ['GITHUB_SHA']}"],
+              capture_output=True, timeout=10,
+          )
+          if response.returncode and b"HTTP 404" in response.stderr:
+              config = {}  # the public template carries no instance config
+          else:
+              response.check_returncode()
+              config = json.loads(base64.b64decode(json.loads(response.stdout)["content"]))
+          if config.get("upstream_url") != "none":
+              summarize(
+                  "### Nightly full CI skipped\n"
+                  "This repository receives the Egregore framework from upstream "
+                  "(egregore.json upstream_url is not \"none\"). The framework source runs "
+                  "the nightly suite; pull requests here still run their own checks.\n"
+              )
+              sys.exit(0)
+          branch = config.get("base_branch", "develop")
+          if not (isinstance(branch, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", branch)):
+              sys.exit("egregore.json base_branch must be a branch name.")
 
           def require(condition):
               if not condition:
@@ -60,14 +92,14 @@ jobs:
               return json.loads(response.stdout)
 
           def recent_full_success():
-              head = get(f"{prefix}/git/ref/heads/develop")["object"]
+              head = get(f"{prefix}/git/ref/heads/{branch}")["object"]
               sha = head["sha"]
               require(head["type"] == "commit" and re.fullmatch(r"[0-9a-f]{40}", sha))
               workflow = get(f"{prefix}/actions/workflows/ci.yml")
               require(type(workflow["id"]) is int and workflow["id"] > 0
                       and workflow["path"] == ".github/workflows/ci.yml")
               listing = get(f"{prefix}/actions/workflows/ci.yml/runs"
-                            f"?event=workflow_dispatch&branch=develop&head_sha={sha}&per_page=20")
+                            f"?branch={quote(branch, safe='')}&head_sha={sha}&per_page=20")
               runs = listing["workflow_runs"]
               require(isinstance(runs, list) and 0 < len(runs) <= 20
                       and type(listing["total_count"]) is int and listing["total_count"] == len(runs)
@@ -79,8 +111,8 @@ jobs:
               repo_id = int(os.environ["GITHUB_REPOSITORY_ID"])
               require(run["repository"]["id"] == repo_id == run["head_repository"]["id"]
                       and run["workflow_id"] == workflow["id"] and run["path"] == workflow["path"]
-                      and run["head_sha"] == sha and run["head_branch"] == "develop"
-                      and run["event"] == "workflow_dispatch"
+                      and run["head_sha"] == sha and run["head_branch"] == branch
+                      and run["event"] in ("workflow_dispatch", "push")
                       and run["status"] == "completed" and run["conclusion"] == "success"
                       and type(run["run_attempt"]) is int and run["run_attempt"] > 0)
               age = datetime.now(timezone.utc) - datetime.fromisoformat(run["run_started_at"].replace("Z", "+00:00"))
@@ -101,7 +133,7 @@ jobs:
                   "id", "run_attempt", "workflow_id", "path", "head_sha", "head_branch",
                   "event", "status", "conclusion", "run_started_at", "updated_at"))
                   and current["repository"]["id"] == repo_id == current["head_repository"]["id"])
-              require(get(f"{prefix}/git/ref/heads/develop")["object"] == head)
+              require(get(f"{prefix}/git/ref/heads/{branch}")["object"] == head)
               return sha, run, age
 
           proof = None
@@ -113,7 +145,7 @@ jobs:
           if proof:
               sha, run, age = proof
               summary = (
-                  "### Prior full develop CI verified\n"
+                  f"### Prior full `{branch}` CI verified\n"
                   f"Skipped duplicate dispatch for `{sha}`: [run {run['id']}, attempt {run['run_attempt']}]"
                   f"(https://github.com/{repo}/actions/runs/{run['id']}) passed full CI "
                   f"{age.total_seconds() / 3600:.1f} hours ago.\n"
@@ -121,12 +153,11 @@ jobs:
               )
           else:
               subprocess.run(["gh", "api", "--method", "POST", f"{prefix}/actions/workflows/ci.yml/dispatches",
-                              "-f", "ref=develop", "-f", "inputs[mode]=full"], check=True, timeout=30)
+                              "-f", f"ref={branch}", "-f", "inputs[mode]=full"], check=True, timeout=30)
               summary = (
-                  "### Full develop CI requested\n"
-                  "The CI workflow will resolve develop at dispatch time and run every test owner.\n"
+                  f"### Full `{branch}` CI requested\n"
+                  f"The CI workflow will resolve `{branch}` at dispatch time and run every test owner.\n"
                   "This receipt confirms dispatch only; inspect the separate CI run for its result.\n"
               )
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-              output.write(summary)
+          summarize(summary)
           PY

@@ -195,7 +195,7 @@ fi
 
 **Framework paths synced:** `bin/`, `egregore_runtime/`, `.claude/commands/`, `.claude/skills/`, `.claude/hooks/`, `.claude/context/`, `.claude/agents/`, `.pi/`, `.prime/`, `loom/`, `CLAUDE.md`, `skills/`
 **Regenerated:** `AGENTS.md` + `.codex/spec-manifest.json` via `bin/codex-render-spec.mjs`, `.pi/APPEND_SYSTEM.md` + `.pi/spec-manifest.json` via `bin/pi-render-spec.mjs`, `.prime/agent/APPEND_SYSTEM.md` + `.prime/agent/spec-manifest.json` via `bin/prime-render-spec.mjs`, then generated Codex adapter skills via `bin/codex-sync-skills.sh`, so all derived harnesses stay aligned with `CLAUDE.md` and the canonical skills.
-**Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json`
+**Never touched:** `egregore.json`, `.env`, `memory/`, `.egregore-state.json`, `.mcp.json` — except one migration: `bin/post-update.sh` rewrites a Connected `api_url` that still names the hosted API's retired October 2026 origin, and stages only that change for the update commit. It replaces only the address text, byte for byte, and keeps the file's mode and line endings. It leaves the file as is, with a warning, when it is a link, missing, unreadable, set aside by a sparse checkout, or Local in either the committed or the working copy, or when its `api_url` is escaped or repeated.
 **Org-owned skills:** names in `egregore.json` → `owned_skills[]` are restored from the org's committed state after the overlay (`bin/restore-owned-skills.sh`) — upstream never overwrites them; collisions are reported instead.
 
 ## Step 3: Post-update migrations

@@ -8,10 +8,11 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 from uuid import uuid4
 
 from ..contracts import ActorContext
+from ..hosted_api import credential_request, hosted_api_url
 from ..invitations import InvitationTransportResult
 from ..sync import LocalGitSyncTransport
 
@@ -46,7 +47,8 @@ def _request_json(
     timeout: float = 15,
 ) -> tuple[int, dict[str, Any]]:
     body = None if payload is None else json.dumps(payload).encode("utf-8")
-    request = Request(url, method=method, headers=dict(headers), data=body)
+    # The token or key in these headers never follows a redirect.
+    request = credential_request(url, method=method, headers=headers, data=body)
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed/configured APIs
             raw = response.read().decode("utf-8")
@@ -192,7 +194,7 @@ class ShellInvitationTransport:
         )
 
     def _connected(self, actor: ActorContext, username: str) -> InvitationTransportResult:
-        api_url = str(self.config.get("api_url") or "").rstrip("/")
+        api_url = hosted_api_url(self.config.get("api_url") or "")
         api_key = _secret(self.root, "EGREGORE_API_KEY")
         github_token = _secret(self.root, "GITHUB_TOKEN")
         if not api_url or not api_key or not github_token:

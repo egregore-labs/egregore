@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 from uuid import uuid4
 
+from . import held
 from .contracts import RetrievalHit, RetrieverHealth
 from .errors import AuthorizationDenied
 from .questions import CanonicalQuestionService, QuestionLifecycleError
@@ -90,8 +91,9 @@ def _receipt(receipt, canonical_path: str) -> dict[str, object]:
 
 def _create(args: argparse.Namespace) -> int:
     runtime, memory = _runtime(push_remote=not args.no_push)
+    actor = _actor(runtime)
     receipt = CanonicalQuestionService(runtime, memory).create(
-        _actor(runtime),
+        actor,
         sender_alias=args.sender,
         recipient_alias=args.recipient,
         recipient_actor_id=args.recipient_actor_id,
@@ -103,33 +105,35 @@ def _create(args: argparse.Namespace) -> int:
         question_intent=args.question_intent,
         context_mode=args.context_mode,
     )
-    print(json.dumps(_receipt(receipt, receipt.artifact.canonical_path), ensure_ascii=False))
-    return 0 if receipt.status.value in {"accepted", "partial"} else 1
+    return held.emit_for(runtime, actor, _receipt(receipt, receipt.artifact.canonical_path)) or (
+        0 if receipt.status.value in {"accepted", "partial"} else 1)
 
 
 def _pending(args: argparse.Namespace) -> int:
     runtime, memory = _runtime(push_remote=False)
-    rows = CanonicalQuestionService(runtime, memory).pending(_actor(runtime), limit=args.limit)
-    print(json.dumps({"questions": [row.to_dict() for row in rows]}, ensure_ascii=False))
-    return 0
+    actor = _actor(runtime)
+    rows = CanonicalQuestionService(runtime, memory).pending(actor, limit=args.limit)
+    return held.emit_for(runtime, actor, {"questions": [row.to_dict() for row in rows]},
+                         each=("questions", "canonical_path"))
 
 
 def _open(args: argparse.Namespace) -> int:
     runtime, memory = _runtime(push_remote=False)
-    print(CanonicalQuestionService(runtime, memory).open(_actor(runtime), args.path), end="")
-    return 0
+    actor = _actor(runtime)
+    return held.emit_for(runtime, actor, CanonicalQuestionService(runtime, memory).open(actor, args.path),
+                         paths=("memory/" + args.path.removeprefix("memory/"),), render=str, end="")
 
 
 def _answer(args: argparse.Namespace) -> int:
     runtime, memory = _runtime(push_remote=not args.no_push)
+    actor = _actor(runtime)
     receipt = CanonicalQuestionService(runtime, memory).answer(
-        _actor(runtime),
+        actor,
         canonical_path=args.path,
         answer=args.body,
         responder_alias=args.responder,
     )
-    print(json.dumps(_receipt(receipt, receipt.artifact.canonical_path), ensure_ascii=False))
-    return 0
+    return held.emit_for(runtime, actor, _receipt(receipt, receipt.artifact.canonical_path))
 
 
 def _parser() -> argparse.ArgumentParser:

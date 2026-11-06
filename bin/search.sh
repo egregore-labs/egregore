@@ -10,6 +10,7 @@
 #   bash bin/search.sh start
 #   bash bin/search.sh stop
 #   bash bin/search.sh open memory/path/to/source.md
+#   bash bin/search.sh mind publish
 #
 # The shell owns the established user-facing output. Retrieval infrastructure
 # is isolated behind the Egregore Retriever adapter.
@@ -47,6 +48,28 @@ _elapsed_s() {
   awk -v ms="$(( $(_now_ms) - $1 ))" 'BEGIN { printf "%.1f", ms / 1000 }'
 }
 
+# Run a Runtime operation as an OpenTelemetry span when the harness traces
+# this process (it exports TRACEPARENT). Untraced calls take the plain path.
+# Usage: _traced <span-name> <original-args-array-name> <command...>
+_traced() {
+  local name="$1" argv_ref="$2[@]"; shift 2
+  if [ -z "${TRACEPARENT:-}" ]; then "$@"; return $?; fi
+  local start out rc results degraded stale
+  start=$(_now_ms)
+  out=$(mktemp "${TMPDIR:-/tmp}/egregore-span.XXXXXX")
+  "$@" | tee "$out"
+  rc=${PIPESTATUS[0]}
+  results=$(grep -cE '^[0-9]+\. ' "$out" 2>/dev/null)
+  degraded=false; grep -q 'Search degraded' "$out" 2>/dev/null && degraded=true
+  stale=$(sed -nE 's/^Note: ([0-9]+) eligible document.*/\1/p' "$out" 2>/dev/null | head -1)
+  rm -f "$out"
+  ( python3 "$SCRIPT_DIR/bin/lib/otel_span.py" --name "$name" --start-ms "$start" \
+      --end-ms "$(_now_ms)" --rc "$rc" --attr "egregore.search.results=${results:-0}" \
+      --attr "egregore.search.degraded=$degraded" --attr "egregore.search.stale_documents=${stale:-}" \
+      --argv -- ${!argv_ref+"${!argv_ref}"} >/dev/null 2>&1 & ) 2>/dev/null
+  return "$rc"
+}
+
 _result_paths() {
   local line path canonical_prefix
   canonical_prefix="**file:** \`memory/"
@@ -71,7 +94,7 @@ _result_paths() {
 # calls there. The dormant graph configuration is preserved untouched for
 # rollback only.
 _upgrade_instance_key() {
-  # Mirrors egregore_runtime.upgrade.instance_key: stable org identity
+  # Mirrors egregore_runtime.installation.installation_key: stable org identity
   # composed with the main installation path. No org_id → fail closed.
   local org main gitdir
   org=$(jq -r '.org_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
@@ -371,11 +394,12 @@ case "${1:-}" in
     for arg in "$@"; do
       if [ "$arg" = --context-packet ]; then FIND_ARGS+=(--private-result); else FIND_ARGS+=("$arg"); fi
     done
-    _runtime find "${FIND_ARGS[@]}"
+    _traced egregore.search.find FIND_ARGS _runtime find "${FIND_ARGS[@]}"
     ;;
   investigate) shift; cmd_investigate "$@" ;;
   start) shift; _runtime start "$@" ;;
   stop) shift; _runtime stop "$@" ;;
+  mind) shift; _runtime mind "$@" ;;
   open)
     shift
     OPEN_PACKET=0; OPEN_PATHS=()
@@ -393,19 +417,21 @@ case "${1:-}" in
     [ "$OPEN_PACKET" = 1 ] && OPEN_BINDING+=(--private-result)
     # Older Bash treats an empty array as unset under nounset. Optional flags
     # must expand to zero arguments without requiring an explicit episode ID.
-    _runtime open ${OPEN_PATHS[@]+"${OPEN_PATHS[@]}"} ${OPEN_BINDING[@]+"${OPEN_BINDING[@]}"}
+    OPEN_ARGS=(${OPEN_PATHS[@]+"${OPEN_PATHS[@]}"} ${OPEN_BINDING[@]+"${OPEN_BINDING[@]}"})
+    _traced egregore.search.open OPEN_ARGS _runtime open ${OPEN_ARGS[@]+"${OPEN_ARGS[@]}"}
     ;;
   help|-h|--help)
     cat <<'USAGE'
-usage: bash bin/search.sh {find|investigate|query|handoffs|reindex|install|start|stop|status|readiness|open}
+usage: bash bin/search.sh {find|investigate|query|handoffs|reindex|install|start|stop|status|readiness|open|mind}
   find "terms" [--kind keyword|semantic|hybrid|filename|literal|dates] [--recent-days N]
   open memory/path.md [memory/other.md ...] [--offset N] [--length N]
   handoffs --mine --status open --order newest --limit 1 --open
   handoffs [--addressed-to NAME|--sent|--sent-by NAME] [--status STATUS] [--order newest|oldest] [--limit N] [--json]
+  mind publish
 USAGE
     ;;
   *)
-    echo "usage: bash bin/search.sh {find|investigate|query|handoffs|reindex|install|start|stop|status|readiness|open}" >&2
+    echo "usage: bash bin/search.sh {find|investigate|query|handoffs|reindex|install|start|stop|status|readiness|open|mind}" >&2
     exit 1
     ;;
 esac

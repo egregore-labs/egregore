@@ -35,7 +35,9 @@ run_publish() {
   rm -rf "$sb"
   mkdir -p "$sb/bin/lib"
   cp "$ROOT/bin/publish-artifact.sh" "$sb/bin/publish-artifact.sh"
-  cp "$ROOT/bin/lib/permissions.sh" "$sb/bin/lib/permissions.sh"
+  mkdir -p "$sb/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$sb/bin/lib/config.sh"
+  ln -s "$ROOT/egregore_runtime" "$sb/egregore_runtime"  # publish decides its sources through the Runtime
+  printf '%s\n' '{"github_username":"ada"}' > "$sb/.egregore-state.json"
   printf '#!/bin/bash\nexit 0\n' > "$sb/bin/artifact-register.sh"
   printf '#!/bin/bash\nexit 0\n' > "$sb/bin/publish-references.sh"
   chmod +x "$sb/bin/"*.sh
@@ -66,7 +68,7 @@ run_publish '{"mode":"local","features":{"public_relay":false}}'
 check "public_relay:false makes no network call" "" "$CURL_ARGS"
 check "public_relay:false exits 4" "4" "$RC"
 
-run_publish '{"mode":"local","features":{"public_relay":true}}'
+run_publish '{"slug":"acme","org_name":"Acme","mode":"local","features":{"public_relay":true}}'
 case "$CURL_ARGS" in
   *"/api/artifacts/share"*) ok "public_relay:true uses the share endpoint" ;;
   *) bad "public_relay:true did not reach the share endpoint" ;;
@@ -90,7 +92,7 @@ run_publish '[]'
 check "non-object config fails closed" "" "$CURL_ARGS"
 check "non-object config exits 4" "4" "$RC"
 
-run_publish '{"mode":"connected","api_url":"https://api.example.invalid","features":{"public_relay":false}}' \
+run_publish '{"slug":"acme","org_name":"Acme","mode":"connected","api_url":"https://api.example.invalid","features":{"public_relay":false}}' \
   EGREGORE_API_KEY=test-key
 case "$CURL_ARGS" in
   *"/api/artifacts/publish"*"Authorization: Bearer test-key"*)
@@ -104,7 +106,7 @@ esac
 
 # A server refusal (409 when another org holds the id) exits 6 with the
 # server's reason on stderr, so callers that report stderr can show it.
-CONNECTED='{"mode":"connected","api_url":"https://api.example.invalid"}'
+CONNECTED='{"slug":"acme","org_name":"Acme","mode":"connected","api_url":"https://api.example.invalid"}'
 printf '%s\n' '{"detail":"The artifact id '"'"'board'"'"' is already used by another organization. Publish with a different id."}' \
   > "$TMP/refused.json"
 run_publish "$CONNECTED" EGREGORE_API_KEY=test-key CURL_REPLY_FILE="$TMP/refused.json"
@@ -144,6 +146,7 @@ fi
 SETTINGS="$TMP/settings"
 mkdir -p "$SETTINGS/bin"
 cp "$ROOT/bin/settings.sh" "$SETTINGS/bin/settings.sh"
+mkdir -p "$SETTINGS/bin/lib" && cp "$ROOT/bin/lib/config.sh" "$SETTINGS/bin/lib/config.sh"
 printf '%s\n' '{"org_name":"Acme","slug":"acme"}' > "$SETTINGS/egregore.json"
 check "relay status defaults off" "false" \
   "$(bash "$SETTINGS/bin/settings.sh" relay status --json | jq -r '.public_relay')"

@@ -1,0 +1,8 @@
+{
+  "name": "egregore-managed-artifact-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "egregore-artifacts": "0.30.0"
+  }
+}

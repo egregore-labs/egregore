@@ -38,16 +38,17 @@ check 'planner is a reusable workflow' has 'uses: ./.github/workflows/ci-plan.ym
 check 'baseline waits for its plan' has 'needs: plan'
 check 'selected baseline work runs and planner failure reaches the strict guard' has "if: \${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.baseline == 'true') }}"
 check 'merge queue candidates run' matches '^  merge_group:$'
-if matches '^  push:$'; then
-  fail 'merged commits do not repeat PR checks'
-else pass 'merged commits do not repeat PR checks'; fi
+# Develop as a whole is checked by the nightly full run, not after every merge.
+if matches '^  push:$'; then fail 'merges into develop are checked nightly, not per merge'
+else pass 'merges into develop are checked nightly, not per merge'; fi
+check 'manual runs choose their mode; pull requests run affected checks' has "mode: \${{ inputs.mode || 'affected' }}"
 check 'manual dispatch remains available' matches '^  workflow_dispatch:$'
 if grep -Eq '^[[:space:]]*branches(-ignore)?:' "$scratch/pull-request"; then
   fail 'no branch filter excludes pull requests'
 else pass 'no branch filter excludes pull requests'; fi
 check 'read-only repository permission' matches '^  contents: read$'
 # shellcheck disable=SC2016
-check 'concurrency separates event, candidate, and full mode' has 'group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.mode || '\''affected'\'' }}'
+check 'concurrency separates event, candidate, and full mode' has "group: ci-\${{ github.event_name }}-\${{ github.event.pull_request.number || github.ref }}-\${{ inputs.mode || 'affected' }}"
 check 'superseded runs are cancelled' has 'cancel-in-progress: true'
 check 'baseline job exists' matches '^  baseline:$'
 check 'baseline uses Slim' baseline_has 'runs-on: ubuntu-slim'

@@ -23,10 +23,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .artifacts import split_frontmatter
-from .contracts import ActorContext, Permission
+from .contracts import ActorContext, Permission, PolicyDecision
 from .errors import AuthorizationDenied
 from .identity import organization_member_presentations
-from .policy import scope_allows_path
+from .policy import check
 from .questions import actor_aliases
 
 _CLOSED_STATUSES = frozenset(
@@ -72,13 +72,13 @@ def _occurred_at(fields: Any, path_stem: str) -> str:
     return f"0000-00-00T00:00:00Z:{path_stem}"
 
 
-def _member_terms(root: Path, actor: ActorContext, name: str) -> frozenset[str]:
-    """Stable-identity terms for a NAMED member (addressing resolution)."""
+def _member_terms(root: Path, actor: ActorContext, name: str, decision: PolicyDecision) -> frozenset[str]:
+    """Stable-identity terms for a NAMED member (addressing resolution), from readable profiles."""
 
     needle = name.strip().removeprefix("@").casefold()
     if not needle:
         return frozenset()
-    for member in organization_member_presentations(root, actor):
+    for member in organization_member_presentations(root, actor, decision=decision):
         values = {
             str(member.display_name).casefold(),
             *(str(alias).casefold() for alias in member.aliases),
@@ -113,16 +113,6 @@ class HandoffLookupService:
         decision = self.runtime.authorize(actor, Permission.READ)
         if not decision.allowed:
             raise AuthorizationDenied("; ".join(decision.reasons))
-        scopes = tuple(decision.scopes)
-
-        gate = getattr(self.runtime, "admin_gate", None)
-        admin_visible = True
-        if gate is not None:
-            try:
-                admin_visible = bool(gate.actor_is_admin(actor))
-            except Exception:
-                admin_visible = False
-
         recipient_terms = self._terms(actor, addressed_to)
         sender_terms = self._terms(actor, sent_by)
 
@@ -135,12 +125,11 @@ class HandoffLookupService:
                 continue
             relative = path.relative_to(self.memory_root).as_posix()
             canonical = f"memory/{relative}"
-            if not scope_allows_path(canonical, scopes):
-                continue
-            if not admin_visible and gate is not None and gate.path_is_admin(canonical):
+            verdict = check(decision, canonical, "read", root=self.memory_root)
+            if not verdict.allowed:
                 continue
             try:
-                fields, _ = split_frontmatter(path.read_text(encoding="utf-8"))
+                fields, _ = split_frontmatter(verdict.resolved.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             status = (_scalar(fields, "status") or "active").casefold()
@@ -181,7 +170,7 @@ class HandoffLookupService:
             return None
         if who.strip().casefold() in ("me", "self", actor.actor.actor_id.casefold()):
             return _self_terms(actor)
-        return _member_terms(self.root, actor, who)
+        return _member_terms(self.root, actor, who, self.runtime.authorize(actor, Permission.READ))
 
     @staticmethod
     def _addressed_match(text: str, terms: frozenset[str]) -> bool:

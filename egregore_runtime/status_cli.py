@@ -10,9 +10,11 @@ from pathlib import Path
 import subprocess
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from .contracts import Capability, Permission
+from . import held
+from .hosted_api import RefusedApiAddress, credential_request, hosted_api_url
 from .runtime import local_runtime
 from .status import CanonicalStatusSnapshotService
 
@@ -38,7 +40,10 @@ def _connected_enrichment(root, config, runtime, actor, surface, time_range):
     decision = runtime.authorize(actor, Permission.READ, ("projection:status",))
     if not decision.allowed:
         return {"status": "unavailable", "reason": "authorization_denied"}
-    api_url = str(config.get("api_url") or "").rstrip("/")
+    try:
+        api_url = hosted_api_url(config.get("api_url") or "")
+    except RefusedApiAddress:
+        return {"status": "unavailable", "reason": "refused_address"}
     api_key = os.environ.get("EGREGORE_API_KEY", "")
     if not api_key:
         try:
@@ -58,7 +63,8 @@ def _connected_enrichment(root, config, runtime, actor, surface, time_range):
     query = {"github_username": username}
     if surface == "dashboard":
         query.update({"time_range": time_range, "session_id": actor.session_id})
-    request = Request(
+    # The key never follows a redirect off the control plane.
+    request = credential_request(
         f"{api_url}{endpoint}?{urlencode(query)}",
         headers={"Authorization": f"Bearer {api_key}"},
     )
@@ -89,6 +95,8 @@ def main() -> int:
     payload = CanonicalStatusSnapshotService(runtime, root).build(actor, time_range=args.time_range)
     if args.surface == "dashboard":
         payload["sessions"] = payload["my_sessions"]
+        payload["spirit_records"] = payload["my_spirit_records"]
+        payload["spirit_intents"] = len(payload["spirit_records"])
     branch = subprocess.run(
         ["git", "-C", str(root), "branch", "--show-current"],
         capture_output=True,
@@ -166,8 +174,8 @@ def main() -> int:
         payload["connected_enrichment"] = enrichment
         payload["graph_status"] = enrichment["status"]
         payload["graph_reason"] = enrichment.get("reason")
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-    return 0
+    return held.emit_for(runtime, actor, payload, render=lambda shown: json.dumps(shown, ensure_ascii=False,
+                                                                                  separators=(",", ":")))
 
 
 if __name__ == "__main__":

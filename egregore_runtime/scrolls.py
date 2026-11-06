@@ -28,7 +28,7 @@ from .artifacts import (
 )
 from .contracts import ActorContext, ArtifactRelationship, CanonicalArtifact, Permission, WritebackEvent, WritebackStatus
 from .errors import AuthorizationDenied
-from .policy import scope_allows_path
+from .policy import check, action_for
 from .runtime import EgregoreRuntime
 
 
@@ -253,27 +253,34 @@ class CanonicalScrollService:
     def _path(self, slug: str) -> Path:
         return self.memory_root / "scrolls" / f"{_slug(slug)}.md"
 
-    def _authorize(self, actor: ActorContext, permission: Permission, resource: str, path: str) -> None:
+    def _authorize(self, actor: ActorContext, permission: Permission, resource: str, path: str) -> Path:
         decision = self.runtime.authorize(actor, permission, (resource,))
         if not decision.allowed:
             raise AuthorizationDenied("; ".join(decision.reasons) or f"scroll {permission.value} denied")
-        if permission in {Permission.READ, Permission.WRITE} and not scope_allows_path(path, decision.scopes):
+        verdict = check(decision, path, action_for(permission), root=self.memory_root)
+        if not verdict.allowed:
             raise AuthorizationDenied("scroll path is outside the actor's authorized scope")
+        return verdict.resolved
 
-    def _source_path(self, value: str | Path) -> Path:
+    def _source_path(self, actor: ActorContext, value: str | Path) -> Path:
         path = Path(value)
         if not path.is_absolute():
             path = self.root / path
         resolved = path.resolve()
         if resolved != self.root and self.root not in resolved.parents:
             raise ScrollError("scroll source must remain inside the active Egregore workspace")
+        if resolved.is_relative_to(self.memory_root):  # a source inside memory is a memory read
+            relative = resolved.relative_to(self.memory_root).as_posix()
+            verdict = check(self.runtime.authorize(actor, Permission.READ), f"memory/{relative}", root=self.memory_root)
+            # Read only the path the predicate decided: a spelling it normalizes (a trailing space) names another file.
+            if not verdict.allowed or verdict.resolved != resolved:
+                raise AuthorizationDenied("scroll source is outside the actor's read scope")
         return resolved
 
     def read(self, actor: ActorContext, slug: str) -> ScrollSnapshot:
         normalized = _slug(slug)
         canonical = self.canonical_path(normalized)
-        self._authorize(actor, Permission.READ, f"scroll:{normalized}", canonical)
-        path = self._path(normalized)
+        path = self._authorize(actor, Permission.READ, f"scroll:{normalized}", canonical)
         if not path.is_file():
             raise ScrollError(f"scroll does not exist: {normalized}")
         return parse_scroll_markdown(
@@ -353,7 +360,7 @@ class CanonicalScrollService:
         self._authorize(actor, Permission.WRITE, f"scroll:{normalized}", canonical)
         if self._path(normalized).exists():
             raise ScrollError(f"scroll already exists: {normalized}")
-        html = self._source_path(source_html)
+        html = self._source_path(actor, source_html)
         if not html.is_file():
             raise ScrollError("scroll HTML source does not exist")
         if min(review_after_days, attention_ttl_days) < 1:
@@ -378,8 +385,8 @@ class CanonicalScrollService:
                 actual_path = event_path.resolve().relative_to(self.memory_root)
             except ValueError as exc:
                 raise ScrollError("Scroll creation event escapes canonical memory") from exc
-            self._authorize(actor, Permission.READ, event_document.artifact.artifact_id,
-                            f"memory/{actual_path.as_posix()}")
+            event_path = self._authorize(actor, Permission.READ, event_document.artifact.artifact_id,
+                                         f"memory/{event_document.artifact.canonical_path}")
             recovering = parse_canonical_markdown(
                 event_path.read_text(encoding="utf-8"),
                 canonical_path=event_document.artifact.canonical_path,
@@ -493,12 +500,13 @@ class CanonicalScrollService:
         if directory.is_dir():
             for path in sorted(directory.glob("*.md")):
                 canonical = path.relative_to(self.memory_root).as_posix()
-                if not scope_allows_path(f"memory/{canonical}", decision.scopes):
+                verdict = check(decision, f"memory/{canonical}", "read", root=self.memory_root)
+                if not verdict.allowed:
                     raise AuthorizationDenied(
                         "Scroll event collection is outside the actor's authorized scope"
                     )
                 document = parse_canonical_markdown(
-                    path.read_text(encoding="utf-8"),
+                    verdict.resolved.read_text(encoding="utf-8"),
                     canonical_path=canonical,
                     default_org_id=actor.profile.org_id,
                 )
@@ -591,7 +599,7 @@ class CanonicalScrollService:
                 raise ScrollError("a Scroll version requires its complete rewritten face")
             if source_html is None:
                 raise ScrollError("a Scroll version requires its HTML source path")
-            html = self._source_path(source_html)
+            html = self._source_path(actor, source_html)
             request_face = face_markdown
             request_source = html.relative_to(self.root).as_posix()
         request_digest = self._request_digest(row, request_face, request_source)
@@ -628,7 +636,7 @@ class CanonicalScrollService:
         version_number = current.version
         if kind == "version-published":
             body = face_markdown or body
-            source_path = self._source_path(source_html or current.source_html).relative_to(self.root).as_posix()
+            source_path = self._source_path(actor, source_html or current.source_html).relative_to(self.root).as_posix()
             version_number = current.version + 1
             fields["version"] = version_number
             fields["source_html"] = source_path
@@ -726,7 +734,7 @@ class CanonicalScrollService:
     ) -> ScrollSharePlan:
         current = self.read(actor, slug)
         self._authorize(actor, Permission.SHARE, f"scroll:{current.slug}", self.canonical_path(current.slug))
-        html = self._source_path(html_path or current.source_html)
+        html = self._source_path(actor, html_path or current.source_html)
         if not html.is_file():
             raise ScrollError("Scroll HTML source does not exist")
         now = self.clock().astimezone(UTC)
@@ -798,7 +806,7 @@ class CanonicalScrollService:
         ):
             raise ScrollError("Scroll changed after preview; create and approve a fresh SHARE plan")
         if not recovering:
-            html = self._source_path(plan.html_path)
+            html = self._source_path(actor, plan.html_path)
             if hashlib.sha256(html.read_bytes()).hexdigest() != plan.html_hash:
                 raise ScrollError("Scroll HTML changed after preview; create and approve a fresh SHARE plan")
             url = self.publisher(current, html, plan.description).strip()

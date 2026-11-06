@@ -7,7 +7,7 @@ rewrites or deletes the artifact whose state it projects.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 import hashlib
@@ -31,12 +31,14 @@ from .contracts import (
     ArtifactRelationship,
     CanonicalArtifact,
     Serializable,
+    PolicyDecision,
 )
-from .policy import scope_allows_path
+from .policy import check
 
 
 LIFECYCLE_PLAN_SCHEMA = "egregore-lifecycle-plan/v1"
 LIFECYCLE_EVENT_SCHEMA = "egregore-lifecycle-event/v1"
+EVENTS_PREFIX = "memory/lifecycle/events"
 LIFECYCLE_INDEX_SPEC = "egregore-lifecycle-projection/v1"
 
 
@@ -172,6 +174,14 @@ class _Snapshot:
     transition_evidence: tuple[str, ...] = ()
     transition_automatic: bool = False
     digest: str = ""
+    readable: bool = True  # False: admitted only as a lifecycle event of a visible target
+
+
+def _decision_key(decision: PolicyDecision) -> str:
+    """What admits files to a reader; the snapshot cache holds one reader's rows."""
+    payload = [decision.allowed, decision.audience, decision.scope, list(decision.read_prefixes), decision.holds_epoch,
+               decision.policy_epoch]
+    return hashlib.sha256(json.dumps(payload).encode("utf-8")).hexdigest()
 
 
 def _strings(value: Any) -> tuple[str, ...]:
@@ -317,21 +327,21 @@ class CanonicalLifecycleService:
         self,
         *,
         source_revision: str | None = None,
-        authorized_scopes: Sequence[str] = ("memory",),
+        decision: PolicyDecision,
         allowed_artifact_ids: Sequence[str] = (),
         artifact_types: Sequence[str] = (),
         user: str | Sequence[str] | None = None,
     ) -> LifecyclePlan:
         now = self.clock().astimezone(UTC)
         canonical_revision = source_revision or self._canonical_revision()
-        snapshots, warnings = self._snapshots(canonical_revision)
+        snapshots, hidden_edges, warnings = self._snapshots(canonical_revision, decision)
         allowed = frozenset(allowed_artifact_ids)
         kinds = frozenset(artifact_types)
         visible_primary = [
             row
             for row in snapshots
-            if row.artifact_type != "lifecycle-event"
-            and scope_allows_path(row.canonical_path, authorized_scopes)
+            if row.readable
+            and row.artifact_type != "lifecycle-event"
             and (
                 not allowed
                 or row.artifact_id in allowed
@@ -339,7 +349,8 @@ class CanonicalLifecycleService:
         ]
         visible_ids = {row.artifact_id for row in visible_primary}
         # Derived lifecycle events inherit the target artifact's scope. Their
-        # storage namespace must not require a broader read grant.
+        # storage namespace must not require a broader read grant, but their own
+        # file still passed the predicate's holds in _snapshots.
         visible_events = [
             row
             for row in snapshots
@@ -372,7 +383,7 @@ class CanonicalLifecycleService:
             if row.canonical_path not in visible_paths
             for target in row.supersedes
             if target in visible_ids
-        }
+        } | (hidden_edges & visible_ids)
         cycle_ids = self._supersession_cycles(visible)
 
         requested_users = (user,) if isinstance(user, str) else tuple(user or ())
@@ -442,13 +453,13 @@ class CanonicalLifecycleService:
         paths: Sequence[str],
         *,
         source_revision: str | None,
-        authorized_scopes: Sequence[str],
+        decision: PolicyDecision,
         allowed_artifact_ids: Sequence[str] = (),
     ) -> tuple[Mapping[str, LifecycleRecord], str]:
         requested = {path.replace("\\", "/").strip().lstrip("./") for path in paths}
         plan = self.scan(
             source_revision=source_revision,
-            authorized_scopes=authorized_scopes,
+            decision=decision,
             allowed_artifact_ids=allowed_artifact_ids,
         )
         return (
@@ -702,25 +713,58 @@ class CanonicalLifecycleService:
             visit(artifact_id, artifact_id, ())
         return frozenset(cycles)
 
-    def _snapshots(self, source_revision: str | None) -> tuple[tuple[_Snapshot, ...], tuple[str, ...]]:
-        cached = self._read_cache(source_revision) if source_revision else None
+    def _snapshots(
+        self, source_revision: str | None, decision: PolicyDecision
+    ) -> tuple[tuple[_Snapshot, ...], frozenset[str], tuple[str, ...]]:
+        """Rows the reader is admitted to, hidden supersedes edges, warnings.
+
+        The one predicate decides every file before it is opened, and the file
+        is opened at the path it resolved. A file inside memory that the reader
+        may not read yields only its ``supersedes`` targets, so a visible
+        artifact it replaces turns ambiguous without naming the successor; it is
+        never a row or a warning, and the cache keeps only those targets. The
+        cache is keyed by what admits files to the reader. A lifecycle event outside the
+        reader's prefixes is admitted under the events prefix, holds included,
+        and shows only beside its visible target.
+        """
+        key = _decision_key(decision)
+        events = replace(decision, read_prefixes=(EVENTS_PREFIX,))
+        cached = self._read_cache(source_revision, key) if source_revision else None
         if cached is not None:
-            return cached, ()
+            # A revision can miss an edit (an ignored file gaining a hold): admit every cached row again,
+            # and a row no longer admitted keeps its supersedes edges hidden, as a fresh walk would.
+            admitted, hidden = [], set(cached[1])
+            for row in cached[0]:
+                if check(decision if row.readable else events, row.canonical_path, "read", root=self.memory_root).allowed:
+                    admitted.append(row)
+                else:
+                    hidden.update(row.supersedes)
+            return tuple(admitted), frozenset(hidden), ()
         rows: list[_Snapshot] = []
+        hidden: set[str] = set()
         warnings: list[str] = []
         if not self.memory_root.is_dir():
-            return (), ("canonical memory root is unavailable",)
+            return (), frozenset(), ("canonical memory root is unavailable",)
         for path in sorted(self.memory_root.rglob("*.md")):
             if ".git" in path.parts or path.name == "index.md":
                 continue
             relative = path.relative_to(self.memory_root).as_posix()
             canonical_path = f"memory/{relative}"
+            verdict = check(decision, canonical_path, "read", root=self.memory_root)
+            readable = verdict.allowed
+            if not readable and canonical_path.startswith(EVENTS_PREFIX + "/"):
+                verdict = check(events, canonical_path, "read", root=self.memory_root)
+            if not verdict.allowed:
+                if verdict.reason == "outside-scope" or verdict.reason.startswith("held:"):
+                    hidden.update(self._hidden_edges(path))
+                continue
             try:
-                markdown = path.read_text(encoding="utf-8")
+                markdown = verdict.resolved.read_text(encoding="utf-8")
                 fields, _ = split_frontmatter(markdown)
                 created = _created_at(fields, path)
             except (OSError, ValueError) as exc:
-                warnings.append(f"skipped:{canonical_path}:{type(exc).__name__}")
+                if readable:  # an event admitted only for its target is never named
+                    warnings.append(f"skipped:{canonical_path}:{type(exc).__name__}")
                 continue
             artifact_id = canonical_artifact_id(markdown, canonical_path)
             artifact_type = _artifact_type(fields, relative)
@@ -776,12 +820,31 @@ class CanonicalLifecycleService:
                     transition_evidence=_strings(fields.get("evidence_ids")),
                     transition_automatic=bool(fields.get("automatic", False)),
                     digest=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+                    readable=readable,
                 )
             )
-        result = tuple(rows)
+        primary = {row.artifact_id for row in rows if row.readable and row.artifact_type != "lifecycle-event"}
+        kept: list[_Snapshot] = []
+        for row in rows:
+            if row.readable or (row.artifact_type == "lifecycle-event" and row.target_artifact_id in primary):
+                kept.append(row)
+            else:
+                hidden.update(row.supersedes)
+        # Nothing the reader cannot read stays: no event of an unreadable target, no unreadable id.
+        result = tuple(kept), frozenset(hidden) & primary
         if source_revision:
-            self._write_cache(source_revision, result)
-        return result, tuple(warnings[:20])
+            self._write_cache(source_revision, key, *result)
+        return (*result, tuple(warnings[:20]))
+
+    def _hidden_edges(self, path: Path) -> tuple[str, ...]:
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(self.memory_root) or not resolved.is_file():
+                return ()
+            fields, _ = split_frontmatter(resolved.read_text(encoding="utf-8"))
+        except (OSError, RuntimeError, ValueError):
+            return ()
+        return _strings(fields.get("supersedes"))
 
     def _cache_path(self) -> Path | None:
         return self.state_dir / "projection.json" if self.state_dir else None
@@ -828,7 +891,7 @@ class CanonicalLifecycleService:
             digest.update(b"\0")
         return digest.hexdigest()[:20]
 
-    def _read_cache(self, source_revision: str) -> tuple[_Snapshot, ...] | None:
+    def _read_cache(self, source_revision: str, key: str) -> tuple[tuple[_Snapshot, ...], frozenset[str]] | None:
         path = self._cache_path()
         if path is None or not path.is_file():
             return None
@@ -838,6 +901,7 @@ class CanonicalLifecycleService:
                 payload.get("schema") != LIFECYCLE_PLAN_SCHEMA
                 or payload.get("index_spec") != LIFECYCLE_INDEX_SPEC
                 or payload.get("source_revision") != source_revision
+                or payload.get("decision") != key
             ):
                 return None
             return tuple(
@@ -854,11 +918,11 @@ class CanonicalLifecycleService:
                     }
                 )
                 for item in payload.get("snapshots", ())
-            )
+            ), frozenset(payload.get("hidden", ()))
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return None
 
-    def _write_cache(self, source_revision: str, snapshots: Sequence[_Snapshot]) -> None:
+    def _write_cache(self, source_revision: str, key: str, snapshots: Sequence[_Snapshot], hidden: frozenset[str]) -> None:
         path = self._cache_path()
         if path is None:
             return
@@ -868,6 +932,8 @@ class CanonicalLifecycleService:
             "schema": LIFECYCLE_PLAN_SCHEMA,
             "index_spec": LIFECYCLE_INDEX_SPEC,
             "source_revision": source_revision,
+            "decision": key,
+            "hidden": sorted(hidden),
             "snapshots": [
                 {
                     key: (

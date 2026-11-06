@@ -121,7 +121,7 @@ mkdir -p /tmp
 } > "$_DB_MD" 2>/dev/null
 
 # --- Publish markdown → HTML → hosted URL ---
-# publish-artifact.sh handles HTML generation internally (npx egregore-artifacts)
+# publish-artifact.sh handles HTML generation with the provisioned renderer.
 # then uploads. Don't pre-generate HTML — that causes double-wrapping.
 # https:// URLs are universally cmd+clickable across all terminal emulators.
 #
@@ -233,7 +233,7 @@ else
   if [ -z "$DASHBOARD_URL" ]; then
     _DB_HTML="/tmp/egregore-artifacts/dashboard-${EGREGORE_SESSION_ID}.html"
     mkdir -p /tmp/egregore-artifacts
-    if npx egregore-artifacts@latest document "$_DB_MD" --output "$_DB_HTML" --no-open >/dev/null 2>&1 && [ -f "$_DB_HTML" ]; then
+    if bash "$SCRIPT_DIR/bin/artifact-renderer.sh" document "$_DB_MD" --output "$_DB_HTML" --no-open >/dev/null 2>&1 && [ -f "$_DB_HTML" ]; then
       DASHBOARD_URL="file://${_DB_HTML}"
     fi
   fi

@@ -44,6 +44,8 @@ type egregore_commit >/dev/null 2>&1 || egregore_commit() {
   local gd="$1" m="$3"; shift 3; git -C "$gd" commit -m "$m" "$@"
 }
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   sed -n '2,30p' "$0"
@@ -359,10 +361,13 @@ PID_ARTIFACTS=$!
 
     MEM_OK=0
     for i in 1 2 3; do
-      if git pull --rebase origin main --quiet >/dev/null 2>&1 \
-         && git push origin main --quiet >/dev/null 2>&1; then
-        MEM_OK=1
-        break
+      if git pull --rebase origin main --quiet >/dev/null 2>&1; then
+        if bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch main >/dev/null 2>&1; then
+          MEM_OK=1
+          break
+        else
+          case "$?" in 75) ;; *) break ;; esac
+        fi
       fi
       sleep 1
     done
@@ -402,33 +407,26 @@ PID_MEMORY=$!
     if [ -f "$EMISSARY_CONFIG" ]; then
       EMISSARY_TOKEN=$(jq -r '.auth_token // empty' "$EMISSARY_CONFIG" 2>/dev/null)
     fi
-    EMISSARY_API_URL="${EMISSARY_API_URL:-https://egregore-production-55f2.up.railway.app/api/v1/emissary}"
+    EMISSARY_API_URL="$(_hosted_api_url "${EMISSARY_API_URL:-$EGREGORE_HOSTED_API_ORIGIN/api/v1/emissary}")" || EMISSARY_API_URL=""
 
     # /handoff is an internal team primitive, not an implicit public-emissary
     # composer. Use the emissary route only for an explicit recipient, and make
     # that artifact directed-private. Recipient-less handoffs fall through to
     # the org-scoped publisher (connected) or opt-in relay (local).
-    if [ -n "$EMISSARY_TOKEN" ] && [ -n "$RECIPIENT" ]; then
+    if [ -n "$EMISSARY_TOKEN" ] && [ -n "$RECIPIENT" ] && [ -n "$EMISSARY_API_URL" ]; then
       # Step 1: render the handoff to HTML locally using egregore-artifacts.
       # Same renderer + template publish-artifact.sh uses today — handoffs
       # keep their familiar look.
       RENDERED_HTML="$TMPD/handoff.html"
       RENDER_OK=0
-      LOCAL_CLI="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
       FIDELITY_ARGS=(--verify-fidelity)
       if [ "$RENDER_TYPE" = "composed" ]; then
         FIDELITY_ARGS+=(--source "$ABS_FILE")
       fi
-      # Node always runs through the adapter (broken Volta/NVM shims are a
-      # live hazard in harness shells), and there is no npx/@latest fallback:
-      # a hidden registry fetch of a floating version is never an acceptable
-      # renderer. Missing local renderer → structured-only handoff.
-      if [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-        if bash "$SCRIPT_DIR/bin/node-run.sh" "$LOCAL_CLI" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
-          RENDER_OK=1
-        fi
-      else
-        echo "local egregore-artifacts renderer unavailable; sending structured handoff without custom HTML" > "$TMPD/render-error"
+      # Resolve exactly as previews do, without a registry fetch. An unavailable
+      # renderer still leaves the existing structured-only handoff fallback.
+      if bash "$SCRIPT_DIR/bin/artifact-renderer.sh" "$RENDER_TYPE" "${RENDER_SRC:-$ABS_FILE}" "${FIDELITY_ARGS[@]}" --output "$RENDERED_HTML" >/dev/null 2>"$TMPD/render-error"; then
+        RENDER_OK=1
       fi
 
       # Step 2: build the emissary payload. If rendering succeeded AND the

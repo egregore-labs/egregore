@@ -31,6 +31,7 @@ output=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -sS) shift ;;
+    --globoff) : > "$STUB_RECORD/globoff"; shift ;;
     --request|--url|--max-time|--write-out|-H)
       printf '%s' "$2" > "$STUB_RECORD/${1#-}"
       shift 2
@@ -112,7 +113,7 @@ assert_private() {
 vector_matches() {
   local recorded="$1" method="$2" url="$3" body="${4-}" response_file
   response_file=$(cat "$RECORD/response-file")
-  printf '%s\0' -q -sS --max-time 60 --request "$method" --url "$url" \
+  printf '%s\0' -q -sS --globoff --max-time 60 --request "$method" --url "$url" \
     --output "$response_file" --write-out '%{http_code}' -H '@-' > "$TEST_TMP/expected-argv0"
   if [ -n "$body" ]; then
     printf '%s\0' --data-binary "@$body" >> "$TEST_TMP/expected-argv0"
@@ -160,6 +161,7 @@ run_call() {
        || ! equal_file "$RECORD/H" '@-' \
        || ! equal_file "$RECORD/response-mode" $'600\n' \
        || [ -s "$RECORD/git-overrides" ] \
+       || [ ! -f "$RECORD/globoff" ] \
        || grep -Eq '^(-L|--location|--location-trusted|--retry|--retry-.*)$' "$RECORD/argv"; then
       bad "call $RUNS violated transport, stdin-header, or Git-isolation policy"
       SAFETY_FAILURES=$((SAFETY_FAILURES + 1))
@@ -428,6 +430,79 @@ reject 'empty successful gh fallback is a missing key' 2 'api-call: GITHUB_TOKEN
   GET 'https://external.example.test/env' --auth github
 fixture_env
 
+# egregore+github: the org key and the caller's own GitHub token, both on
+# stdin, never argv; the GitHub half keeps the gh fallback.
+run_call POST 'https://external.example.test/grant' --auth egregore+github
+expect_result 'egregore+github succeeds' 0 '{"ok":true}' ''
+assert_file 'egregore+github sends the org key and the person token on stdin' "$RECORD/stdin" \
+  $'Authorization: Bearer fixture-egregore-secret\nX-GitHub-Token: fixture-github-secret\n'
+assert_absent 'egregore+github with GITHUB_TOKEN set avoids gh fallback' "$RECORD/gh-argv"
+printf '%s\n' 'EGREGORE_API_KEY=fixture-egregore-secret' > "$CHECKOUT/.env"
+STUB_GH_TOKEN=fixture-gh-fallback-secret
+run_call GET 'https://external.example.test/requests' --auth egregore+github
+expect_result 'egregore+github falls back to gh for the person token' 0 '{"ok":true}' ''
+assert_file 'egregore+github fallback stays on stdin' "$RECORD/stdin" \
+  $'Authorization: Bearer fixture-egregore-secret\nX-GitHub-Token: fixture-gh-fallback-secret\n'
+STUB_GH_EXIT=1
+reject 'egregore+github without a person token' 2 'api-call: GITHUB_TOKEN is not set in .env' \
+  GET 'https://external.example.test/requests' --auth egregore+github
+STUB_GH_EXIT=0
+printf '%s\n' 'GITHUB_TOKEN=fixture-github-secret' > "$CHECKOUT/.env"
+reject 'egregore+github without an org key' 2 'api-call: EGREGORE_API_KEY is not set in .env' \
+  GET 'https://external.example.test/requests' --auth egregore+github
+fixture_env
+
+# The retired hosted origin (October 2026 reset) never receives a credential,
+# whether the caller passes it as an absolute target or egregore.json saves it.
+for retired_target in \
+    'https://egregore-production-55f2.up.railway.app/api/org/acme/key' \
+    'https://EGREGORE-Production-55F2.UP.Railway.App:443/api/org/acme/key' \
+    'http://egregore-production-55f2.up.railway.app/api/org/acme/key' \
+    'https://egregore-production-55f2.up.railway.app./api/org/acme/key'; do
+  case "$retired_target" in http://*) continue ;; esac  # usage allows https targets only
+  run_call POST "$retired_target" --auth egregore+github
+  expect_result "retired absolute target $retired_target succeeds" 0 '{"ok":true}' ''
+  assert_file "retired absolute target $retired_target goes to the hosted API" "$RECORD/-url" \
+    'https://api.egregore.xyz/api/org/acme/key'
+done
+assert_vector 'a retired absolute target sends the complete hosted vector' POST \
+  'https://api.egregore.xyz/api/org/acme/key'
+run_call POST 'https://egregore-production-55f2.up.railway.app/api/org/acme/key?full=1&page=2' --auth egregore
+assert_file 'a retired absolute target keeps its query on the hosted API' "$RECORD/-url" \
+  'https://api.egregore.xyz/api/org/acme/key?full=1&page=2'
+# An origin that is not plain is refused: nothing is sent, not even to us.
+REFUSED_NOTICE="The hosted services address isn't a plain web address, so nothing was sent. Correct api_url in egregore.json; the hosted address is https://api.egregore.xyz."
+for odd_target in \
+    'https://%65gregore-production-55f2.up.railway.app/api/org/acme/key' \
+    'https://member@egregore-production-55f2.up.railway.app\api/org/acme/key' \
+    'https://selfhost.example\@egregore-production-55f2.up.railway.app/api/org/acme/key' \
+    'https://selfhost.example%5C@egregore-production-55f2.up.railway.app/api/org/acme/key' \
+    'https://egregore-production-55f2.up.railway.ap{p,p}/api/org/acme/key' \
+    'https://egregore-production-55f2.up.railway.a[o-p]p/api/org/acme/key' \
+    "https://egregore-produc"$'\u00ad'"tion-55f2.up.railway.app/api/org/acme/key" \
+    "https://egregore"$'\u200b'"-production-55f2.up.railway.app/api/org/acme/key" \
+    'https://bücher.example/api/org/acme/key' \
+    'https://selfhost.example /api/org/acme/key'; do
+  reject "odd absolute target $odd_target is refused" 2 "$REFUSED_NOTICE" POST "$odd_target" --auth egregore+github
+done
+run_call GET 'https://api.example.test/x/{a,b}/[1-2]' --auth egregore
+assert_file 'glob characters after a plain origin stay literal' "$RECORD/-url" \
+  'https://api.example.test/x/{a,b}/[1-2]'
+for odd_saved in 'https://selfhost.example\\@egregore-production-55f2.up.railway.app' \
+    'http://egregore-production-55f2.up.railway.ap{p,p}' 'URL:https://egregore-production-55f2.up.railway.app' \
+    'https://bücher.example'; do
+  fixture_config "$(jq -n --arg u "$odd_saved" '{mode: "connected", api_url: $u}')"
+  reject "a saved odd address $odd_saved sends nothing" 2 "$REFUSED_NOTICE" GET '/api/org/status' --auth egregore
+done
+fixture_config '{"mode":"connected","api_url":"https://egregore-production-55f2.up.railway.app/"}'
+run_call GET '/api/org/status' --auth egregore
+assert_file 'a saved retired address resolves before the key is sent' "$RECORD/-url" \
+  'https://api.egregore.xyz/api/org/status'
+run_call GET 'https://egregore-production-55f2.up.railway.app.evil.test/x/' --auth egregore
+assert_file 'a look-alike host keeps its exact text' "$RECORD/-url" \
+  'https://egregore-production-55f2.up.railway.app.evil.test/x/'
+fixture_config '{}'
+
 for api_config in '{}' '{"api_url":""}'; do
   fixture_config "$api_config"
   reject 'missing or empty api_url fails before curl' 2 'api-call: api_url is not set' GET '/api/admin/dashboard'
@@ -454,7 +529,7 @@ else
 fi
 chmod 700 "$TEST_TMP/elsewhere/locked-parent"
 
-USAGE=$'Usage: bash bin/api-call.sh <METHOD> <path-or-url> [--auth github|egregore|resend] [--json-file <file>] [--out <file>] [--error-out <file>]\nFailed responses are discarded unless --error-out requests a private HTTP error body.'
+USAGE=$'Usage: bash bin/api-call.sh <METHOD> <path-or-url> [--auth github|egregore|resend|egregore+github] [--json-file <file>] [--out <file>] [--error-out <file>]\nFailed responses are discarded unless --error-out requests a private HTTP error body.'
 reject 'no arguments shows usage' 2 "$USAGE"
 reject 'missing target shows usage' 2 "$USAGE" GET
 reject 'empty method shows usage' 2 "$USAGE" '' 'https://external.example.test'

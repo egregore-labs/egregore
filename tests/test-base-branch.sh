@@ -172,12 +172,12 @@ else
   bad "worktree creator does not safely detach task branches from the configured base"
 fi
 
-# shellcheck disable=SC2016
-if grep -q 'fetch origin \$BASE_BRANCH' "$ROOT/bin/lib/greeting.sh" &&
-   ! grep -q 'fetch origin develop' "$ROOT/bin/lib/greeting.sh"; then
-  ok "first-session branch guidance uses the configured base"
+# Branch guidance lives in CLAUDE.md (resolved against {base}); the greeting
+# carries none, and must not bring back a develop-only rule.
+if ! grep -q 'fetch origin develop' "$ROOT/bin/lib/greeting.sh"; then
+  ok "greeting carries no develop-only branch guidance"
 else
-  bad "first-session branch guidance still assumes develop"
+  bad "greeting brought back develop-only branch guidance"
 fi
 
 if grep -q 'configuredBaseBranch' "$ROOT/bin/branch-guard.cjs" &&

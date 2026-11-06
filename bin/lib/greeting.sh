@@ -18,6 +18,205 @@
 #          HEALTH_*, FRAMEWORK_VERSION, TIME_OF_DAY, EGREGORE_SESSION_ID,
 #          FIRST_SESSION, DISPLAY_NAME_STATE, DASHBOARD_URL
 
+# Session records reuse the index refreshed by the detached sweep.
+# No transcript is opened by a greeting.
+# Personal controls always win over the organization default.
+_print_session_records() {
+  [ -n "${HOME:-}" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "${CONFIG:-$SCRIPT_DIR/egregore.json}" "$STATE_FILE" "$SCRIPT_DIR" \
+    "${EGREGORE_MEMORY_ROOT:-$SCRIPT_DIR/memory}" "${AUTHOR:-}" <<'RECORDS_PY' 2>/dev/null || true
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+config_path, state_path, project_root, memory_root, fallback_author = sys.argv[1:]
+def read_json(path):
+    try:
+        value = json.loads(Path(path).read_text())
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+config = read_json(config_path)
+policy = config.get("features", {}).get("session_records", {})
+if not isinstance(policy, dict) or policy.get("enabled") is not True:
+    raise SystemExit(0)
+state = read_json(state_path)
+author = state.get("github_username", fallback_author)
+sys.path.insert(0, str(Path(project_root) / "bin" / "lib"))
+try:
+    from session_trail import instance_prefix, valid_trail_folder
+    from session_record import collect_digest, metadata, sessions_directory, classify_record, Context, native_record_reader
+except ImportError:
+    raise SystemExit(0)
+prefix = instance_prefix(project_root)
+projects = Path(os.environ["HOME"]) / ".claude" / "projects"
+trail_root = Path(os.environ["HOME"]) / ".egregore" / "trails" / prefix
+cache = {}
+cache_path = trail_root / "index.json"
+try:
+    if (valid_trail_folder(trail_root, projects, prefix)
+            and stat.S_ISREG(cache_path.lstat().st_mode)
+            and cache_path.resolve().is_relative_to(trail_root.resolve())):
+        cache = read_json(cache_path)
+except OSError:
+    pass
+today = dt.datetime.now().astimezone().date()
+
+def clean(value):
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(value)).strip()
+
+def header(text, name):
+    match = re.search(r"^\*\*" + re.escape(name) + r"\*\*:\s*(.*)$", text, re.M)
+    return match.group(1).strip() if match else ""
+
+def frontmatter(text, name):
+    match = re.search(r"^" + re.escape(name) + r":\s*(.*)$", text.partition("\n---")[0], re.M)
+    return match.group(1).strip().strip('"\'') if match else ""
+
+def bullets(text, name):
+    match = re.search(r"^## " + re.escape(name) + r"\s*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return len(re.findall(r"^\s*[-*]\s+", match.group(1), re.M)) if match else 0
+
+records = []
+digest_records = []
+recorded_ids = set()
+scanned = 0
+# Month filenames sort chronologically; a bounded newest-first scan keeps the
+# greeting predictable even when an organization has years of sessions.
+sessions_root = sessions_directory(memory_root)
+try:
+    months = sorted((p for p in sessions_root.iterdir()
+                     if stat.S_ISDIR(p.lstat().st_mode)
+                     and p.resolve().is_relative_to(sessions_root)), reverse=True)[:120] if sessions_root else []
+except OSError:
+    months = []
+for month in months:
+    try:
+        paths = sorted(month.glob("*.md"), reverse=True)
+    except OSError:
+        continue
+    for path in paths[:2000 - scanned]:
+        scanned += 1
+        try:
+            if not stat.S_ISREG(path.lstat().st_mode) or not path.resolve().is_relative_to(sessions_root):
+                continue
+            with path.open() as source:
+                text = source.read(131072)
+        except (OSError, UnicodeError):
+            continue
+        if frontmatter(text, "kind") != "session-record":
+            continue
+        if state.get("session_records_noticed") is True:
+            digest_records.append((path, metadata(text), text))
+        if classify_record(metadata(text)) != "human-session":
+            continue
+        date = header(text, "Date") or frontmatter(text, "date")
+        owner = header(text, "Author") or frontmatter(text, "from")
+        session_id = header(text, "Session") or frontmatter(text, "session")
+        if session_id:
+            recorded_ids.add(session_id)
+        topic = frontmatter(text, "topic")
+        if not topic:
+            title = re.search(r"^# (?:Session: )?(.*)$", text, re.M)
+            topic = title.group(1) if title else "session"
+        commits = re.search(r"\b(\d+) commits\b", text)
+        records.append({"date": date, "author": owner, "topic": topic,
+                        "duration": header(text, "Duration") or frontmatter(text, "duration") or "unknown",
+                        "commits": int(commits.group(1)) if commits else 0,
+                        "decisions": bullets(text, "Decided"), "open": bullets(text, "Open")})
+    if scanned >= 2000:
+        break
+
+if state.get("session_records_noticed") is True:
+    # Open items are carried by the reflex line under this block
+    # (bin/reflexes/10-open-items.sh), so the digest skips the carry here.
+    has_native = any(classify_record(meta) != "human-session" for _, meta, _ in digest_records)
+    actor_id, reader = native_record_reader(Context(project_root)) if has_native else ("", None)
+    digest = collect_digest(memory_root, author=author, person=state.get("display_name", ""),
+                            days=1, today=today, records=digest_records, carry_days=0,
+                            actor_id=actor_id, native_reader=reader)
+    if digest["sessions"]:
+        print(f"  ◦ records · yesterday {digest['sessions']} ({digest['yours']} yours) · {len(digest['decided'])} decided · {len(digest['open'])} open · /records digest")
+        def short(value, limit):
+            value = clean(value)
+            return value if len(value) <= limit else value[:limit - 1] + "…"
+        def preview(line, who):
+            suffix = " — " + short(who, 40)
+            print("    - " + short(line, 120 - 6 - len(suffix)) + suffix)
+        for item in digest["decided"][:3]:
+            preview(item["line"], item["who"])
+    if digest["spirit_intents"]:
+        noun = "intent" if digest["spirit_intents"] == 1 else "intents"
+        print(f"  ◦ spirit records · {digest['spirit_intents']} {noun} ({digest['your_spirit_intents']} yours) · partial coverage · /records digest")
+    if digest["unsupported_native"]:
+        print(f"  ◦ {digest['unsupported_native']} unsupported spirit records · metadata unavailable")
+    if digest["held_records"]:
+        print(f"  ◦ {digest['held_records']} held records · details withheld")
+    if cache.get("waiting_push"):
+        print("  ◦ 1 records commit is waiting to push · /records status --push")
+    raise SystemExit(0)
+
+decider = clean(policy.get("decided_by", "your organization"))
+decided_on = clean(policy.get("decided_on", ""))
+personal_names = {str(value).casefold() for value in (author, state.get("display_name", "")) if value}
+if str(policy.get("decided_by", "")).casefold() in personal_names:
+    print(f"◇ Session records are on for {clean(config.get('github_org', ''))}/{clean(config.get('repo_name', 'egregore'))} · your decision, {decided_on}")
+else:
+    print(f"◇ Session records are new · {decider} turned them on for this egregore on {decided_on}")
+if state.get("session_records_enabled") is False:
+    print("  Your session records are off. /records on turns them back on.")
+else:
+    print("  Each session now leaves a record in memory/sessions: asked, decided, left open,")
+    print("  touched, cost. Asks are paraphrased, never quoted. The full trail stays on this")
+    model_on = policy.get("model", "haiku") != "none" and state.get("session_records_model_call") is not False
+    if model_on:
+        print("  machine as a file; your own Claude account reads it once to write the outline,")
+        print('  through the Claude service. Say "off the record" in any session to hold it.')
+    else:
+        print('  machine. Say "off the record" in any session to hold it.')
+    print("  /records changes yours.")
+    if "unrecorded_count" in cache:
+        count = int(cache.get("unrecorded_count", 0))
+        try:
+            days = max(0, (today - dt.date.fromisoformat(cache["oldest_date"][:10])).days)
+        except (KeyError, TypeError, ValueError):
+            days = int(cache.get("days", 0))
+    if records:
+        newest = max(records, key=lambda row: row["date"])
+        if newest["author"] != author:
+            print(f"  Here is one of {clean(newest['author'])}'s: {clean(newest['date'][:10])} · {clean(newest['topic'])} · {clean(newest['duration'])} · {newest['commits']} commits · {newest['decisions']} decisions · {newest['open']} open items")
+    if "unrecorded_count" in cache:
+        print(f"  {count} past sessions of yours are still on this machine ({days} days). Record them?")
+        print("  y · show one · no")
+    else:
+        print("  Past sessions are being counted. The count appears at your next start.")
+if cache.get("waiting_push"):
+    print("  ◦ 1 records commit is waiting to push · /records status --push")
+RECORDS_PY
+}
+
+# The reflexes: probes in bin/reflexes/ that each print a fact about
+# yesterday, or nothing. One runner, fail-soft, shared by every startup card.
+# See bin/reflexes/README.md.
+_print_reflexes() {
+  [ -f "$SCRIPT_DIR/bin/reflexes.sh" ] || return 0
+  bash "$SCRIPT_DIR/bin/reflexes.sh" \
+    --memory "${EGREGORE_MEMORY_ROOT:-$SCRIPT_DIR/memory}" \
+    --author "${AUTHOR:-}" --harness "${EGREGORE_HARNESS:-claude}" 2>/dev/null || true
+}
+
+# Other startup cards reuse this records block without rendering the Claude
+# greeting or running its surrounding notices and bookkeeping.
+if [ "${EGREGORE_GREETING_RECORDS_ONLY:-}" = "1" ]; then
+  return 0
+fi
+
 # --- Output greeting for Claude to display ---
 cat << 'GREETING'
 
@@ -115,6 +314,10 @@ if [ -n "${SETTINGS_POSTURE_HELD:-}" ]; then
   echo "  ◇ boundary posture was set to ${SETTINGS_POSTURE_HELD} elsewhere — relaxing access needs your confirm: bash bin/settings.sh posture ${SETTINGS_POSTURE_HELD}"
 fi
 
+
+_print_session_records
+_print_reflexes
+
 # --- Footer: health + repos + memory (tertiary) ---
 echo "$SEPARATOR"
 
@@ -126,7 +329,7 @@ _render_health_footer || true
 # Runtime update summary — cached durable state only, never a live probe, so
 # session start stays fast. One compact line; silent when nothing is staged.
 # Keyed by stable org identity composed with the main installation path
-# (mirrors egregore_runtime.upgrade.instance_key); no org_id → no summary.
+# (mirrors egregore_runtime.installation.installation_key); no org_id → no summary.
 _UPGRADE_ORG=$(jq -r '.org_id // empty' "$SCRIPT_DIR/egregore.json" 2>/dev/null)
 _UPGRADE_MAIN=$(cd "${MAIN_PROJECT_DIR:-$SCRIPT_DIR}" 2>/dev/null && pwd -P || true)
 if [ -n "$_UPGRADE_ORG" ] && [ -n "$_UPGRADE_MAIN" ]; then
@@ -372,6 +575,43 @@ if [ "$ALIAS_VERSION" -lt 2 ] 2>/dev/null; then
   fi
 fi
 
+# --- Card close: first-session welcome or tutorial tip (visible) ---
+# Everything the user should see renders before the hidden context below, so
+# a harness that displays the card directly (bin/lib/card-delivery.sh) shows
+# all of it. In that mode the card also asks the opening question itself,
+# the same way bin/codex-session-start.sh ends the Codex and Pi card.
+if [ -z "$FIRST_SESSION" ] && [ -f "$STATE_FILE" ]; then
+  FIRST_SESSION=$(jq -r '.first_session // false' "$STATE_FILE" 2>/dev/null)
+fi
+
+if [ "$FIRST_SESSION" = "true" ]; then
+  echo ""
+  echo "  Welcome! This is your first session."
+  if [ "${EGREGORE_CARD_DELIVERY:-text}" = "harness" ]; then
+    echo ""
+    echo "  Want a quick tour first (/onboarding), or jump straight in?"
+  fi
+  # Clear the flag so it only shows once
+  jq '.first_session = false' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+else
+  # --- Tutorial tip (if onboarding done but tutorial not) ---
+  TUTORIAL_COMPLETE="true"
+  if [ -f "$STATE_FILE" ]; then
+    TUTORIAL_COMPLETE=$(jq -r '.tutorial_complete // false' "$STATE_FILE" 2>/dev/null || echo "true")
+  fi
+
+  if [ "$TUTORIAL_COMPLETE" != "true" ]; then
+    # A tip that has not been acted on after a few sessions is noise; the
+    # ledger retires it after NOTICE_TIP_MAX showings.
+    _notice tutorial-tip tip "tutorial" "tutorial" "  Tip: Run /tutorial to learn the core loop."
+  fi
+  _notice_flush
+  if [ "${EGREGORE_CARD_DELIVERY:-text}" = "harness" ]; then
+    echo ""
+    echo "  What are you working on?"
+  fi
+fi
+
 echo ""
 
 # --- Session context (hidden, for Claude) ---
@@ -481,51 +721,27 @@ bash "$SCRIPT_DIR/bin/telemetry.sh" emit "session_start" \
 # --- Health check-in (background, non-blocking) ---
 bash "$SCRIPT_DIR/bin/startup-check.sh" >/dev/null 2>&1 &
 
-# --- Warm npx cache for egregore-artifacts (background, throttled) ---
-# publish-artifact.sh spawns `npx egregore-artifacts` — first run in a
-# fresh npx cache pays a 5-10s npm download. Warmup is throttled to
-# once per hour via a marker file so we don't storm npm when a user
-# opens many tabs, and don't start runaway retry loops when offline.
-_WARM_TS_FILE="$HOME/.cache/egregore/npx-warm-ts"
-mkdir -p "$(dirname "$_WARM_TS_FILE")" 2>/dev/null
-_WARM_LAST=$(cat "$_WARM_TS_FILE" 2>/dev/null || echo 0)
-_WARM_NOW=$(date +%s)
-if [ $(( _WARM_NOW - _WARM_LAST )) -gt 3600 ]; then
-  (npx -y egregore-artifacts@latest --help >/dev/null 2>&1 \
-    && echo "$_WARM_NOW" > "$_WARM_TS_FILE" &) >/dev/null 2>&1
-fi
+# Artifact dependencies are provisioned during explicit setup/update. Startup
+# must not warm a floating npx cache that the offline renderer cannot resolve.
 
 # Clean up temp files
 rm -rf "$CTX_DIR"
 
-# --- First session welcome ---
-if [ -z "$FIRST_SESSION" ] && [ -f "$STATE_FILE" ]; then
-  FIRST_SESSION=$(jq -r '.first_session // false' "$STATE_FILE" 2>/dev/null)
-fi
-
-if [ "$FIRST_SESSION" = "true" ]; then
-  echo ""
-  echo "  Welcome! This is your first session."
-  echo ""
+# --- Instruction for the model ---
+# Harness delivery: the user already sees the scripted card, question
+# included, so the model must not retype it. Text delivery (a harness that
+# cannot display hook output directly) keeps the display instruction. The
+# branch rule that used to follow is gone: CLAUDE.md's "Before Project
+# Changes" section is the one branching contract.
+echo ""
+if [ "${EGREGORE_CARD_DELIVERY:-text}" = "harness" ]; then
+  if [ "$FIRST_SESSION" = "true" ]; then
+    echo "STARTUP CARD: The harness has already shown the user the startup card above, ending with an offer of a quick tour (/onboarding). Do not reprint, summarize, or narrate it. Treat the user's first message as their answer."
+  else
+    echo "STARTUP CARD: The harness has already shown the user the startup card above, ending with \"What are you working on?\". Do not reprint, summarize, or narrate it. Treat the user's first message as the answer. If it carries no request (the launcher submits \`start\` automatically), reply with one short line and no tool calls."
+  fi
+elif [ "$FIRST_SESSION" = "true" ]; then
   echo "IMPORTANT: Display the above greeting exactly as-is (ASCII art + ornamented status). Then ask the user if they'd like a quick onboarding tour (run /onboarding), or if they want to jump straight in."
-  # Clear the flag so it only shows once
-  jq '.first_session = false' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 else
-  # --- Tutorial tip (if onboarding done but tutorial not) ---
-  TUTORIAL_COMPLETE="true"
-  if [ -f "$STATE_FILE" ]; then
-    TUTORIAL_COMPLETE=$(jq -r '.tutorial_complete // false' "$STATE_FILE" 2>/dev/null || echo "true")
-  fi
-
-  if [ "$TUTORIAL_COMPLETE" != "true" ]; then
-    # A tip that has not been acted on after a few sessions is noise; the
-    # ledger retires it after NOTICE_TIP_MAX showings.
-    _notice tutorial-tip tip "tutorial" "tutorial" "  Tip: Run /tutorial to learn the core loop."
-  fi
-  _notice_flush
-
-  echo ""
   echo "IMPORTANT: Display the above greeting to the user exactly as-is (preserve the ASCII art formatting and ornamented status) on their first message. Then ask: What are you working on?"
-  echo ""
-  echo "BRANCH RULE: When the user responds with what they're working on, your FIRST action is to create a working branch: git fetch origin $BASE_BRANCH --quiet && git checkout --no-track -b dev/{author}/{topic-slug} origin/$BASE_BRANCH. Do this BEFORE any other work. Derive the topic slug from their description. If they ask a pure question with no work intent, skip branching."
 fi

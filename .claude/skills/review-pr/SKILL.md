@@ -275,10 +275,12 @@ After showing the summary, offer:
 
 ## Merge execution (when user confirms)
 
-For each PR the user confirmed for merging, use its metadata number as `{pr_number}` and the configured `{github_org}` and `{repo_name}`:
+For each PR the user confirmed for merging, use its metadata number as `{pr_number}` and the configured `{github_org}` and `{repo_name}`, and merge through the gate:
 ```bash
-bash bin/gh-run.sh pr merge '{pr_number}' --merge --repo '{github_org}/{repo_name}'
+bash bin/agent.sh merge 'https://github.com/{github_org}/{repo_name}/pull/{pr_number}'
 ```
+
+When the gate refuses on a red check, show the user the failing jobs it names, and merge only if they decide those jobs do not matter: write a receipt naming each one and why, then run the same command with `--receipt <file>`, and the gate posts it on the PR before it merges.
 
 After merge, update local develop:
 ```bash

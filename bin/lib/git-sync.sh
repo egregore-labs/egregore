@@ -22,6 +22,13 @@
 #          FRAMEWORK_UPDATED, FRAMEWORK_UPDATED_COUNT, FRAMEWORK_UPDATED_FILES,
 #          BASE_BRANCH, BASE_BRANCH_READY
 #
+# EGREGORE_GIT_SYNC_LIVE=1 (a shell variable the refresh pass of
+# bin/session-start.sh sets) means a session is already live in this checkout:
+# fetch and update refs only, and leave every working tree as it is (no
+# fast-forward, autosave, push, branch switch or framework update). The quick
+# pass before it fast-forwarded the base branch and the managed repos on their
+# base branch from the last fetch.
+#
 # Health dimensions are independent. HEALTH_GIT is the project checkout (base
 # branch, worktree, managed repos); HEALTH_MEMORY is the canonical memory
 # repository's synchronization; HEALTH_RETRIEVAL is whether recall can answer.
@@ -300,7 +307,7 @@ setup_develop() {
   if [[ "$CURRENT_BRANCH" != "$BASE_BRANCH" ]]; then
     # Safe to force-update when not checked out
     git branch -f "$BASE_BRANCH" "origin/$BASE_BRANCH" 2>/dev/null || true
-  else
+  elif [ "${EGREGORE_GIT_SYNC_LIVE:-0}" != "1" ]; then
     # On the base branch — try ff merge, fall back to reset only if no unpushed work
     git merge --ff-only "origin/$BASE_BRANCH" --quiet 2>/dev/null || {
       # Only reset if there are no unpushed commits and no dirty tracked work.
@@ -323,7 +330,7 @@ setup_develop() {
   # safe, but autosave commits, branch pushes, and parking the checkout on
   # the base branch mutate a live repo out from under whatever session owns
   # it.
-  if [ "${EGREGORE_GIT_SYNC_READONLY:-0}" = "1" ]; then
+  if [ "${EGREGORE_GIT_SYNC_READONLY:-0}" = "1" ] || [ "${EGREGORE_GIT_SYNC_LIVE:-0}" = "1" ]; then
     ACTION="ready"
     SAVED_BRANCH=""
     return 0
@@ -455,7 +462,8 @@ else
 fi
 
 # Apply a framework update only after setup verified the configured base branch.
-if [ "$IS_WORKTREE" != "true" ] && [ "$BASE_BRANCH_READY" = "true" ]; then
+if [ "$IS_WORKTREE" != "true" ] && [ "$BASE_BRANCH_READY" = "true" ] \
+  && [ "${EGREGORE_GIT_SYNC_LIVE:-0}" != "1" ]; then
   _apply_framework_update 2>/dev/null || true
 fi
 
@@ -563,7 +571,7 @@ for REPO in $MANAGED_REPOS; do
     R_BRANCH=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "?")
     if [ "$R_BRANCH" != "$REPO_BASE" ]; then
       git -C "$REPO_DIR" branch -f "$REPO_BASE" "origin/$REPO_BASE" --quiet 2>/dev/null || true
-    else
+    elif [ "${EGREGORE_GIT_SYNC_LIVE:-0}" != "1" ]; then
       git -C "$REPO_DIR" merge --ff-only "origin/$REPO_BASE" --quiet 2>/dev/null || true
     fi
   fi

@@ -19,13 +19,17 @@
       "reuse": false,
       "jobs": {
         "shell_contracts": [
-          "Strict shell contracts"
+          "Strict shell contracts",
+          "Strict shell contracts · loom"
         ],
         "multiplayer": [
           "multiplayer-poc-tests"
         ],
         "artifacts": [
           "artifacts-tests"
+        ],
+        "mind": [
+          "Mind fast contracts"
         ]
       },
       "reuse_groups": [
@@ -38,7 +42,9 @@
       "reuse": false,
       "jobs": {
         "runtime": [
-          "Runtime contracts"
+          "Runtime contracts",
+          "Runtime contracts · python",
+          "Runtime contracts · spirit"
         ]
       }
     },
@@ -106,7 +112,8 @@
         "multiplayer",
         "runtime",
         "shell_contracts",
-        "shellcheck"
+        "shellcheck",
+        "mind"
       ]
     },
     {

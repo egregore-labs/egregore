@@ -825,6 +825,7 @@ fi
 # ── Memory scaffold ────────────────────────────────────────────────
 
 step "Memory scaffold"
+MEMORY_BRANCH="$(git -C "$MEMORY_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 
 SCAFFOLD_DIRS=("people" "handoffs" "knowledge/decisions" "knowledge/patterns" "knowledge/findings" "quests" "wraps" "artifacts")
 NEEDS_COMMIT=0
@@ -839,10 +840,13 @@ done
 if [ "$NEEDS_COMMIT" = "1" ]; then
   git -C "$MEMORY_DIR" add -A
   git -C "$MEMORY_DIR" commit -m "Initialize memory scaffold" >/dev/null 2>&1 || true
-  if git -C "$MEMORY_DIR" push -u origin HEAD >/dev/null 2>&1; then
+  if bash "$EGREGORE_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch "$MEMORY_BRANCH" >/dev/null 2>&1; then
+    # Match the former -u bootstrap after the guarded delivery is confirmed.
+    git -C "$MEMORY_DIR" config "branch.$MEMORY_BRANCH.remote" origin
+    git -C "$MEMORY_DIR" config "branch.$MEMORY_BRANCH.merge" "refs/heads/$MEMORY_BRANCH"
     ok "Pushed scaffold"
   else
-    warn "Could not push scaffold — run: git -C $MEMORY_DIR push"
+    warn "Scaffold saved locally; guarded memory publication is pending. Retry setup after resolving the guard receipt."
   fi
 else
   ok "Scaffold already in place"
@@ -888,7 +892,7 @@ NEW_CONFIG="$(jq -n \
   }')"
 
 # On re-run, merge with existing egregore.json so user customizations
-# (telegram_group_link, report_url, manually-added fields) survive.
+# (telegram_group_link, manually-added fields) survive.
 # Recursive merge with `*`: second (new) wins on conflict, existing keeps
 # keys this script doesn't know about. `repos` is fully replaced — that's
 # the user's intent (their selections in this run are authoritative).
@@ -987,7 +991,7 @@ joined: $TODAY
 EOF
   git -C "$MEMORY_DIR" add "people/${USER_LOGIN}.md" >/dev/null 2>&1 || true
   git -C "$MEMORY_DIR" commit -m "Add founder $USER_LOGIN" >/dev/null 2>&1 || true
-  git -C "$MEMORY_DIR" push >/dev/null 2>&1 || true
+  bash "$EGREGORE_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch "$MEMORY_BRANCH" >/dev/null 2>&1 || true
   ok "Created people/${USER_LOGIN}.md"
 fi
 
@@ -1047,7 +1051,7 @@ joined: $TODAY
 EOF
     git -C "$MEMORY_DIR" add "people/${INV_USER}.md" >/dev/null 2>&1 || true
     git -C "$MEMORY_DIR" commit -m "Invite $INV_USER" >/dev/null 2>&1 || true
-    git -C "$MEMORY_DIR" push >/dev/null 2>&1 || true
+    bash "$EGREGORE_DIR/bin/memory-push.sh" --repository "$MEMORY_DIR" --branch "$MEMORY_BRANCH" >/dev/null 2>&1 || true
   fi
   INVITED_USERS+=("$INV_USER")
 done

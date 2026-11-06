@@ -1,6 +1,7 @@
 """Dependency-free Runtime fixture shared by Python and native harness tests."""
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from egregore_runtime import EvidenceItem, OrgContext, PolicyDecision, Permission
@@ -11,7 +12,7 @@ class FakeRuntime:
         self.resolve_calls = []
         self.observe_calls = []
         self.open_calls = []
-        self.decision = PolicyDecision(True, "actor_test", "org_test", Permission.READ, "epoch:test", scopes=("memory",))
+        self.decision = PolicyDecision(True, "actor_test", "org_test", Permission.READ, "epoch:test", scopes=("memory",), read_prefixes=("memory",))
         self.retriever = SimpleNamespace(describe_source=lambda path: SimpleNamespace(artifact_id="decision_test"), health=lambda: SimpleNamespace(source_revision="git:test", index_revision="index:test"))
 
     def policy_factory(self, actor):
@@ -23,9 +24,10 @@ class FakeRuntime:
     def investigate(self, actor, request, **kwargs):
         from egregore_runtime.investigation import execute
         from egregore_runtime import harness_cli
-        return execute(self,actor,request,root=harness_cli._invocation_root.get() or os.environ.get("EGREGORE_ROOT"),**kwargs)
+        root = Path(harness_cli._invocation_root.get() or os.environ.get("EGREGORE_ROOT"))
+        self.canonical_root = root / "memory"
+        return execute(self,actor,request,root=root,**kwargs)
 
-    admin_gate = None
 
     def resolve_actor(self, *, session_id, harness):
         self.resolve_calls.append((session_id, harness))

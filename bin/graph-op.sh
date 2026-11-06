@@ -226,6 +226,20 @@ if [ "$_MODE" = "local" ]; then
   exit 0
 fi
 
+# Every read leaves through the Runtime's packaging: an object naming a memory
+# file the reader may not open is dropped, held names are stripped.
+case "$OP" in
+  people|open-quests|spirit-context|spirit-list|open-handoffs|pending-questions|lineage|meeting-history|check-implements|\
+  my-merged-prs|my-implemented-handoffs|claim-handoff|claim-handoff-nudge|mark-read|mark-done)  # reads, and receipts of stored text
+    if [ "${EGREGORE_GRAPH_PACKAGED:-}" != "1" ]; then
+      READ_OUT="$(EGREGORE_GRAPH_PACKAGED=1 bash "$SCRIPT_DIR/bin/graph-op.sh" "$OP" "$@")" || exit $?
+      printf '%s\n' "$READ_OUT" | (cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" PYTHONSAFEPATH=1 \
+        PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m egregore_runtime.harness_cli package)
+      exit $?
+    fi
+    ;;
+esac
+
 # Return a bounded set of exact canonical paths containing a literal query.
 # This is intentionally a coverage check around graph results, not a second
 # full-text answer corpus: agents still open only the relevant canonical files.

@@ -39,42 +39,42 @@
     {
       "suite": "bin/tests/test-loom-dashboard.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom-evals.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom-learner.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom-replay.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom-scenarios.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom-truth.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-loom.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-minion-workflow.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "bin/tests/test-prose-check.sh",
@@ -104,7 +104,7 @@
     {
       "suite": "tests/test-agent-protocol.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "shell-contracts"
+      "job": "shell-contracts-loom"
     },
     {
       "suite": "tests/test-ci-test-ownership.sh",
@@ -149,7 +149,32 @@
     {
       "suite": "tests/test-runtime-skill-migration.sh",
       "workflow": ".github/workflows/ci.yml",
-      "job": "runtime-parity"
+      "job": "runtime-contracts-python"
+    },
+    {
+      "suite": "tests/test-spirit-catalog.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-contracts-spirit"
+    },
+    {
+      "suite": "tests/test-spirit-contribution.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-contracts-spirit"
+    },
+    {
+      "suite": "tests/test-spirit-delivery.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-contracts-spirit"
+    },
+    {
+      "suite": "tests/test-spirit-library.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-contracts-spirit"
+    },
+    {
+      "suite": "tests/test-spirit-map.sh",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "runtime-contracts-spirit"
     },
     {
       "suite": "tests/test-suite-shard.sh",

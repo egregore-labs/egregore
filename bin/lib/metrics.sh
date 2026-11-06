@@ -135,6 +135,107 @@ _find_count_md() {
   find -L "$@" -name '*.md' ! -name 'index*' 2>/dev/null | wc -l | awk '{print $1+0}' 2>/dev/null || echo 0
 }
 
+# Classify additions at their original Git revision, so renamed/deleted spirit
+# records cannot turn into historical human sessions. All bounds fail closed.
+_local_record_metrics() {
+  python3 - "${SCRIPT_DIR:-$PWD}" <<'PY'
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+root = Path(sys.argv[1]); memory = (root / 'memory').resolve()
+sys.path.insert(0, str(root / 'bin/lib'))
+from session_record import Context, classify_record, metadata, native_record_reader
+LIMIT = 256 * 1024
+out = {'buckets': [0]*5, 'all': 0, 'coverage': 'bounded',
+       'spirit_intents': {'all': 0, 'coverage': 'bounded'}}
+actor, reader = native_record_reader(Context(root))
+if reader is None:
+    out['spirit_intents'] = {'all': None, 'coverage': 'unavailable'}
+def meta(raw):
+    text = raw.decode('utf-8')
+    if text.startswith('---\n') and '\n---' not in text[4:]:
+        raise ValueError('incomplete header')
+    return metadata(text)
+try:
+    count = 0
+    for name in ('sessions', 'wraps'):
+        base = memory / name
+        if not base.exists(): continue
+        if base.is_symlink() or not base.resolve().is_relative_to(memory): raise ValueError('unsafe root')
+        for path in base.rglob('*.md'):
+            if path.name.startswith('index'): continue
+            count += 1
+            if count > 4096: raise ValueError('inventory bound')
+            if (not stat.S_ISREG(path.lstat().st_mode) or not path.resolve().is_relative_to(memory)
+                    or any(parent.is_symlink() for parent in path.parents if parent != memory and parent.is_relative_to(memory))):
+                continue
+            with path.open('rb') as stream: raw = stream.read(LIMIT + 1)
+            if len(raw) > LIMIT: raise ValueError('record bound')
+            fields = meta(raw); kind = classify_record(fields)
+            if kind == 'human-session': out['all'] += 1
+            elif reader and reader(path, fields) is True and kind == 'durable-intent' and fields.get('detail') != 'stub':
+                out['spirit_intents']['all'] += 1
+except (OSError, ValueError, UnicodeError):
+    out['all'] = None; out['coverage'] = 'unavailable'
+    out['spirit_intents'] = {'all': None, 'coverage': 'unavailable'}
+env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+env['GIT_OPTIONAL_LOCKS'] = '0'
+def git(*args, data=None, limit=8*1024*1024):
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(['git', '--no-replace-objects', '-c', 'core.fsmonitor=false', '-C', str(memory), *args],
+                                input=data, stdout=output, stderr=subprocess.DEVNULL, env=env, timeout=8)
+        if result.returncode or output.tell() > limit: raise ValueError('history unavailable')
+        output.seek(0); return output.read()
+try:
+    raw = git('log', '-n', '257', '--since=35 days ago', '--diff-filter=A', '--name-only', '-z',
+              '--format=%x1e%H %ct%x00', '--', 'sessions', 'wraps')
+    commits = [part for part in raw.split(b'\x1e') if part]
+    if len(commits) > 256: raise ValueError('history bound')
+    entries = []; commit_times = {}
+    for part in commits:
+        header, _, tail = part.partition(b'\0'); sha, stamp = header.decode('ascii').split()
+        if len(sha) not in (40, 64) or any(c not in '0123456789abcdef' for c in sha): raise ValueError('invalid history')
+        commit_times[sha] = int(stamp)
+        for rawpath in tail.split(b'\0'):
+            path = rawpath.lstrip(b'\n').decode('utf-8')
+            if not path: continue
+            if (any(ord(c) < 32 for c in path) or not path.startswith(('sessions/', 'wraps/'))
+                    or '..' in Path(path).parts or len(path) > 4096): raise ValueError('invalid history path')
+            entries.append((sha, path))
+    if len(entries) > 512: raise ValueError('addition bound')
+    if entries:
+        request = ''.join(sha + ':' + path + '\n' for sha, path in entries).encode()
+        checks = git('cat-file', '--batch-check', data=request, limit=128*1024).splitlines()
+        if len(checks) != len(entries): raise ValueError('incomplete inventory')
+        sizes = []
+        for line in checks:
+            _oid, kind, size = line.split(); size = int(size)
+            if kind != b'blob' or size > LIMIT: raise ValueError('unsupported addition')
+            sizes.append(size)
+        if sum(sizes) > 8*1024*1024 - 128*1024: raise ValueError('blob bound')
+        blobs = git('cat-file', '--batch', data=request); offset = 0; human_commits = set()
+        for (sha, path), size in zip(entries, sizes):
+            end = blobs.index(b'\n', offset); header = blobs[offset:end].split()
+            if len(header) != 3 or header[1] != b'blob' or int(header[2]) != size: raise ValueError('changed blob')
+            start = end + 1; raw = blobs[start:start+size]; offset = start + size + 1
+            if len(raw) != size or blobs[offset-1:offset] != b'\n': raise ValueError('incomplete blob')
+            if classify_record(meta(raw)) == 'human-session': human_commits.add(sha)
+        if offset != len(blobs): raise ValueError('unexpected blob')
+        now = dt.datetime.now().timestamp()
+        for sha in human_commits:
+            index = 4 - int(max(0, now - commit_times[sha]) / 86400) // 7
+            if 0 <= index < 5: out['buckets'][index] += 1
+except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+    out['buckets'] = None; out['coverage'] = 'unavailable'
+print(json.dumps(out))
+PY
+}
+
 _metrics_gather() {
   local _root _mem _scratch _API_URL _API_KEY _connected
   _root="${SCRIPT_DIR:-$PWD}"
@@ -201,9 +302,7 @@ RETURN avg(d) AS avgDays, count(*) AS n" 2>/dev/null || echo "")
   ) > "$_scratch/handoff_resolution" 2>/dev/null &
 
   (
-    buckets=$(_git_added_buckets "$_mem" sessions wraps)
-    all=$(_find_count_md "$_root/memory/sessions" "$_root/memory/wraps")
-    printf '%s|%s\n' "$buckets" "$all"
+    _local_record_metrics
   ) > "$_scratch/local_sessions" 2>/dev/null &
 
   (
@@ -254,7 +353,9 @@ RETURN avg(d) AS avgDays, count(*) AS n" 2>/dev/null || echo "")
 
   gs=$(cat "$_scratch/graph_sessions" 2>/dev/null || echo "0 0 0 0 0|0|0")
   gt=$(cat "$_scratch/graph_totals" 2>/dev/null || echo "0|0")
-  lsess=$(cat "$_scratch/local_sessions" 2>/dev/null || echo "0 0 0 0 0|0")
+  local_record_json=$(cat "$_scratch/local_sessions" 2>/dev/null)
+  local_record_json=$(printf '%s' "$local_record_json" | jq -ce 'select(type == "object")' 2>/dev/null || echo '{"buckets":null,"all":null,"coverage":"unavailable","spirit_intents":{"all":null,"coverage":"unavailable"}}')
+  lsess=$(printf '%s' "$local_record_json" | jq -r '"\((.buckets // [0,0,0,0,0])|join(" "))|\(.all // 0)"')
   commits=$(cat "$_scratch/commits" 2>/dev/null || echo "0 0 0 0 0|0")
   handoffs=$(cat "$_scratch/handoffs" 2>/dev/null || echo "0 0 0 0 0|0")
   knowledge=$(cat "$_scratch/knowledge" 2>/dev/null || echo "0 0 0 0 0|0")
@@ -297,7 +398,8 @@ RETURN avg(d) AS avgDays, count(*) AS n" 2>/dev/null || echo "")
       --argjson hb "$handoff_buckets_json" --argjson hw "$(_bucket_week "$handoff_buckets")" --argjson hp "$(_bucket_prev "$handoff_buckets")" --argjson havg "$avg_res" --argjson hall "$(_num "$(printf '%s' "$handoffs" | awk -F'|' '{print $2}')")" \
       --argjson kb "$knowledge_buckets_json" --argjson kw "$(_bucket_week "$knowledge_buckets")" --argjson kp "$(_bucket_prev "$knowledge_buckets")" --argjson kall "$(_num "$(printf '%s' "$knowledge" | awk -F'|' '{print $2}')")" \
       --argjson ma "$members_active" --argjson mt "$members_total" \
-      '{source:$source,sessions:{buckets:$sb,week:$sw,prev:$sp,all:$sall},commits:{buckets:$cb,week:$cw,prev:$cp,authors:$ca,all:$call},handoffs:{buckets:$hb,week:$hw,prev:$hp,avg_resolution_days:$havg,all:$hall},knowledge:{buckets:$kb,week:$kw,prev:$kp,all:$kall},members:{active:$ma,total:$mt}}' 2>/dev/null || _metrics_zero_json
+      --argjson records "$local_record_json" \
+      '{source:$source,sessions:{buckets:$sb,week:$sw,prev:$sp,all:$sall},commits:{buckets:$cb,week:$cw,prev:$cp,authors:$ca,all:$call},handoffs:{buckets:$hb,week:$hw,prev:$hp,avg_resolution_days:$havg,all:$hall},knowledge:{buckets:$kb,week:$kw,prev:$kp,all:$kall},members:{active:$ma,total:$mt},spirit_intents:$records.spirit_intents} | .sessions.coverage = (if $source == "local" then $records.coverage else "projection" end) | if $source == "local" and $records.coverage == "unavailable" then .sessions = {buckets:null,week:null,prev:null,all:$records.all,coverage:"unavailable"} else . end' 2>/dev/null || _metrics_zero_json
   else
     jq -n --arg source "$source_name" \
       --argjson sb "$session_buckets_json" --argjson sw "$(_bucket_week "$session_buckets")" --argjson sp "$(_bucket_prev "$session_buckets")" --argjson sall "$session_all" \
@@ -305,7 +407,8 @@ RETURN avg(d) AS avgDays, count(*) AS n" 2>/dev/null || echo "")
       --argjson hb "$handoff_buckets_json" --argjson hw "$(_bucket_week "$handoff_buckets")" --argjson hp "$(_bucket_prev "$handoff_buckets")" --argjson hall "$(_num "$(printf '%s' "$handoffs" | awk -F'|' '{print $2}')")" \
       --argjson kb "$knowledge_buckets_json" --argjson kw "$(_bucket_week "$knowledge_buckets")" --argjson kp "$(_bucket_prev "$knowledge_buckets")" --argjson kall "$(_num "$(printf '%s' "$knowledge" | awk -F'|' '{print $2}')")" \
       --argjson ma "$members_active" --argjson mt "$members_total" \
-      '{source:$source,sessions:{buckets:$sb,week:$sw,prev:$sp,all:$sall},commits:{buckets:$cb,week:$cw,prev:$cp,authors:$ca,all:$call},handoffs:{buckets:$hb,week:$hw,prev:$hp,avg_resolution_days:null,all:$hall},knowledge:{buckets:$kb,week:$kw,prev:$kp,all:$kall},members:{active:$ma,total:$mt}}' 2>/dev/null || _metrics_zero_json
+      --argjson records "$local_record_json" \
+      '{source:$source,sessions:{buckets:$sb,week:$sw,prev:$sp,all:$sall},commits:{buckets:$cb,week:$cw,prev:$cp,authors:$ca,all:$call},handoffs:{buckets:$hb,week:$hw,prev:$hp,avg_resolution_days:null,all:$hall},knowledge:{buckets:$kb,week:$kw,prev:$kp,all:$kall},members:{active:$ma,total:$mt},spirit_intents:$records.spirit_intents} | .sessions.coverage = (if $source == "local" then $records.coverage else "projection" end) | if $source == "local" and $records.coverage == "unavailable" then .sessions = {buckets:null,week:null,prev:null,all:$records.all,coverage:"unavailable"} else . end' 2>/dev/null || _metrics_zero_json
   fi
   rm -rf "$_scratch" 2>/dev/null || true
 }
@@ -365,10 +468,20 @@ _render_momentum_board() {
   kann="$(_commafy "$kall") artifacts total"
   know_week="+${kw}"
 
-  printf "  %-11s%5s   5-week %s   %s\n\n" "sessions" "$sw" "$(_spark "$sb")" "$sann"
+  if [ "$(_metrics_read '.sessions.coverage // "bounded"' bounded)" = unavailable ]; then
+    printf "  sessions   unavailable · bounded history could not be read\n\n"
+  else
+    printf "  %-11s%5s   5-week %s   %s\n\n" "sessions" "$sw" "$(_spark "$sb")" "$sann"
+  fi
   printf "  %-11s%5s   5-week %s   %s\n\n" "commits" "$cw" "$(_spark "$cb")" "$cann"
   printf "  %-11s%5s   5-week %s   %s\n\n" "handoffs" "$hw" "$(_spark "$hb")" "$hann"
   printf "  %-11s%5s   5-week %s   %s\n" "knowledge" "$know_week" "$(_spark "$kb")" "$kann"
   echo "$separator"
-  printf "  %s sessions · %s commits · %s handoffs all-time\n" "$(_commafy "$sall")" "$(_commafy "$call")" "$(_commafy "$hall")"
+  session_label="$(_commafy "$sall")"
+  [ "$(_metrics_read '.sessions.all == null' false)" = true ] && session_label="unknown"
+  printf "  %s sessions · %s commits · %s handoffs all-time\n" "$session_label" "$(_commafy "$call")" "$(_commafy "$hall")"
+  spirit_all=$(_metrics_read '.spirit_intents.all // 0' 0)
+  if [ "$spirit_all" -gt 0 ] 2>/dev/null; then
+    printf "  %s spirit intents recorded · partial coverage\n" "$spirit_all"
+  fi
 }

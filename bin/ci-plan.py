@@ -19,7 +19,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"^[0-9a-f]{40}$")
-OWNER_GROUPS = {"shell-contracts": "shell_contracts", "runtime-parity": "runtime",
+OWNER_GROUPS = {"shell-contracts": "shell_contracts", "shell-contracts-loom": "shell_contracts",
+                "runtime-parity": "runtime", "runtime-contracts-python": "runtime",
+                "runtime-contracts-spirit": "runtime",
                 "postgres-proofs": "api_postgres", "artifacts-tests": "artifacts"}
 
 

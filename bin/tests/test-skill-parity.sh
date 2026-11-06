@@ -111,6 +111,7 @@ check('inspection-denied', 10, 'cannot inspect process 200')
 check('ps-error', 10, 'injected ps failure')
 PYSWEEP
 [ "${1:-}" != --sweep-only ] || exit 0
+boot python3 "$ROOT/evals/skill-parity/test_seed.py"
 env -i "${BOOTSTRAP[@]}" perl -e 'setpgrp(0,0); exec @ARGV' -- python3 - "$ROOT" "$TEST_ROOT" "${EGREGORE_LIVE_INTEGRATION:-0}" <<'PYTEST' &
 import json
 import ast
@@ -147,12 +148,63 @@ if not live:
 def call(args, *, env=None, cwd=None, code=0, timeout=120):
     __tracebackhide__ = True
     selected = parent if env is None else env
+    if len(args) > 1 and (args[1] == rig / 'run.sh' or
+                         (args[1] == rig / 'fixture.sh' and len(args) > 2 and args[2] == 'build')):
+        args = [*args, '--seed-cache', tmp / 'source-seeds']
     command = ['env', '-i', *(f'{k}={v}' for k, v in selected.items()), *map(str, args)]
     result = subprocess.run(command, env=dict(os.environ), cwd=cwd,
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     if result.returncode != code:
+        if len(args) > 1 and args[1] == rig / 'run.sh' and '--out' in args[:-1]:
+            try:
+                rig_diagnostics(Path(args[args.index('--out') + 1]))
+            except Exception as error:
+                print(f'skill-parity rig diagnostics unavailable: {type(error).__name__}: {error}', flush=True)
         raise AssertionError(f'command exited {result.returncode}; expected {code}; captured output withheld') from None
     return result.stdout
+
+# A failed rig run names its failing cells here, or CI shows only the
+# withheld assertion (#1990). Only the rig's own report files are printed,
+# never the command's captured output: summary.md, then for each FAIL or
+# INVALID cell its logs, non-empty receipts and the end of its event stream,
+# 200 lines at most per cell. The cells are synthetic fixtures (mock harness,
+# seeded people file). seed.json is left out: it lists every fixture file.
+DIAGNOSTIC_FILES = ('build.log', 'turn-1.exit', 'capture.log', 'final.md')
+DIAGNOSTIC_FILE_LINES = 60
+DIAGNOSTIC_EVENT_LINES = 40
+DIAGNOSTIC_CELL_LINES = 200
+
+def rig_diagnostics(out):
+    summary = out / 'summary.md'
+    print(f'skill-parity rig diagnostics ({out.name}):', flush=True)
+    print(summary.read_text() if summary.is_file() else '(the rig wrote no summary.md)', flush=True)
+    verdicts = {}
+    if (out / 'summary.json').is_file():
+        for item in read(out / 'summary.json').get('cells', []):
+            verdicts[(item.get('skill'), item.get('case'), item.get('harness'))] = item.get('verdict')
+    for cell in sorted(path.parent for path in out.glob('*/cell.json')):
+        meta = read(cell / 'cell.json')
+        verdict = verdicts.get((meta.get('skill'), meta.get('case'), meta.get('harness')), 'no verdict')
+        if verdict not in ('FAIL', 'INVALID', 'no verdict'):
+            continue
+        lines = []
+        for name in DIAGNOSTIC_FILES:
+            if (cell / name).is_file():
+                lines += [f'--- {name}', *(cell / name).read_text(errors='replace').splitlines()[-DIAGNOSTIC_FILE_LINES:]]
+        for receipt in sorted((cell / 'receipts').glob('*.txt')):
+            text = receipt.read_text(errors='replace')
+            if text.strip():
+                lines += [f'--- receipts/{receipt.name}', *text.splitlines()[-DIAGNOSTIC_FILE_LINES:]]
+        # The event tail always fits; logs and receipts share the rest.
+        events = []
+        if (cell / 'events.jsonl').is_file():
+            events = [f'--- events.jsonl (last {DIAGNOSTIC_EVENT_LINES} lines)',
+                      *(cell / 'events.jsonl').read_text(errors='replace').splitlines()[-DIAGNOSTIC_EVENT_LINES:]]
+        room = DIAGNOSTIC_CELL_LINES - len(events)
+        print(f'=== cell {cell.name}: {verdict}', flush=True)
+        print('\n'.join(lines[:room] + events), flush=True)
+        if len(lines) > room:
+            print(f'... {len(lines) - room} lines of logs and receipts for {cell.name} not shown', flush=True)
 
 def write(path, obj):
     # Event streams and CLI session records are JSON Lines: one record per line.
@@ -625,6 +677,27 @@ assert len(data['cells']) == 7 and all(c['harness'] == 'mock' for c in data['cel
 assert {(c['skill'], c.get('case', '')): c['verdict'] for c in data['cells']} == expected, 'unexpected baseline verdicts'
 assert len(data['parity']) == 7 and all(p['status'] == 'insufficient coverage' for p in data['parity']), 'one harness must not certify parity'
 
+# A failed run names only its failing cells, each within its line bound (#1990).
+diagnosed = tmp / 'diagnosed'
+failing = copy_cell(diagnosed, 'note-mock')
+shutil.copytree(baseline / 'reflect-mock', diagnosed / 'reflect-mock')
+(failing / 'turn-1.exit').write_text('1\n')
+with (failing / 'events.jsonl').open('a') as f:
+    for number in range(300):
+        f.write(json.dumps(dict(turn=1, kind='text', text=f'filler {number}')) + '\n')
+report(diagnosed, code=1)
+printed = io.StringIO()
+with contextlib.redirect_stdout(printed):
+    rig_diagnostics(diagnosed)
+shown = printed.getvalue()
+cell_block = shown.split('=== cell note-mock: FAIL\n', 1)[-1].split('\n=== cell ', 1)[0]
+assert '=== cell note-mock: FAIL' in shown and '=== cell reflect-mock' not in shown, 'diagnostics must show failing cells only'
+assert '| note | mock | FAIL' in shown, 'diagnostics must print summary.md'
+assert len(cell_block.splitlines()) <= DIAGNOSTIC_CELL_LINES + 1, 'a failing cell must stay within its line bound'
+assert '--- turn-1.exit' in cell_block and 'filler 299' in cell_block and 'filler 259' not in cell_block, \
+    'the cell block must show its exit receipt and only the last 40 event lines'
+print('PASS rig: a failed run names its failing cells within their line bound', flush=True)
+
 paired = tmp / 'paired-note'
 call(['bash', rig / 'run.sh', '--skill', 'note', '--harness', 'mock,mock2', '--keep', '--out', paired])
 pair = read(paired / 'summary.json')
@@ -882,6 +955,10 @@ finally:
 print('PASS 9: scanner failures are loud; live detached worker killed by signal; neighbor survives', flush=True)
 elapsed = time.monotonic() - started
 assert elapsed < 300, f'suite exceeded 300 seconds: {elapsed:.1f}'
+timing_rows = [read(path) for path in tmp.rglob('timings.json')]
+totals = {name: round(sum(row.get(name, 0) for row in timing_rows), 3)
+          for name in ('source-seed', 'isolated-clone', 'total')}
+print('skill-parity fixture timings: ' + json.dumps(dict(fixtures=len(timing_rows), seconds=totals)), flush=True)
 print(f'skill-parity: all deterministic cases passed; startup {"passed" if live else "skipped"} ({elapsed:.1f}s)', flush=True)
 PYTEST
 suite_pid=$!

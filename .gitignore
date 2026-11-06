@@ -14,6 +14,7 @@ mcp.shared.*.json
 # Personal secrets — never commit these
 .env
 .env.local
+.env.telegram-test
 .neo4j-creds
 
 # Local Claude Code overrides (may contain tokens in permission rules)
@@ -35,10 +36,17 @@ mcp.shared.*.json
 # Personal notes — never shared, never committed
 .egregore/notes/
 .egregore/runtime/
+# A sandboxed session's telemetry buffer when per-user state refuses writes
+.egregore/telemetry/
+# No trailing slash on tools and node_modules: a worktree links the main
+# checkout's installs (bin/lib/worktree-links.sh), and a slash pattern
+# matches only real directories, never a link.
+.egregore/tools
 .egregore/secret-entry/
 
 # Eval run outputs (local, per-machine)
 .egregore/eval-runs/
+.egregore/economics/
 eval-runs/
 .egregore/ingest/
 .egregore/notion-export/
@@ -60,7 +68,8 @@ data/*.db
 
 # Build artifacts
 __pycache__/
-node_modules/
+# No trailing slash, so worktree links match too (see .egregore/tools above).
+node_modules
 packages/emissary-plugin/dist/
 .claude/node-compile-cache/
 
@@ -106,3 +115,9 @@ test-results/
 
 # prose-check workflow scratch (dry runs)
 .prose-inputs/
+
+# Private spirit lab, library candidates and verification evidence (never scratch).
+.spirit-workflow-state/
+
+# Local incident preparation, private receipts and synthetic proof artifacts.
+/output/artifact-recovery/

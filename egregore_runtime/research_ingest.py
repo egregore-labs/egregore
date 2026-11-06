@@ -17,7 +17,7 @@ from .contracts import (
     WritebackStatus,
 )
 from .runtime import EgregoreRuntime
-from .policy import scope_allows_path
+from .policy import allows, action_for
 
 
 RESEARCH_INGEST_SCHEMA_VERSION = "egregore-research-ingest/v1"
@@ -164,9 +164,7 @@ class CanonicalResearchIngestService:
             raise PermissionError("; ".join(decision.reasons) or "research ingest denied")
 
         for _, _, _, _, canonical_path, _ in metadata:
-            if decision.scopes and not scope_allows_path(
-                f"memory/{canonical_path}", decision.scopes
-            ):
+            if not allows(decision, f"memory/{canonical_path}", "write", root=self.runtime.canonical_root):
                 raise PermissionError(
                     "research artifact path is outside the actor's authorized scope"
                 )

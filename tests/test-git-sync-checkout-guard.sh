@@ -177,5 +177,40 @@ check "topic branch retains its original framework file" \
 check "framework update commit lands on the base branch" \
   "chore(sync): update framework from upstream" "$(git -C "$ready_repo" log -1 --format=%s)"
 
+# --- Live session: a background refresh never touches the working tree -------
+# The refresh pass of a fast startup (bin/lib/card-delivery.sh) runs while the
+# session works in this checkout: refs only, no autosave, push, switch,
+# fast-forward or framework update.
+live_repo="$(make_fixture live)"
+printf 'unsaved edit\n' > "$live_repo/topic.txt"
+live_head_before="$(git -C "$live_repo" rev-parse HEAD)"
+live_result="$(EGREGORE_GIT_SYNC_LIVE=1 run_sync "$live_repo")"
+check "live refresh stays on the working branch" \
+  "feature/unique" "$(git -C "$live_repo" branch --show-current)"
+check "live refresh makes no autosave commit" \
+  "$live_head_before" "$(git -C "$live_repo" rev-parse HEAD)"
+check "live refresh leaves the unsaved edit uncommitted" \
+  " M topic.txt" "$(git -C "$live_repo" status --porcelain topic.txt)"
+check "live refresh runs no framework update" \
+  "updated=false" "$(printf '%s\n' "$live_result" | grep '^updated=')"
+
+git -C "$live_repo" checkout -- topic.txt
+git -C "$live_repo" switch develop --quiet
+git -C "$live_repo" switch -c ahead --quiet
+printf 'teammate change\n' > "$live_repo/teammate.txt"
+git -C "$live_repo" add teammate.txt
+git -C "$live_repo" commit -m "Teammate change" --quiet
+git -C "$live_repo" push origin ahead:develop --quiet
+git -C "$live_repo" switch develop --quiet
+git -C "$live_repo" branch -D ahead --quiet
+live_base_before="$(git -C "$live_repo" rev-parse HEAD)"
+live_base_result="$(EGREGORE_GIT_SYNC_LIVE=1 run_sync "$live_repo")"
+check "live refresh fetches the base branch" \
+  "$(git -C "$TMP/live/origin.git" rev-parse develop)" "$(git -C "$live_repo" rev-parse origin/develop)"
+check "live refresh does not fast-forward the checked-out base" \
+  "$live_base_before" "$(git -C "$live_repo" rev-parse HEAD)"
+check "live refresh on the base runs no framework update" \
+  "updated=false" "$(printf '%s\n' "$live_base_result" | grep '^updated=')"
+
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

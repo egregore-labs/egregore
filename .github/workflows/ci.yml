@@ -2,6 +2,8 @@ name: CI
 
 # One planner routes the existing strict owners. Release candidates and full
 # runs are selected by the planner from the event and requested mode.
+# Each pull request is tested once it is ready; develop as a whole is tested by
+# the nightly full run (nightly-ci.yml), not again after every merge.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
@@ -17,7 +19,8 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  # write: a failing pull request job cancels the rest of its own run.
+  actions: write
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.mode || 'affected' }}
@@ -157,9 +160,17 @@ jobs:
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
         run: bash tests/test-worktree.sh
 
-      - name: Run agent protocol smoke test
+      - name: Verify traced memory recall passes through untraced and nests spans when traced
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
-        run: bash tests/test-agent-protocol.sh
+        run: bash tests/test-search-traced.sh
+
+      - name: Verify session records and personal controls
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-session-record.sh
+
+      - name: Verify session record greeting
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-greeting-records.sh
 
       - name: Test greeting in Bash and Zsh
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
@@ -197,6 +208,64 @@ jobs:
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
         run: bash bin/tests/test-prose-check.sh
 
+      - name: Test brown palette guidance ratchet
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-palette-guidance.sh
+
+      - name: Test side-stripe ratchet
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash bin/tests/test-side-stripes.sh
+
+      - name: Activity and handoff lifecycle
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-handoff-activity-lifecycle.sh
+
+      - name: CI suite ownership
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-ci-test-ownership.sh
+
+      - name: CI shard partition
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-suite-shard.sh
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
+
+  shell-contracts-loom:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.shell_contracts == 'true') }}
+    name: Strict shell contracts · loom
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install shell suite dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zsh procps util-linux
+          # Missing Zsh must fail here, not become a passing coverage skip.
+          for tool in bash jq zsh pgrep setsid; do command -v "$tool"; done
+
+      - name: Run agent protocol smoke test
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-agent-protocol.sh
+
       - name: Loom routing
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
         run: bash bin/tests/test-loom.sh
@@ -228,18 +297,18 @@ jobs:
       - name: Minion workflow
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
         run: bash bin/tests/test-minion-workflow.sh
-
-      - name: Activity and handoff lifecycle
-        if: ${{ !cancelled() && needs.plan.result == 'success' }}
-        run: bash tests/test-handoff-activity-lifecycle.sh
-
-      - name: CI suite ownership
-        if: ${{ !cancelled() && needs.plan.result == 'success' }}
-        run: bash tests/test-ci-test-ownership.sh
-
-      - name: CI shard partition
-        if: ${{ !cancelled() && needs.plan.result == 'success' }}
-        run: bash tests/test-suite-shard.sh
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   multiplayer-poc-tests:
     needs: plan
@@ -264,6 +333,18 @@ jobs:
 
       - name: Test multiplayer Thread protocol, governance, lifecycle, and dependency continuation
         run: node --test threads/experiments/multiplayer-poc/test/*.test.mjs
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   artifacts-tests:
     needs: plan
@@ -313,31 +394,38 @@ jobs:
 
       - name: Test artifact dark mode with installed dependencies
         run: bash bin/tests/test-artifact-dark-mode.sh
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   runtime-parity:
     needs: plan
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.runtime == 'true') }}
     name: Runtime contracts
     runs-on: ubuntu-slim
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - name: Require successful CI plan
         env:
           CI_PLAN_RESULT: ${{ needs.plan.result }}
         run: test "$CI_PLAN_RESULT" = success
       - uses: actions/checkout@v4
-        with:
-          # Frozen evaluation export verifies the manifest's original commit.
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The capability probe and packaged-runtime PTY fixtures invoke Python.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install focused test dependencies
-        run: python -m pip install pytest==9.0.2 PyYAML==6.0.3
-
       - name: Require Runtime fixture capabilities
         run: |
           for tool in git jq shasum; do command -v "$tool"; done
@@ -363,6 +451,43 @@ jobs:
         working-directory: packages/create-egregore
         # test:package bounds Node file concurrency for PTY timing on one CPU.
         run: npm run test:package
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
+
+  runtime-contracts-python:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.runtime == 'true') }}
+    name: Runtime contracts · python
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+        with:
+          # Frozen evaluation export verifies the manifest's original commit.
+          fetch-depth: 0
+      # Skill migration and Python contracts also exercise Node entry points.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install focused test dependencies
+        run: python -m pip install pytest==9.0.2 PyYAML==6.0.3
 
       - name: Verify strict Runtime skill migration contracts
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
@@ -375,10 +500,15 @@ jobs:
           tests/test_runtime_telemetry.py tests/test_operation_observations.py
           tests/test_runtime_observe.py tests/test_runtime_writeback.py
           tests/test_runtime_upgrade.py
+          tests/test_artifact_renderer_install.py
           tests/test_runtime_source_open.py tests/test_runtime_artifacts.py
           tests/test_runtime_threads_scrolls.py tests/test_runtime_batch_recovery.py
           tests/test_runtime_research_ingest.py tests/test_runtime_contracts.py
           tests/test_harness_observe.py tests/test_runtime_continuity.py
+          tests/test_runtime_taste.py tests/test_mind_notice.py
+          tests/test_installation.py tests/test_otel_span.py tests/test_session_trail.py tests/test_record_outcomes.py
+          tests/test_checkpoint_cost.py
+          tests/test_runtime_documents.py tests/test_document_lines.py tests/test_document_modes.py tests/test_document_parity.py
 
       - name: Verify retrieval readiness and save preflight without live services
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
@@ -407,13 +537,174 @@ jobs:
         run: >-
           python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
           tests/test_ci_plan.py tests/test_ci_workflow.py tests/test_ci_domains.py tests/test_ci_reuse.py tests/test_ci_usage.py tests/test_nightly_ci.py
-          tests/test_release_ci.py
+          tests/test_release_ci.py tests/test_ci_flake_rerun.py
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
+
+  runtime-contracts-spirit:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.runtime == 'true') }}
+    name: Runtime contracts · spirit
+    # The Pi, Spirit and Durable corpus exceeds Slim's hard 15-minute limit and
+    # needs the verifier sandbox; keep it one strict owner on a bounded VM.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+        with:
+          # Record publication and memory push proofs read Git history.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install focused test dependencies
+        run: python -m pip install pytest==9.0.2 PyYAML==6.0.3
+
+      - name: Install independent verifier sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles
+          # Noble ships this purpose-built profile as an inactive extra. It
+          # permits bwrap setup while stripping capabilities from its children.
+          # Keep global user-namespace restrictions and network isolation intact.
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+
+      - name: Install locked offline Pi fixture dependencies
+        working-directory: packages/egregore-durable
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Require Runtime fixture capabilities
+        run: |
+          for tool in git jq shasum bwrap; do command -v "$tool"; done
+          python - <<'PY'
+          import os
+          import pty
+          import socket
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          from agent_worker.local_executor import _sandbox_command, _verification_environment
+
+          master, slave = pty.openpty()
+          os.close(master)
+          os.close(slave)
+          with socket.socket() as listener:
+              listener.bind(("127.0.0.1", 0))
+          # Prove the actual production verifier path, including its Python
+          # standard library. setup-python lives outside the sandbox roots.
+          with tempfile.TemporaryDirectory(prefix="runtime-verifier-") as directory:
+              root = Path(directory).resolve()
+              workspace = root / "worktree"
+              workspace.mkdir()
+              (workspace / "probe.txt").write_text("sandboxed")
+              verifier = root / "verify.py"
+              verifier.write_text("import unittest\nfrom pathlib import Path\nassert Path('probe.txt').read_text() == 'sandboxed'\n")
+              result = subprocess.run(
+                  _sandbox_command(["/usr/bin/python3", "-I", str(verifier)], workspace),
+                  cwd=workspace, env=_verification_environment(workspace),
+                  capture_output=True, text=True, timeout=10)
+              if result.returncode != 0:
+                  raise RuntimeError("Independent verifier sandbox failed: " + result.stderr)
+          PY
+
+      - name: Verify offline Spirit and Pi owner contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        # Private-selection and paid/live opt-ins remain unset. These suites use
+        # disposable state, controlled providers, and selected byte fixtures.
+        run: >-
+          python -m pytest --noconftest -p no:cacheprovider -o addopts='' -q
+          tests/test_pi_*.py tests/test_spirit_*.py tests/test_local_agent_*.py
+          tests/test_durable_issue.py tests/test_memory_push*.py
+          tests/test_native_record_admission.py tests/test_record_*.py
+          tests/test_policy_readonly.py
+
+      - name: Verify offline Durable package contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        working-directory: packages/egregore-durable
+        # Place the runner flag before filenames; npm test's appended arguments
+        # would put it after the package's test glob.
+        run: node --test --test-concurrency=1 test/*.test.js
+
+      - name: Verify fixed nested Spirit evaluators and controlled Pi worker
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        working-directory: packages/egregore-durable
+        run: node --test --test-concurrency=1 test/spirit-experiments/*.test.mjs test/spirit-transfer/*.test.mjs
+
+      - name: Verify Spirit catalog contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-spirit-catalog.sh
+
+      - name: Verify Spirit contribution contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-spirit-contribution.sh
+
+      - name: Verify offline Spirit delivery contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-spirit-delivery.sh
+
+      - name: Verify Spirit library contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-spirit-library.sh
+
+      - name: Verify Spirit system map contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        run: bash tests/test-spirit-map.sh
+
+      - name: Verify remaining offline Spirit JavaScript contracts
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        shell: bash
+        run: |
+          suites=()
+          for suite in tests/test-spirit-*.mjs; do
+            # These leaves already run through the five owned wrappers above.
+            case "$suite" in
+              tests/test-spirit-catalog.mjs|tests/test-spirit-contribution.mjs|tests/test-spirit-delivery.mjs|tests/test-spirit-delivery-cli.mjs|tests/test-spirit-library.mjs|tests/test-spirit-map.mjs) continue ;;
+            esac
+            suites+=("$suite")
+          done
+          test "${#suites[@]}" -gt 0
+          node --test --test-concurrency=1 "${suites[@]}"
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
+
 
   test:
     needs: plan
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.api_core == 'true') }}
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    # Cold Python/Node setup plus dependency installation took three minutes
+    # before API execution in run 39424514496. Keep a bounded budget that also
+    # permits the complete API and OAuth suites to finish on a cold cache.
+    timeout-minutes: 10
 
     steps:
       - name: Require successful CI plan
@@ -429,17 +720,23 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             api/requirements.txt
-            .github/workflows/ci.yml
+            .github/ci-api-requirements.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: packages/egregore-artifacts/package-lock.json
 
       - name: Install dependencies
-        run: |
-          pip install -r api/requirements.txt
-          pip install pytest respx pytest-html pytest-asyncio pytest-metadata pglast neo4j
+        run: pip install -r .github/ci-api-requirements.txt
+
+      # The API renders handoffs through the kit's Node renderer; the routing
+      # parity tests compare it with the Python fallback, so they need it.
+      - name: Install egregore-artifacts deps
+        working-directory: packages/egregore-artifacts
+        run: npm ci
 
       - name: Run corpus map and MCP input contracts
         run: python -m pytest -q tests/test_corpus_map.py tests/test_mcp_users.py
@@ -456,11 +753,30 @@ jobs:
           python -m pytest -q \
             api/test_oauth.py \
             api/test_web_auth.py \
+            api/test_account_linking_routes.py \
+            tests/test_account_linking_service.py \
+            tests/test_member_authority_api.py \
+            tests/test_member_authority_service.py \
+            tests/test_member_authority_contract.py \
+            tests/test_spirit_onboarding_api.py \
+            tests/test_security_logging.py \
             api/test_html_safety.py \
             api/test_design_render.py \
             api/test_connect_runtime.py \
             api/test_teams.py \
             api/test_slack.py
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   emissary-tests:
     needs: plan
@@ -488,6 +804,18 @@ jobs:
       - name: Run Emissary package tests
         working-directory: packages/egregore-emissary
         run: npm test
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   respond-proof:
     needs: plan
@@ -524,6 +852,18 @@ jobs:
           path: test-results/emissary/respond-loop/*.json
           if-no-files-found: error
           retention-days: 30
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   mcp-resource-server:
     needs: plan
@@ -569,6 +909,18 @@ jobs:
             docker logs egregore-emissary-mcp-proof
             exit 1
           fi
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   site-contract:
     needs: plan
@@ -605,6 +957,18 @@ jobs:
 
       - name: Build the production site
         run: npm --prefix site run build
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   api-image:
     needs: plan
@@ -635,6 +999,18 @@ jobs:
             docker logs egregore-api-proof
             exit 1
           fi
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   postgres-proofs:
     needs: plan
@@ -687,7 +1063,12 @@ jobs:
       - name: Prove issue feed receipt concurrency and role isolation
         env:
           ISSUE_FEED_TEST_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
-        run: python -m pytest -q tests/test_issue_feed_sql.py
+        run: python -m pytest -q tests/test_issue_feed_sql.py tests/test_support_reports_sql.py
+
+      - name: Prove page access grants against concurrent audience changes
+        env:
+          ISSUE_FEED_TEST_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+        run: python -m pytest -q tests/test_artifact_access_sql.py
 
       - name: Prove Runtime identity and membership removal against PostgreSQL
         env:
@@ -697,6 +1078,32 @@ jobs:
           USE_SUPABASE: 'false'
         run: python -m pytest -q tests/test_runtime_identity_postgres.py
 
+      - name: Prove native account linking
+        env:
+          EGREGORE_ACCOUNT_LINK_TEST_POSTGRES_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+          PYTHON_DOTENV_DISABLED: '1'
+          USE_SUPABASE: 'false'
+        run: >-
+          python -m pytest -q
+          tests/test_account_linking_postgres.py
+          tests/test_account_linking_service.py
+
+      - name: Prove spirit member authority and onboarding
+        # These suites need the API dependencies and the disposable database;
+        # the offline Runtime job skips them when fastapi and supabase are absent.
+        env:
+          EGREGORE_ACCOUNT_LINK_TEST_POSTGRES_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+          EGREGORE_MEMBER_AUTHORITY_TEST_POSTGRES_DSN: postgresql://postgres:proof@127.0.0.1:5432/egregore_test_ci
+          PYTHON_DOTENV_DISABLED: '1'
+          USE_SUPABASE: 'false'
+        run: >-
+          python -m pytest -q
+          tests/test_member_authority_postgres.py
+          tests/test_spirit_onboarding_postgres.py
+          tests/test_spirit_onboarding_review.py
+          tests/test_spirit_operator_pairing_postgres.py
+          tests/test_spirit_operator_scope_postgres.py
+
       - name: Prove handle security and concurrency contracts
         run: bash tests/test-handle-claim-pg16.sh
 
@@ -705,6 +1112,18 @@ jobs:
 
       - name: Prove donation-ingestion security and concurrency contracts
         run: bash tests/test-emissary-donation-ingestion-pg16.sh
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   static-contracts:
     needs: plan
@@ -768,6 +1187,18 @@ jobs:
             tests/test_validate_handoff_v1.py \
             tests/test_publication_audit.py \
             tests/test_release_safety.py
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   baseline:
     needs: plan
@@ -808,6 +1239,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
         run: |
           if [ -z "$BASE" ]; then BASE="${MERGE_BASE_REF#refs/heads/}"; fi
+          # A dispatch has no event base: use the instance's integration branch.
+          if [ -z "$BASE" ] && [ -f egregore.json ]; then
+            SCRIPT_DIR="$PWD"; . bin/lib/config.sh; BASE=$(_get_base_branch) || exit 2
+          fi
           if [ -z "$BASE" ]; then BASE=develop; fi
           git fetch origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" || exit 2
           # PR and merge-queue classification uses the event's immutable base.
@@ -861,6 +1296,18 @@ jobs:
             suite-logs/
           if-no-files-found: ignore
           retention-days: 7
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   shellcheck:
     needs: plan
@@ -879,15 +1326,79 @@ jobs:
           scandir: './bin'
           severity: error
           format: gcc
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
+
+  mind-fast:
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.mind == 'true') }}
+    name: Mind fast contracts
+    runs-on: ubuntu-slim
+    # The suite takes 7 to 8 minutes on a quiet runner; 10 killed it four times
+    # in two days under load (#2022). The cap stays, with room for a slow runner.
+    timeout-minutes: 15
+    steps:
+      - name: Require successful CI plan
+        env:
+          CI_PLAN_RESULT: ${{ needs.plan.result }}
+        run: test "$CI_PLAN_RESULT" = success
+      - uses: actions/checkout@v4
+      - name: Fetch the exporter before compositions (compose.py PARITY_BASE)
+        run: git fetch --no-tags --depth=1 origin c3866536ed556510869f78c1a9b61de54f3f98b6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run synthetic Python, pure JS and worker contracts
+        # Child-cleanup proofs inspect process state; slim images do not promise ps.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends procps
+          python3 experiments/egregore-mind/mind/tests/gate.py --profile fast --out "$RUNNER_TEMP/mind-fast"
+      - name: Retain this run's exact Mind evidence
+        if: ${{ always() && needs.plan.result == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mind-fast-contracts
+          path: ${{ runner.temp }}/mind-fast
+          if-no-files-found: error
+          retention-days: 7
+      # A pull request run stops at its first failure: the other jobs'
+      # minutes would only report more of a result that is already red.
+      - name: Stop the run at the first failure
+        if: ${{ failure() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          curl -fsS -X POST -o /dev/null
+          -H "Authorization: Bearer $GH_TOKEN"
+          -H "Accept: application/vnd.github+json"
+          "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+          || echo "::warning::could not stop the run"
 
   full-result:
     name: Full CI result — ${{ github.sha }}
     needs:
       - plan
       - shell-contracts
+      - shell-contracts-loom
       - multiplayer-poc-tests
       - artifacts-tests
       - runtime-parity
+      - runtime-contracts-python
+      - runtime-contracts-spirit
       - test
       - emissary-tests
       - respond-proof
@@ -898,6 +1409,7 @@ jobs:
       - static-contracts
       - baseline
       - shellcheck
+      - mind-fast
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.plan.result != 'success' || needs.plan.outputs.baseline_strict == 'true') }}
     runs-on: ubuntu-slim
     timeout-minutes: 2
@@ -912,10 +1424,10 @@ jobs:
           import sys
 
           required = {
-              "plan", "shell-contracts", "multiplayer-poc-tests", "artifacts-tests",
-              "runtime-parity", "test", "emissary-tests", "respond-proof",
+              "plan", "shell-contracts", "shell-contracts-loom", "multiplayer-poc-tests", "artifacts-tests",
+              "runtime-parity", "runtime-contracts-python", "runtime-contracts-spirit", "test", "emissary-tests", "respond-proof",
               "mcp-resource-server", "site-contract", "api-image", "postgres-proofs",
-              "static-contracts", "baseline", "shellcheck",
+              "static-contracts", "baseline", "shellcheck", "mind-fast",
           }
           results = json.loads(os.environ["CI_NEEDS_JSON"])
           if set(results) != required:

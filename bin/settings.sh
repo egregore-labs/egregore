@@ -23,6 +23,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -54,9 +56,9 @@ _save() {
 # start's settings sync (bin/lib/settings-drift.sh).
 _control_plane_push() {
   local api_url api_key payload actor response revision
-  api_url=$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)
+  api_url=$(_config_api_url) || return 0
   [ -n "$api_url" ] || return 0
-  api_key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+  api_key=$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
   [ -n "$api_key" ] || return 0
   actor=$(jq -r '.github_username // empty' "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null)
   payload=$(jq -c --arg by "$actor" '{
@@ -70,10 +72,13 @@ _control_plane_push() {
     --data-binary "$payload" 2>/dev/null) || return 0
   revision=$(printf '%s' "$response" | jq -r '.settings_revision // empty' 2>/dev/null)
   if [ -n "$revision" ] && [ -f "$SCRIPT_DIR/.egregore-state.json" ]; then
-    local st
-    st="$(mktemp "$SCRIPT_DIR/.egregore-state.json.XXXXXX")" || return 0
-    if jq --arg rev "$revision" '.org_settings_revision = $rev' "$SCRIPT_DIR/.egregore-state.json" > "$st" 2>/dev/null && [ -s "$st" ]; then
-      mv "$st" "$SCRIPT_DIR/.egregore-state.json"
+    local st state_file
+    # A worktree links the checkout's state file: the rename lands on the
+    # file it points to, so the link stays and the installation keeps one state.
+    state_file="$(realpath "$SCRIPT_DIR/.egregore-state.json" 2>/dev/null)" || state_file="$SCRIPT_DIR/.egregore-state.json"
+    st="$(mktemp "$state_file.XXXXXX")" || return 0
+    if jq --arg rev "$revision" '.org_settings_revision = $rev' "$state_file" > "$st" 2>/dev/null && [ -s "$st" ]; then
+      mv "$st" "$state_file"
     else
       rm -f "$st"
     fi
@@ -104,22 +109,78 @@ EOF
 
 # ── verbs ────────────────────────────────────────────────────────────────
 
+_hosting_status() {
+  # Read local configuration only. A saved key is not proof that the hosted
+  # service can be reached or that the credential is still accepted.
+  local api_key="" has_key=false slug recovery="egregore connect"
+  if [ -r "$SCRIPT_DIR/.env" ]; then
+    api_key=$(sed -n 's/^EGREGORE_API_KEY=//p' "$SCRIPT_DIR/.env" | tail -n 1)
+    api_key="${api_key#"${api_key%%[![:space:]]*}"}"
+    api_key="${api_key%"${api_key##*[![:space:]]}"}"
+    case "$api_key" in
+      \"*\"|\'*\') api_key="${api_key:1:${#api_key}-2}" ;;
+    esac
+    [ -n "${api_key//[[:space:]]/}" ] && has_key=true
+  fi
+  # Match publish-artifact.sh's route selection separately from the saved
+  # configuration check. Raw nonempty overrides (even malformed ones) select
+  # organisation upload, so they must never imply the public relay's expiry.
+  local effective_url="${EGREGORE_API_URL:-}" effective_key="${EGREGORE_API_KEY:-}" org_route=false
+  if [ -f "$SCRIPT_DIR/.env" ]; then
+    effective_url="${effective_url:-$(grep '^EGREGORE_API_URL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+    effective_key="${effective_key:-$(grep '^EGREGORE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)}"
+  fi
+  effective_url="${effective_url:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}"
+  if [ -n "$effective_url" ] && [ -n "$effective_key" ]; then org_route=true; fi
+  slug=$(jq -r '.slug // empty' "$CONFIG")
+  if _valid_token "$slug"; then recovery="egregore connect $slug"; fi
+  jq --argjson has_key "$has_key" --argjson org_route "$org_route" --arg recovery "$recovery" '
+    def nonblank: if type == "string" then test("\\S") else false end;
+    (.features.publishing != false) as $publishing |
+    (.features.public_relay == true) as $relay |
+    (((if .mode == null then "connected" else .mode end) == "connected") and
+      (.api_url | nonblank) and $has_key) as $configured |
+    (if $publishing == false then "disabled"
+     elif $configured then "connected_configured"
+     elif $org_route then "setup_incomplete"
+     elif $relay then "public_relay"
+     else "setup_incomplete" end) as $readiness |
+    {
+      domain: "hosting",
+      publishing: $publishing,
+      readiness: $readiness,
+      connection_configured: $configured,
+      public_relay: $relay,
+      connectivity: "not_checked",
+      recovery_command: (if $readiness == "setup_incomplete" then $recovery else null end)
+    }' "$CONFIG"
+}
+
 cmd_hosting() {
   local action="${1:-status}"
-  # NEVER use jq's `// "true"` here: `//` treats an explicit `false` as empty and
-  # would return the default, silently defeating the off-switch. Test `!= false`
-  # so absent/true => enabled, explicit false => disabled. `enabled` is the
-  # resolved boolean string ("true"/"false").
-  local enabled; enabled="$(jq -r '.features.publishing != false' "$CONFIG" 2>/dev/null || echo "true")"
   case "$action" in
     status)
+      local status; status="$(_hosting_status)"
       if [ "$JSON" = 1 ]; then
-        jq -n --argjson on "$enabled" '{domain:"hosting", publishing:$on}'
-      elif [ "$enabled" = "false" ]; then echo "Hosting (egregore.xyz): OFF"
-      else echo "Hosting (egregore.xyz): ON"; fi ;;
+        printf '%s\n' "$status"
+      else
+        case "$(printf '%s' "$status" | jq -r '.readiness')" in
+          disabled) echo "Hosting (egregore.xyz): OFF" ;;
+          connected_configured)
+            echo "Hosting (egregore.xyz): ACCESS CONFIGURED"
+            echo "  Connection not checked." ;;
+          public_relay)
+            echo "Hosting (egregore.xyz): PUBLIC RELAY"
+            echo "  Anyone with the link can read published artifacts for 7 days. Connection not checked." ;;
+          setup_incomplete)
+            echo "Hosting (egregore.xyz): SETUP INCOMPLETE"
+            echo "  Publishing is enabled; connection setup is incomplete."
+            echo "  Run: $(printf '%s' "$status" | jq -r '.recovery_command')" ;;
+        esac
+      fi ;;
     on)
       _save '.features.publishing = true'
-      echo "Hosting (egregore.xyz): ON" ;;
+      JSON=0 cmd_hosting status ;;
     off)
       _save '.features.publishing = false'
       echo "Hosting (egregore.xyz): OFF — artifacts will no longer upload to egregore.xyz" ;;
@@ -338,7 +399,7 @@ _people_file() {
   fi
   ( cd "$SCRIPT_DIR/memory" 2>/dev/null && git add -A people/ 2>/dev/null \
       && git commit -q -m "chore(settings): $op $user in people" 2>/dev/null \
-      && git push -q 2>/dev/null ) || true
+      && bash "$SCRIPT_DIR/bin/memory-push.sh" --repository "$SCRIPT_DIR/memory" --branch main >/dev/null 2>&1 ) || true
 }
 
 cmd_people() {
@@ -378,10 +439,12 @@ cmd_people() {
 cmd_dump() {
   # Always JSON — the launcher calls this once to render the whole settings screen.
   local people; people="$(_people_json)"
-  jq --argjson people "$people" '{
+  local hosting_status; hosting_status="$(_hosting_status)"
+  jq --argjson people "$people" --argjson hosting_status "$hosting_status" '{
     org: .org_name,
     slug: .slug,
     hosting: (.features.publishing != false),
+    hosting_status: $hosting_status,
     public_relay: (.features.public_relay == true),
     workflow: (
       if ((if has("base_branch") then .base_branch else "develop" end) == "main") then "simple"
@@ -411,7 +474,7 @@ set -- "${_args[@]+"${_args[@]}"}"
 # ── privacy & access (read snapshot) ─────────────────────────────────────
 # One composed JSON for the Settings Privacy & access panel. Identity,
 # membership, and capability values come from the Runtime authorization
-# backend (access-status); this shell layer adds only committed boundary
+# backend (access show --json); this shell layer adds only committed boundary
 # config, the personal boundary-local file, isolation state, and honest
 # constant statements. Never includes secrets, tokens, or internal paths.
 
@@ -441,7 +504,7 @@ cmd_privacy() {
   local access posture locked org_reads personal_reads denied digest graph
   access=$(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" \
     PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m egregore_runtime.harness_cli access-status 2>/dev/null) || true
+    python3 -m egregore_runtime.harness_cli access show --json 2>/dev/null) || true
   printf '%s' "$access" | jq -e . >/dev/null 2>&1 || access='{"status":"attention"}'
   posture=$(jq -r '.boundary.posture // "standard"' "$CONFIG" 2>/dev/null || echo standard)
   locked=$(jq -r 'if (.boundary.locked // false) == true then "true" else "false" end' "$CONFIG" 2>/dev/null || echo false)

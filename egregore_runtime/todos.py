@@ -159,8 +159,9 @@ class CanonicalTodoService:
     def canonical_path(person: str) -> str:
         return f"memory/todos/{_slug(person)}.md"
 
-    def read(self, person: str) -> TodoSnapshot:
-        path = self._path(person)
+    def read(self, person: str, *, source: Path | None = None) -> TodoSnapshot:
+        """Read a person's todos; a read surface passes the ``source`` the predicate resolved."""
+        path = source or self._path(person)
         if not path.exists():
             return TodoSnapshot(_slug(person), False, ())
         return parse_todo_markdown(path.read_text(encoding="utf-8"), person=person)

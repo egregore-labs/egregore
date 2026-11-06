@@ -38,11 +38,6 @@ Internal handoffs use `bin/agent.sh handoff` (`memory/handoffs/` + index,
 via `bin/handoff-run.sh`). External capsules use `egregore-emissary`.
 Never use deprecated `egregore-handoff` for internal handoffs.
 
-## Compatibility
-
-Claude Code follows `CLAUDE.md`; other shell agents use the generated
-contract below. All runtimes share canonical memory.
-
 <!-- BEGIN GENERATED EGREGORE CODEX SPEC — derived from CLAUDE.md by bin/codex-render-spec.mjs; do not edit by hand -->
 
 ## Egregore on Codex
@@ -77,13 +72,14 @@ When a user reports broken or missing framework behavior, the first question is 
 
 ## Cross-Runtime Compatibility
 
-Framework behavior must work across Claude Code, Codex, and Pi Egregores. Put
-shared mechanics in runtime-neutral `bin/` scripts; keep `.claude/`, `.codex/`,
-and `.pi/` as thin adapters to those mechanics. When changing startup, session
-lifecycle, capture, skills, or commands, trace all three runtime entry points
-and add or update a parity test. Do not call a framework change complete based
-on one runtime alone. Regenerate derived Codex and Pi specifications or runtime
-bundles whenever their sources change.
+Share `bin/` mechanics through thin Claude/Codex/Pi/Prime adapters. Startup,
+lifecycle, capture, skill and command changes require tracing every runtime,
+parity tests and regenerated specs/bundles before completion.
+
+Discover via `bash bin/spirit-discovery-codex.sh capabilities.list` (Pi/Prime:
+registered tool). Follow `docs/spirit-discovery.md`: keep seven facets separate;
+generic shell needs one snapshot. Discovery reads code/install evidence, not
+memory, and grants no authority.
 
 ---
 
@@ -142,25 +138,7 @@ For continued project work: **continuation intent → prior workspace → restor
 
 ### Handoff claiming
 
-If `addressed_to_user` handoffs exist and the user is picking one up, create the IMPLEMENTS link after branch creation:
-```bash
-bash bin/graph-op.sh claim-handoff "$SESSION_ID" "$HANDOFF_SESSION_ID" 2>/dev/null &
-```
-
-**Auto-checkout repos from handoff**: after claiming, if `addressed_rich` carries a non-empty `repoState`, check out each entry's branch in its managed repo:
-
-```bash
-PARENT_DIR="$(cd .. && pwd)"
-# For each entry in repoState:
-REPO_DIR="$PARENT_DIR/$REPO_NAME"
-if [ -d "$REPO_DIR/.git" ] || [ -f "$REPO_DIR/.git" ]; then
-  git -C "$REPO_DIR" fetch origin "$BRANCH" --quiet 2>/dev/null
-  git -C "$REPO_DIR" checkout "$BRANCH" 2>/dev/null || \
-    git -C "$REPO_DIR" checkout -b "$BRANCH" "origin/$BRANCH" 2>/dev/null
-fi
-```
-
-Report `✓ Checked out {branch} in {repo1}, {repo2}`; for a merged-away branch, `◐ {repo}: PR #{N} merged — on {base}`. If `repoState` is absent or empty, skip silently.
+When the user picks up a handoff addressed to them, follow `.claude/context/handoff-claiming.md` after branch creation: it claims the handoff and checks out the branches its `repoState` names in each managed repo.
 
 **Exceptions** — skip branching when the user explicitly created or named a branch themselves, or the intent continues the current working branch's topic.
 
@@ -221,7 +199,7 @@ answers it: `open-handoffs`, `pending-questions`, `lineage`, or
 `meeting-history`. Verify projection freshness/coverage and open its canonical
 `evidencePath` before acting. Canonical Markdown wins on disagreement.
 
-Run `catalog` only when the route is unclear. Named reads return bounded stable fields and exact canonical `evidencePath` pointers; open only the returned files needed to answer. When a read reports partial coverage, use `unprojectedPaths` rather than claiming those files are represented in the graph. Use `bin/graph.sh` for unsupported Neo4j queries and never construct curl calls directly. See DEVELOPMENT.md §1 for the schema. Local recall uses Runtime `find`/`open`.
+Run `catalog` only when the route is unclear. Open only the returned `evidencePath` files needed to answer; on partial coverage, name `unprojectedPaths` instead of claiming them. Use `bin/graph.sh` for unsupported Neo4j queries and never construct curl calls directly (schema: DEVELOPMENT.md §1).
 
 ---
 
@@ -234,60 +212,42 @@ For each user-directed organizational lookup, show exactly one visible line:
 - retrieval that actually queries the connected graph:
   `⌕ Egregore Connect · searching your organization’s memory and relationships`
 
-When `EGREGORE_ORG_CONTEXT_V1` is attached, reuse its authorized evidence.
-For a remaining gap continue a Runtime investigation, preserving earlier findings.
-Follow `.claude/context/retrieval-investigation.md`: the model chooses keyword,
-semantic, hybrid, filename, literal, or date inventory; Runtime owns permissions,
-evidence history, pages and per-prompt limits. Empty results allow refinements
-within the requested dates. Never relax the date boundary to manufacture coverage.
-
-**Scope.** Egregore Runtime is for organizational recall only: team memory,
-decisions, handoffs, prior work. Code, files, Git, and tests use the harness's
-normal tools, with no beat and no Runtime call.
-
 **Visibility is the contract.** Emit it verbatim as a standalone assistant
 message before the first tool call that performs the organizational recall
 (the `bin/search.sh` query or a graph read). Tool output does not satisfy it.
-Do not paraphrase the line.
+Do not paraphrase the line. Emit once per episode.
+Never name `Egregore Connect` unless a graph read will actually run.
 
-Use Connect only for a graph traversal that actually runs. Emit once per
-episode.
+**Scope.** Egregore Runtime is for organizational recall only: team memory,
+decisions, handoffs, prior work. Code, files, Git, and tests use the harness's
+normal tools, with no beat and no Runtime call. Startup hydration, graph
+writes, ingestion, background sync, maintenance, and internal queries get no beat.
 
 **Routing:** Organizational recall always enters Egregore Runtime. The model is
 the semantic intent authority, deciding from meaning rather than fixed phrases.
+Do not run retrieval on unrelated prompts or infer graph from recall intent.
 Prompt hooks attach identity and guidance only; they never retrieve evidence.
-Without attached context, choose the appropriate Runtime operation:
+The full retrieval contract arrives with the session's first prompt as
+`EGREGORE_ACTOR_CONTEXT_V1` (later prompts carry a reminder); follow it.
+When `EGREGORE_ORG_CONTEXT_V1` is attached, reuse its authorized evidence.
+When the full contract is not in your context (a subagent, a missed hook, or
+after a compaction), start with
 
 ```bash
 bash bin/search.sh find "<query>" --kind <kind>
 ```
 
-Choose `filename`, `literal`, or `dates` for canonical file lookups; `keyword`
-for BM25; `semantic` for paraphrases; `hybrid` for combined ranking. No mode
-must run first. Open necessary sources together with `bash bin/search.sh open
-memory/path-a.md memory/path-b.md`. Runtime retains request state; do not write
-JSON operations, episode arguments, or gap explanations for normal retrieval.
-Use `find` for model-led discovery; `query` is a compatibility command. Read
-canonical sources through `search.sh open`, never a raw file-read tool or shell
-read. An adequate excerpt already supports an answer; no extra open is needed.
+and follow `.claude/context/retrieval-investigation.md`.
+Open necessary sources together with `bash bin/search.sh open`; never read
+memory with a raw file tool, `grep` or `ls`. Do not `cd` into the sibling memory repository.
+Never relax the date boundary to manufacture coverage.
 
 Search output is model-internal: show only the retrieval line and receipts —
 never ranked blocks, file/rank/excerpt metadata, or raw JSON.
 
-Do not resolve `memory/` to its sibling repo or start with raw `grep`/`ls`.
-Search attaches no graph by default. Open a source only when its excerpt
-cannot support a necessary claim. For current
-team/person synthesis, retain the requested subject and choose a `recent_days`
-window. Use date filters for a known topic, or a bounded date inventory for
-a recent-work overview. `$activity`, `$dashboard`, and `$project`
-display bounded status surfaces only when named or directly requested as a
-card. Explained syntheses of current organizational work and prior-work
-discovery are Runtime/QMD recall. Do not run retrieval on unrelated prompts or
-infer graph from recall intent.
-
-Do not emit the beat for code search, Git inspection, startup hydration, graph
-writes, ingestion, background sync, maintenance, or internal queries.
-Never name `Egregore Connect` unless a graph read will actually run.
+`$activity`, `$dashboard`, and `$project` display bounded status surfaces only
+when named or directly requested as a card.
+Explained syntheses of current organizational work and prior-work discovery are Runtime/QMD recall.
 
 ---
 
@@ -337,12 +297,15 @@ Never repeat it.
 
 ## Memory
 
-`memory/` is a symlink to the memory repo defined in `egregore.json`. Key directories:
-- `people/` — team directory
-- `handoffs/` — session handoffs + `index.md`
-- `knowledge/decisions/` — org decisions
-- `knowledge/patterns/` — emergent patterns
-- `infrastructure/` — service registry (URLs, names, credential locations)
+`memory/` links to the repo in `egregore.json`:
+- `people/` — team
+- `handoffs/` — handoffs and index
+- `knowledge/decisions/` — decisions
+- `knowledge/patterns/` — patterns
+- `infrastructure/` — services and credential locations
+
+Write memory through its commands, never the files: `$reflect` for decisions, `$handoff` for handoffs.
+
 
 Always use HTTPS for git operations — `github-auth.sh` handles credential storage.
 
@@ -357,9 +320,8 @@ Loom is Claude-specific; skip its preambles and `bin/loom.sh` calls. Use native 
 ## Git Workflow
 
 `develop` is the default integration branch. A top-level
-`egregore.json.base_branch` replaces it for instances using another integration
-branch; `base_branch: "main"` is single-branch mode. Users never interact with
-git directly.
+`egregore.json.base_branch` replaces it; `base_branch: "main"` is single-branch
+mode. Users never interact with git directly.
 
 ```
 main ← selected `/release` candidates
@@ -373,10 +335,9 @@ develop ← CL integration (available internally)
 - **On launch**: syncs the configured base branch + memory. Does NOT create a branch.
 - **Branch creation**: required before project changes; read-only work stays put.
 - **Resuming**: rebase onto the configured base branch and continue.
-- **Read-only sessions**: no branch creation based on message count.
 - **`$save`**: pushes the working branch and opens a PR to the configured base. Auto-merges markdown-only PRs.
 - **Memory repo**: stays on main (separate repo, auto-merge).
-- **Never push directly to the configured base, main, or develop.** All changes flow through PRs.
+- **Never push directly to the configured base, main, or develop.** Changes flow through PRs, merged with `bash bin/agent.sh merge <pr>`, never `gh pr merge`; a red check needs a receipt naming each failing job and why.
 
 ### Pull request format (all harnesses)
 
@@ -384,7 +345,7 @@ Every PR body follows `.claude/context/pr-format.md`, enforced by the `pr-format
 
 ### Commit format (all harnesses)
 
-Every commit follows `.claude/context/commit-format.md`: subject `type(scope): imperative summary` (≤ 72 chars, aim ≤ 50, lowercase, same grammar and type set as PR titles), body wrapped at 72 explaining what and why — never how, and git trailers on agent-authored commits (`Egregore-Session: <id>` from `.egregore-session-id`, plus the harness `Co-Authored-By` line). Background scripts commit as `chore(<subsystem>): …`, but a commit carrying real work derives its type/scope from the diff — the transport never masks the work. Git-generated messages (merges, reverts, autosquash fixups) keep their native form. Wording for commits and PRs follows `.claude/context/git-language.md`.
+Every commit follows `.claude/context/commit-format.md`: subject `type(scope): imperative summary` (≤ 72 chars, aim ≤ 50, lowercase, same grammar and type set as PR titles), body wrapped at 72 explaining what and why — never how, and git trailers on agent-authored commits (`Egregore-Session: <id>` from `bash bin/session-id.sh`, plus the harness `Co-Authored-By` line). Background scripts commit as `chore(<subsystem>): …`, but a commit carrying real work derives its type/scope from the diff — the transport never masks the work. Git-generated messages (merges, reverts, autosquash fixups) keep their native form. Wording for commits and PRs follows `.claude/context/git-language.md`.
 
 ### Managed Repos
 
@@ -392,21 +353,13 @@ Repos in `egregore.json` → `repos[]` are cloned as siblings (`../{repo}/`). Ea
 
 ---
 
-## Working Conventions
-
-- For unfamiliar org work, use Observe context; if absent, run `bash bin/search.sh find` with an appropriate lookup kind.
-- Document significant decisions in `memory/knowledge/decisions/`
-- After substantial sessions, log to `memory/handoffs/` and update `index.md`
-
----
-
 ## Command Awareness
 
-Codex reserves leading `/` for built-ins. Invoke Egregore skills with `$name` or natural language ("show activity", "make a handoff"). Every framework workflow uses a generated adapter that names its one maintained body under `.claude/skills/`. Organization-owned skills may also provide full native implementations. `$save` covers committing, pushing, pull requests, and memory sync; users need not manage Git themselves.
+Codex reserves leading `/` for built-ins. Invoke Egregore skills with `$name` or natural language ("show activity", "make a handoff"). Every framework workflow uses a generated adapter that names its one maintained body under `.claude/skills/`. Organization-owned skills may also provide full native implementations.
 
 Invoke commands from user intent — don't wait for the slash. Each command file has a `## When to invoke` section. Load it for the full spec.
 
-**Core loop** — `$activity` `$dashboard` `$handoff` `$wrap` `$save` `$reflect` `$todo`
+**Core loop** — `$activity` `$dashboard` `$handoff` `$wrap` `$save` `$reflect` `$todo` `$records`
 **Knowledge** — `$search` `$deep-reflect` `$archive` `$note` `$add` `$meeting` `$ingest` `$scroll` `$mock` `$audit`
 **Identity** — `$me` (view profile or set display name)
 **Coordination** — `$ask` `$quest` `$issue` `$invite` `$delete-user` `$announce`
@@ -418,16 +371,10 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 
 **Disambiguation:**
 - Knowledge: `$reflect` (share-ready) · `$note` (half-baked) · `$deep-reflect` (deep research over memory — questions AND cross-referencing) · `$archive` (AI patterns) · `$audit` (evidence-mined forensic sweep of the org's own record — any target)
-- Finding things — **the model chooses organizational retrieval through Runtime**.
-  Reuse equivalent evidence and investigate distinct gaps through the same Runtime.
-  Use `bash bin/search.sh find` or `open` and the shared investigation contract. Use Grep/Glob for code and exact errors, not org
-  recall. Do not `cd` into the sibling memory repository.
-- Finding **something you generated** (a scroll, handoff, emissary, decision, any hosted egregore.xyz link): `bash bin/artifacts.sh find <query>`. Every generative surface records into memory — hosted artifacts self-register into `memory/artifacts/` at publish (committed+pushed, findable from any session); handoffs in `memory/handoffs/`, emissaries in `memory/handoffs/outbound/`, decisions/findings/patterns in `memory/knowledge/`. The finder searches all of them by **content, not just name**, ranks title/topic matches above body mentions, tags hits by type (`[document]`/`[handoff]`/`[emissary]`/`[decision]`), and surfaces the shareable URL — grep-first in OSS, search + graph when available. *"bring me the artifact where I laid out our GTM plan"* → this.
+- Finding things — organizational recall through Runtime (Egregore Retrieval Beat); Grep/Glob for code and exact errors.
+- Finding **something you generated** (a scroll, handoff, emissary, decision, any hosted egregore.xyz link): `bash bin/artifacts.sh find <query>` searches every generated record by content, tags its type and returns the shareable URL. *"bring me the artifact where I laid out our GTM plan"* → this.
 - Artifacts with questions: `$scroll` (living paper + embedded harvest, updates in place) · `$view` (static render) · `$harvest` (elicitation, no published face) · `$mock` (pre-build walkthrough of decided design — gauge per stop, verdict copy-back)
-- Explicit bounded status: `$dashboard` (personal) · `$activity` (org-wide) ·
-  `$project` (named project). These display cards when named or directly
-  requested. Analytical questions about organizational work and specific
-  prior-work continuation route through Runtime/QMD recall.
+- Status cards: `$dashboard` (personal) · `$activity` (org-wide) · `$project` (named project), only when named or requested as a card.
 - Ending: `$wrap` (personal closure) · `$handoff` (notes for others) · `$save` (still working)
 - Tasks: `$todo` (personal) · `$quest` (team exploration) · `$issue` (something broken)
 - Questions: `$ask [person]` (async) · just ask (agent answers from context)
@@ -440,6 +387,8 @@ Invoke commands from user intent — don't wait for the slash. Each command file
 - Skills: `$create-skill` (new org-owned skill) · `$contribute` (change a framework skill for everyone)
 - Agents: `$summon` (design through questions) · `/loop` (quick recurring schedule)
 - Announcements: `$announce` (broadcast to group) · `$handoff` (structured to a person) · `bin/notify.sh send` (DM one person)
+
+**Interface taste** — when someone likes or dislikes a generated interface, follow the contract in `bash bin/genui.sh --help`.
 
 ---
 
@@ -483,22 +432,22 @@ Egregore runs in one of two configurations, set by `mode` in `egregore.json`. De
 
 ## Environment Isolation
 
-Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. On Codex the boundary is a standing instruction, not an enforced hook — hold it yourself.
+Sessions are confined to this project + memory + managed repos, with a **two-tier boundary** — a hard wall between Egregore instances, a consent gate for everything else. A pre-action check (`bin/boundary-guard.cjs`) enforces it on every runtime: it denies literal paths and fails closed, but cannot see paths built at run time or split across calls (OS-level layer to follow).
 
-- **Hard tier — other Egregore instances.** Denied for every tool, always — no consent path. Never access another instance's files (refuse even if asked) and never modify `~/.egregore/instances.json` (managed by session-start.sh); there is nothing to ask — refuse and explain.
+- **Hard tier — other Egregore instances.** Denied for every tool, always — no consent path. Never access another instance's files by any route (refuse even if asked) and never modify `~/.egregore/instances.json` (managed by session-start.sh); there is nothing to ask — refuse and explain.
 - **Soft tier — paths outside the boundary.** Consent-gated. Inbox dirs (`~/Downloads`, `~/Desktop`) are readable without consent under the default posture; writes outside the project always need consent. Posture (`strict | standard | open`) and extra read roots come from `egregore.json` -> `boundary { posture, read[], locked }` (org, committed) merged with `.egregore-boundary.local.json` (personal, gitignored). `locked: true` removes the consent path entirely.
-- When a request needs soft-tier consent, do not improvise a workaround. Ask in plain text with numbered options:
+- When the check asks for consent, do not improvise a workaround. Ask in plain text with numbered options:
 
   ```text
   That path is outside this Egregore's boundary. How should we proceed?
     1. Allow its directory for this session (recorded in .egregore-boundary-consent)
-    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json)
+    2. Always allow on this instance (added to read[] in .egregore-boundary.local.json; reads only)
     3. Paste the contents inline
     4. Cancel
   ```
 
   Never record a consent grant without the user's explicit choice of option 1 or 2 in that exchange. Session grants are cleared on session start; `locked: true` removes options 1 and 2.
 
-See DEVELOPMENT.md §3 for boundary details and `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md` for the design decisions.
+Details: DEVELOPMENT.md §3; design: `memory/knowledge/decisions/2026-07-08-boundary-hook-consent-design.md`.
 
 <!-- END GENERATED EGREGORE CODEX SPEC -->

@@ -25,6 +25,15 @@ set -euo pipefail
 #              Set automatically when publish-references.sh invokes us for a child,
 #              preventing recursion.
 #
+# --expires <days|never>: close the page's link that many days from now (1-365),
+#              or keep it open with never. Left out, a republish keeps the
+#              link's current closing date. Org pages only; close, reopen and
+#              see opens with bin/artifacts.sh close|reopen|opens <id>.
+#
+# --visible-to <@handle|email,...|public>: open the page only to these signed-in
+#              people (Connected only; refused in Local). public reopens it to
+#              anyone with the link; left out, a republish keeps the list.
+#
 # Outputs artifact URL on success, exits silently on soft failure (the server
 # could not be reached).
 # Designed for fire-and-forget use: `bash bin/publish-artifact.sh handoff file.md &`
@@ -40,6 +49,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$SCRIPT_DIR/egregore.json"
+# shellcheck source=bin/lib/config.sh
+source "$SCRIPT_DIR/bin/lib/config.sh"
 
 # --- Parse arguments ---
 TYPE=""
@@ -69,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     --raw-html) RAW_HTML=1; shift ;;
     --allow-admin) ALLOW_ADMIN=1; shift ;;
     --no-references) SKIP_REFERENCES=1; shift ;;
+    --expires) EXPIRES="$2"; shift 2 ;;
+    --visible-to) VISIBLE_TO="$2"; shift 2 ;;
     *)
       if [ -z "$TYPE" ]; then
         TYPE="$1"
@@ -87,6 +100,14 @@ fi
 # Validate --id format if provided (matches API regex ^[a-zA-Z0-9_-]{1,50}$)
 if [ -n "$ARTIFACT_ID" ] && ! [[ "$ARTIFACT_ID" =~ ^[a-zA-Z0-9_-]{1,50}$ ]]; then
   echo "--id must be 1-50 chars, alphanumeric/hyphen/underscore only" >&2
+  exit 1
+fi
+if [ -n "${EXPIRES:-}" ] && ! [[ "$EXPIRES" =~ ^([1-9][0-9]{0,2}|never)$ && ( "$EXPIRES" == never || "$EXPIRES" -le 365 ) ]]; then
+  echo "--expires takes a number of days from 1 to 365, or never" >&2
+  exit 1
+fi
+if [ -n "${VISIBLE_TO:-}" ] && ! [[ "$VISIBLE_TO" =~ ^(public|[^,[:space:]]+(,[^,[:space:]]+){0,49})$ ]]; then
+  echo "--visible-to takes @handles or emails separated by commas, or public" >&2
   exit 1
 fi
 if [ -n "$CANONICAL_ID" ] && ! [[ "$CANONICAL_ID" =~ ^[mh]-[0-9a-f]{12}$ ]]; then
@@ -115,10 +136,23 @@ if [ ! -f "$CONFIG" ] || ! jq -e 'type == "object"' "$CONFIG" >/dev/null 2>&1; t
   exit 4
 fi
 
-API_URL="${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}"
+# A refused address stops here: a Connected org's page must never fall back
+# to the public relay because its saved address is not plain.
+if ! API_URL="$(_hosted_api_url "${EGREGORE_API_URL:-$(jq -r '.api_url // empty' "$CONFIG" 2>/dev/null)}")"; then
+  echo "Not published — nothing left this machine." >&2
+  exit 4
+fi
 API_KEY="${EGREGORE_API_KEY:-}"
 ORG_SLUG="$(jq -r '.slug // empty' "$CONFIG" 2>/dev/null)"
 VIEW_BASE="https://egregore.xyz/view"
+
+# A page opened by identity needs the hosted sign-in, so it is org-only. The
+# public relay would show it to anyone with the link: refuse, upload nothing.
+if [ -n "${VISIBLE_TO:-}" ] && { [ -z "$API_URL" ] || [ -z "$API_KEY" ]; }; then
+  echo "Not published — nothing left this machine." >&2
+  echo "--visible-to opens a page by identity, which needs Connected mode. In Local mode, hand over the password-protected file instead." >&2
+  exit 4
+fi
 
 # Resolve "use published renderer" from env first, then egregore.json. The
 # env var lets individuals override per-shell; egregore.json lets an
@@ -132,7 +166,7 @@ fi
 
 # Public relay for OSS share endpoint. Unauthenticated: anything posted here is
 # readable by anyone holding the URL, for 7 days, with nothing in front of it.
-RELAY_URL="https://egregore-production-55f2.up.railway.app"
+RELAY_URL="$EGREGORE_HOSTED_API_ORIGIN"
 
 # --- Artifact hosting off-switch (compliance / privacy) ---
 # An instance can disable ALL egregore.xyz publishing via `bin/settings.sh hosting off`
@@ -166,48 +200,40 @@ if [ -z "$API_URL" ] || [ -z "$API_KEY" ]; then
   fi
 fi
 
-# --- Admin-content gate (the refusal documented in bin/lib/permissions.sh) --
-# `admin: true` sources — including backtick-referenced memory files — are
-# refused before any render or upload. An authorized admin (stable identity,
-# github.username alias against egregore.json admins) may proceed only with
-# the explicit --allow-admin confirmation, which is separate from and never
-# replaces normal publication approval. This protects the Egregore surface;
-# repository members can still read raw Git files.
-# shellcheck source=bin/lib/permissions.sh
-source "$SCRIPT_DIR/bin/lib/permissions.sh"
-ADMIN_MARKED=()
-if _is_admin_only_file "$FILE"; then
-  ADMIN_MARKED+=("$FILE")
+# --- Held-content gate: a publish is a hand-over -----------------------------
+# The source and every backtick-referenced memory file go through one
+# `access check --hand-over`: every held class is refused to a non-admin,
+# under every policy, and a failed check refuses too. An admin may publish
+# held material only with the explicit --allow-admin confirmation, which is
+# separate from and never replaces normal publication approval.
+MEMORY_REAL="$(cd "$SCRIPT_DIR/memory" 2>/dev/null && pwd -P || true)"
+SOURCE_REAL="$(cd "$(dirname "$FILE")" && pwd -P)/$(basename "$FILE")"
+if [ -n "$MEMORY_REAL" ] && [[ "$SOURCE_REAL" == "$MEMORY_REAL"/* ]]; then
+  SOURCES=("memory/${SOURCE_REAL#"$MEMORY_REAL"/}")
+else
+  SOURCES=("$SOURCE_REAL")
 fi
 if [ "$RAW_HTML" -eq 0 ]; then
   while IFS= read -r ref; do
-    [ -z "$ref" ] && continue
-    rel="${ref#\`}"
-    rel="${rel%\`}"
-    if [ -f "$SCRIPT_DIR/$rel" ] && _is_admin_only_file "$SCRIPT_DIR/$rel"; then
-      ADMIN_MARKED+=("$rel")
-    fi
+    rel="${ref//\`/}"
+    [ -f "$SCRIPT_DIR/$rel" ] && SOURCES+=("$rel")
   done < <(grep -Eo '`memory/[^`[:space:]]+\.(md|html)`' "$FILE" 2>/dev/null | sort -u)
 fi
-if [ "${#ADMIN_MARKED[@]}" -gt 0 ]; then
-  IS_ADMIN="false"
-  ADMIN_JSON=$(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" \
-    PYTHONSAFEPATH=1 PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m egregore_runtime.harness_cli admin-status 2>/dev/null) || true
-  IS_ADMIN=$(printf '%s' "$ADMIN_JSON" | jq -r '.admin // false' 2>/dev/null || echo "false")
-  if [ "$IS_ADMIN" != "true" ]; then
-    echo "publish refused: admin-marked content cannot be published by a non-admin member:" >&2
-    printf '  %s\n' "${ADMIN_MARKED[@]}" >&2
-    echo "(--allow-admin is available to organization admins only)" >&2
-    exit 5
-  fi
-  if [ "$ALLOW_ADMIN" -ne 1 ]; then
-    echo "publish refused: this content is admin-marked:" >&2
-    printf '  %s\n' "${ADMIN_MARKED[@]}" >&2
-    echo "re-run with --allow-admin to confirm publishing admin-marked content" >&2
-    echo "(this confirmation is separate from normal publication approval)" >&2
-    exit 5
-  fi
+HELD_CHECK=0
+CHECKED="$(cd "$SCRIPT_DIR" && EGREGORE_ROOT="$SCRIPT_DIR" PYTHONSAFEPATH=1 \
+  PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -m egregore_runtime.harness_cli access check --hand-over "${SOURCES[@]}" 2>/dev/null)" || HELD_CHECK=$?
+if [ "$HELD_CHECK" -ne 0 ] || [ -z "$CHECKED" ]; then
+  echo "publish refused: a non-admin cannot publish held material, or access could not be checked:" >&2
+  printf '%s\n' "$CHECKED" | awk -F '\t' '$3 != "allowed" && NF { print "  " $1 }' >&2
+  exit 5
+fi
+if [ "$ALLOW_ADMIN" -ne 1 ] && printf '%s\n' "$CHECKED" | grep -q ' for everyone else$'; then
+  echo "publish refused: this content is held from everyone but admins:" >&2
+  printf '%s\n' "$CHECKED" | awk -F '\t' '/ for everyone else$/ { print "  " $1 " (" $4 ")" }' >&2
+  echo "re-run with --allow-admin to confirm publishing it" >&2
+  echo "(this confirmation is separate from normal publication approval)" >&2
+  exit 5
 fi
 
 # --- Prepare HTML ---
@@ -242,34 +268,13 @@ else
     fi
   fi
 
-  # Prefer the in-repo package copy when it's present AND its dependencies
-  # have been installed — that way local edits to packages/egregore-artifacts
-  # are exercised without waiting for an npm release. Fall back to the
-  # published `npx egregore-artifacts` otherwise.
-  # Set EGREGORE_USE_PUBLISHED=1 to force the npm-published renderer even
-  # when a local install is present — useful in the upstream dev repo to
-  # dogfood what teammates and OSS users actually run.
-  LOCAL_CLI="$SCRIPT_DIR/packages/egregore-artifacts/bin/cli.js"
+  # Use the same provisioned renderer as previews and /view. Rendering never
+  # downloads a package; EGREGORE_USE_PUBLISHED skips the source checkout.
   RENDER_ERROR="/tmp/egregore-artifacts/render-error-$$.log"
-  if [ "${EGREGORE_USE_PUBLISHED:-0}" != "1" ] && [ -f "$LOCAL_CLI" ] && [ -d "$SCRIPT_DIR/packages/egregore-artifacts/node_modules/react" ]; then
-    if ! bash "$SCRIPT_DIR/bin/node-run.sh" "$LOCAL_CLI" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
-      sed -n '1,4p' "$RENDER_ERROR" >&2
-      rm -f "$RENDER_ERROR"
-      exit 5
-    fi
-  else
-    # Installed published renderer only — never npx/@latest: a hidden
-    # registry fetch of a floating version is not an acceptable renderer.
-    PUBLISHED_CLI="$(command -v egregore-artifacts || true)"
-    if [ -z "$PUBLISHED_CLI" ]; then
-      echo "no artifact renderer available: the checked-out packages/egregore-artifacts is unusable and no installed egregore-artifacts was found" >&2
-      exit 5
-    fi
-    if ! bash "$SCRIPT_DIR/bin/node-run.sh" "$PUBLISHED_CLI" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
-      sed -n '1,4p' "$RENDER_ERROR" >&2
-      rm -f "$RENDER_ERROR"
-      exit 5
-    fi
+  if ! bash "$SCRIPT_DIR/bin/artifact-renderer.sh" "${RENDER_ARGS[@]}" >/dev/null 2>"$RENDER_ERROR"; then
+    sed -n '1,4p' "$RENDER_ERROR" >&2
+    rm -f "$RENDER_ERROR"
+    exit 5
   fi
   rm -f "$RENDER_ERROR"
 fi
@@ -312,8 +317,12 @@ fi
 RESPONSE=""
 
 if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
-  # Connected mode: permanent, org-scoped
-  RESPONSE=$(curl -s -X POST "${API_URL}/api/artifacts/publish" \
+  # Connected mode: permanent, org-scoped. A list goes to publish-restricted,
+  # which a server that cannot open pages by identity does not have: it
+  # refuses there instead of ignoring the list and opening the page to all.
+  PUBLISH_PATH="/api/artifacts/publish"
+  [ -z "${VISIBLE_TO:-}" ] || PUBLISH_PATH="/api/artifacts/publish-restricted"
+  RESPONSE=$(curl -s -X POST "${API_URL}${PUBLISH_PATH}" \
     -H "Authorization: Bearer $API_KEY" \
     -F "file=@${TMP_HTML}" \
     -F "artifact_type=${TYPE}" \
@@ -321,9 +330,14 @@ if [ -n "$API_URL" ] && [ -n "$API_KEY" ]; then
     -F "author=${AUTHOR}" \
     -F "description=${DESCRIPTION}" \
     -F "artifact_id=${ARTIFACT_ID}" \
+    -F "expires_in_days=${EXPIRES:-}" \
+    --form-string "visible_to=${VISIBLE_TO:-}" \
     --max-time 15 2>/dev/null) || true
 else
   # OSS mode: ephemeral, 7-day TTL
+  if [ -n "${EXPIRES:-}" ]; then
+    echo "Note: --expires applies to organization pages; this public copy closes after 7 days." >&2
+  fi
   RESPONSE=$(curl -s -X POST "${RELAY_URL}/api/artifacts/share" \
     -F "file=@${TMP_HTML}" \
     -F "artifact_type=${TYPE}" \
@@ -355,6 +369,9 @@ if [ -n "$RESPONSE" ]; then
     # The server refused (409 for an id another org holds, 400, 413, 503…).
     # A distinct exit code lets callers that report stderr on failure show why.
     DETAIL=$(echo "$RESPONSE" | jq -r 'if (.detail | type) == "string" then .detail else empty end' 2>/dev/null || true)
+    if [ -n "${VISIBLE_TO:-}" ] && { [ "$DETAIL" = "Not Found" ] || [ "$DETAIL" = "Method Not Allowed" ]; }; then
+      DETAIL="the hosted service cannot open pages by identity yet, so nothing was stored."
+    fi
     echo "Not published: ${DETAIL:-the server answered without a URL.}" >&2
     exit 6
   fi
@@ -366,7 +383,16 @@ fi
 #   - parent publish failed (no URL),
 #   - --raw-html (HTML attachments don't embed markdown refs we'd parse),
 #   - --no-references (caller explicitly opts out / recursion guard).
-if [ -n "$URL" ] && [ "$RAW_HTML" -eq 0 ] && [ "$SKIP_REFERENCES" -eq 0 ]; then
+#   - the page opens by identity (its stored list, so a republish that keeps
+#     the list counts): the files it links to would open to anyone.
+RESTRICTED=0
+if [ -n "$URL" ] && [ "$(echo "$RESPONSE" | jq -r '.visible_to | type' 2>/dev/null || true)" = "array" ]; then
+  RESTRICTED=1
+  if [ -n "$REF_IDS" ] && [ "$SKIP_REFERENCES" -eq 0 ]; then
+    echo "Note: the files this page links to were not published; it opens only for the people it is shared with." >&2
+  fi
+fi
+if [ -n "$URL" ] && [ "$RESTRICTED" -eq 0 ] && [ "$RAW_HTML" -eq 0 ] && [ "$SKIP_REFERENCES" -eq 0 ]; then
   EGREGORE_REF_IDS="$REF_IDS" bash "$SCRIPT_DIR/bin/publish-references.sh" "$FILE" >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi

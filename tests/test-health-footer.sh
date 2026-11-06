@@ -114,6 +114,31 @@ sync="$ROOT/bin/lib/git-sync.sh"
 grep -q 'HEALTH_MEMORY="fail"' "$sync" && pass "git-sync reports memory sync on its own dimension" || fail "git-sync HEALTH_MEMORY"
 grep -q "\.remedy" "$sync" && pass "git-sync reads the Runtime remedy" || fail "git-sync remedy"
 grep -q "\.retrieval_grade" "$sync" && pass "git-sync reads the Runtime retrieval grade" || fail "git-sync retrieval_grade"
+# --- a refused saved address is named, not hidden behind "ready" ------------------
+
+ADDR_TMP="$(mktemp -d)"
+render_saved() {
+  printf '{"mode":"%s","api_url":%s}\n' "$1" "$2" > "$ADDR_TMP/egregore.json"
+  env -i PATH="$PATH" HOME="$HOME" CONFIG="$ADDR_TMP/egregore.json" LOCAL_MODE="$3" \
+    HEALTH_GITHUB=ok HEALTH_GIT=ok HEALTH_MEMORY=ok HEALTH_RETRIEVAL=ok HEALTH_APIKEY=ok \
+    bash -c 'source "$0/config.sh"; source "$0/health-footer.sh"; _render_health_footer' "$ROOT/bin/lib"
+}
+out="$(render_saved connected '"HTTPS://egregore-production-55f2.up.railway.app"' false)"
+if grep -q "api_url in egregore.json isn't" <<< "$out" && grep -q 'https://api.egregore.xyz' <<< "$out" \
+  && grep -q '✓ local checks ready' <<< "$out" && ! grep -q '✓ ready' <<< "$out"; then
+  pass "Connected + refused saved address: names the fix; ready line says local only"
+else
+  fail "refused saved address notice" "$out"
+fi
+for saved in '"https://egregore-production-55f2.up.railway.app"' '"https://api.egregore.xyz"' '"https://selfhost.example:8443/api"' '""'; do
+  out="$(render_saved connected "$saved" false)"
+  if grep -q "isn't" <<< "$out"; then fail "plain saved address $saved shows the refused notice" "$out"; fi
+done
+pass "plain or empty saved addresses show no refused notice"
+out="$(render_saved local '"https://bücher.example"' true)"
+grep -q "isn't" <<< "$out" && fail "Local mode shows the refused notice" "$out" || pass "Local mode never shows the refused notice"
+rm -rf "$ADDR_TMP"
+
 grep -q 'HEALTH_RETRIEVAL="stale"' "$sync" && pass "git-sync can grade retrieval stale" || fail "git-sync stale grade"
 # The memory-sync block must never set the project-git dimension.
 block="$(sed -n '/Synchronize canonical memory and retrieval readiness/,/Sync managed repos/p' "$sync")"

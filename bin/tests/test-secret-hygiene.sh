@@ -201,6 +201,11 @@ case "$name" in
       */api/hosting/status/parity) expected=canary-github-token-2b8e1d; body='{"status":"ready"}' ;;
       */api/user/ensure) expected=canary-api-key-7f3a9c; body='{"status":"fixture-no-reconcile"}' ;;
       */api/notify/group) expected=canary-api-key-7f3a9c; body='{"status":"sent"}' ;;
+      */api/page-access/requests*) expected=canary-api-key-7f3a9c; body='{"requests":[]}'
+        case "$headers" in *"X-GitHub-Token: canary-github-token-2b8e1d"*) ;;
+          *) echo 'curl stub: person token was not used' >&2; exit 92 ;; esac ;;
+      */api/artifact-links/*) expected=canary-api-key-7f3a9c
+        body='{"id":"brief","opens":1,"automated":0,"complete":true,"first":"2026-09-28T10:00:00Z","last":"2026-09-28T10:00:00Z","recent":["2026-09-28T10:00:00Z"]}' ;;
       https://slack.com/api/auth.test) expected=canary-slack-token-43e19a
         body='{"ok":true,"team":"Parity","url":"https://parity.slack.com/","user":"egregore"}' ;;
       *) echo 'curl stub: unexpected credential path' >&2; exit 91 ;;
@@ -280,7 +285,7 @@ EGREGORE_API_URL=https://api.example.test
 ENV
   printf '%s\n' 'header = "X-Canary: curlrc-leak"' > "$FIXTURE/home/.curlrc"
   case "$SCRIPT" in
-    bin/hosting-ops.sh)
+    bin/hosting-ops.sh|bin/page-access.sh)
       cp "$ROOT/bin/api-call.sh" "$ROOT/bin/config-get.sh" "$CHECKOUT/bin/" ;;
     bin/person.sh)
       # person.py is a stdlib-only local reconciler, not a network entry point.
