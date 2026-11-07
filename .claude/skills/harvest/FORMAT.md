@@ -109,14 +109,14 @@ slice on**:
 
 - **Per-respondent (position-unit)** — one section per person, each
   containing their positions across the harvest's dimensions. Use
-  when the harvest produced person-distinctive positions. Respondent's
-  harvest is the canonical example: `Respondent on scaling`, `Respondent on
-  transmission`, `Respondent on bootstrapping`.
+  when the harvest produced person-distinctive positions. The
+  position fixture (§6) is the canonical example: one section per
+  position, such as `<respondent> on scaling`.
 - **Per-question (question-unit)** — one section per question, each
   containing what was elicited about that question (one or many
   respondents). Use when the harvest was structured around concrete
-  asks with concrete answers per question. The Oz canvas harvest is
-  the canonical example: `Q1 — Hermes framing`, `Q2 — sovereign brain
+  asks with concrete answers per question. The decision fixture (§6)
+  is the canonical example: `Q1 — Hermes framing`, `Q2 — sovereign brain
   cards`, etc.
 - **Per-dimension (theme-unit)** — one section per theme/dimension
   that emerged across questions and respondents. Use when the harvest
@@ -171,8 +171,8 @@ fit.
 | **pattern** | A knowledge / action / antipattern the harvest extracted, ready for `/reflect` to consume | When a finding generalizes — not just *"Oz said X"*, but *"the pattern is Y, evidenced by X"* |
 
 **Composition rule**: for each L2 section, a strong default sequence
-is `quote → context → reflection → pattern` (the Respondent shape). The
-Oz shape (`decision → quote → reflection → action`) is also strong.
+is `quote → context → reflection → pattern` (the position shape). The
+decision shape (`decision → quote → reflection → action`) is also strong.
 The model chooses what the content needs. **Skip what doesn't apply.**
 A section with no `choice` and no `pattern` is fine — the blocks are
 a palette, not a checklist.
@@ -271,7 +271,7 @@ point is producing reusable knowledge nodes.
 
 Likely shape: **L0 (the decision + load-bearing rationale) · L1
 (considerations weighed, commitments) · L2 per-question with
-`decision → quote → reflection → action` (the Oz shape) · L3.**
+`decision → quote → reflection → action` (the decision shape) · L3.**
 
 This is the shape whose intent was to crystallize a decision, so an
 action surface or named commitment is appropriate. Even here, the
@@ -284,7 +284,7 @@ Likely shape: **L0 (what the person is carrying that the org hasn't
 articulated) · no L1 · L2 per-dimension with `quote → context →
 reflection → pattern` · L3.**
 
-The Respondent harvest is the canonical example. The output is a portrait
+The position fixture (§6) is the canonical example. The output is a portrait
 of someone's position, not a verdict on whether they're right.
 
 ### Retrospective
@@ -305,23 +305,24 @@ Two harvests in the repo are gold examples. The rebuild's synthesis
 must reproduce their shapes (within minor variation) given the same
 intent + RoleSheets + seed.
 
-### Respondent harvest — position-unit slicing
+### Position fixture — position-unit slicing
 
-`memory/knowledge/harvests/2026-03-23-respondent-harvest-analysis.md`
+`memory/knowledge/harvests/2026-03-23-*-harvest-analysis.md` (a single-respondent position harvest)
 
 What it demonstrates:
-- L0 *"[quote removed]"* — single sentence that holds the most.
-- L2 sliced per-position: 7 positions, each as `Context → Respondent's
+- L0 is one quoted sentence from the respondent — the single
+  sentence that holds the most.
+- L2 sliced per-position: 7 positions, each as `Context → the respondent's
   Position (with quotes) → Reflection → Pattern Extraction`.
 - Patterns named explicitly with type prefix (*Knowledge pattern —
-  Junction Primacy*, *Action — Reframe positioning language*).
+  <name>*, *Action — <name>*).
 - L3 as `Full Exchange` with 7 turns, question + answer per turn.
 - No `choice` block used — this was a tacit-position
   harvest, no decisions were on the table.
 
-### Oz canvas harvest — question-unit slicing
+### Decision fixture — question-unit slicing
 
-`memory/handoffs/2026-05/06-cem-harvest-oz-canvas-tech-and-capabilities.md`
+`memory/handoffs/2026-05/06-*-canvas-tech-and-capabilities.md`
 
 What it demonstrates:
 - L2 sliced per-question: 7 questions, each as `1. Decision · 2.

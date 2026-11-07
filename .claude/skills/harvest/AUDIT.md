@@ -48,9 +48,9 @@ from this `AUDIT.md`, with the old spec consulted only as a craft library
 for the six moves above.
 
 **Aspirational outputs (gold fixtures)**:
-- `memory/knowledge/harvests/2026-03-23-respondent-harvest-analysis.md`
+- `memory/knowledge/harvests/2026-03-23-*-harvest-analysis.md` (position harvest)
 - `memory/knowledge/harvests/2026-03-23-egregore-collective-intelligence-uniqueness.md`
-- `memory/handoffs/2026-05/06-cem-harvest-oz-canvas-tech-and-capabilities.md`
+- `memory/handoffs/2026-05/06-*-canvas-tech-and-capabilities.md` (decision harvest)
 
 These already exemplify the layered output shape (quote ▸ context ▸ reflection
 ▸ pattern ▸ action). The product knows what good looks like; the work is
@@ -324,8 +324,8 @@ is `complete` only when synthesis is written and linked.
 
 Pin two harvests as gold:
 
-1. `memory/knowledge/harvests/2026-03-23-respondent-harvest-analysis.md`
-2. `memory/handoffs/2026-05/06-cem-harvest-oz-canvas-tech-and-capabilities.md`
+1. `memory/knowledge/harvests/2026-03-23-*-harvest-analysis.md` (position harvest)
+2. `memory/handoffs/2026-05/06-*-canvas-tech-and-capabilities.md` (decision harvest)
 
 Regeneration must reproduce, given the same intent + RoleSheets + seed:
 
@@ -358,7 +358,7 @@ remains as the empirical proof the rebuild reproduces the gold fixtures.
    checkpoint, cascade, synthesize). Every protocol rule was run through
    the §3.4 anti-conflation test before keeping it. Spiral vocabulary
    stripped except in a short boundary section.
-4. ✓ Write `FORMAT.md` from §8 using Respondent + Oz harvests as fixtures.
+4. ✓ Write `FORMAT.md` from §8 using the position and decision harvests as fixtures.
 5. ✓ Document the local-mode markdown contract (§10, this document —
    `PROCESS.md` §9 points here).
 6. ✓ `bin/graph-op.sh create-harvest-session` accepts an optional
@@ -368,7 +368,7 @@ remains as the empirical proof the rebuild reproduces the gold fixtures.
    `--question-intent`, `--context-mode`).
 8. Run regeneration against fixtures (§12). Iterate until all pass.
 
-The Respondent and Oz harvests are the bar. The product already knows what
+The position and decision harvests are the bar. The product already knows what
 good looks like; the rebuild is making the command reliably reproduce it
 without the operator carrying the form.
 

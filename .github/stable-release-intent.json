@@ -3,9 +3,9 @@
   "packages": [
     {
       "name": "create-egregore",
-      "version": "0.22.0",
+      "version": "0.22.1",
       "action": "publish",
-      "reason": "Select create-egregore 0.22.0, the 5 Nov catch-up release: main now carries develop (minus client work and the held API changes), so installs get session records (off until an organization turns them on), one access check for shared memory, the wall between instances on every harness, situated patterns, the saved startup card and the shell half of the retired-address fix. Fresh-install proof passes 9/9 on the candidate. Companion packages remain deferred."
+      "reason": "Select create-egregore 0.22.1: content cleanup in the bundled harvest skill and an installer comment. No behavior changes. Companion packages remain deferred."
     },
     {
       "name": "egregore-artifacts",
